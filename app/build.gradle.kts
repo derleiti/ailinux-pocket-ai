@@ -9,8 +9,8 @@ android {
         applicationId = "me.ailinux.pocket"
         minSdk = 33
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.1.0-alpha.4"
+        versionCode = 5
+        versionName = "0.1.0-alpha.5"
         ndk { abiFilters += "arm64-v8a" }
     }
     buildTypes {
@@ -27,6 +27,10 @@ android {
     kotlin { jvmToolchain(17) }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        // GGML_BACKEND_DL scans nativeLibraryDir for actual .so files.
+        // Modern Android installs uncompressed JNI libs directly from the APK
+        // by default. Without physical extraction, zero CPU backends are found.
+        jniLibs.useLegacyPackaging = true
     }
 }
 dependencies {

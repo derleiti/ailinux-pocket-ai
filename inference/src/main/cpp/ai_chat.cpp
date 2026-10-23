@@ -84,20 +84,45 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_lastLoadError(JNIEnv *env, jobj
 }
 
 extern "C"
-JNIEXPORT void JNICALL
+JNIEXPORT jint JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {
-    // Set llama log handler to Android
     llama_log_set(pocket_recording_log_callback, nullptr);
 
-    // Loading all CPU backend variants
-    const auto *path_to_backend = env->GetStringUTFChars(nativeLibDir, 0);
-    LOGi("Loading backends from %s", path_to_backend);
-    ggml_backend_load_all_from_path(path_to_backend);
-    env->ReleaseStringUTFChars(nativeLibDir, path_to_backend);
+    // Dynamic CPU variant loader expects actual .so files in nativeLibraryDir.
+    // The app must set jniLibs.useLegacyPackaging = true to extract those files.
+    const auto *raw_dir = env->GetStringUTFChars(nativeLibDir, nullptr);
+    if (!raw_dir) {
+        LOGe("Unable to read nativeLibraryDir from Android");
+        return 0;
+    }
+    const std::string backend_dir(raw_dir);
+    env->ReleaseStringUTFChars(nativeLibDir, raw_dir);
 
-    // Initialize backends
+    LOGi("Discovering GGML CPU backends in %s", backend_dir.c_str());
+    ggml_backend_load_all_from_path(backend_dir.c_str());
+
+    // Safe armv8.0 baseline fallback if the CPU-variant score lookup fails.
+    if (!ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU)) {
+        const std::string baseline = backend_dir + "/libggml-cpu-android_armv8.0_1.so";
+        if (access(baseline.c_str(), R_OK) == 0) {
+            LOGw("Automatic CPU selection failed; trying %s", baseline.c_str());
+            ggml_backend_load(baseline.c_str());
+        } else {
+            LOGe("CPU backend file not accessible: %s (check extractNativeLibs)", baseline.c_str());
+        }
+    }
+
+    const auto registered = ggml_backend_reg_count();
+    const auto cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (!cpu) {
+        LOGe("No CPU backend registered in %s (registered backends: %zu)", backend_dir.c_str(), registered);
+        return 0;
+    }
+
     llama_backend_init();
-    LOGi("Backend initiated; Log handler set.");
+    LOGi("GGML initialized: %zu backends; CPU device: %s",
+         registered, ggml_backend_dev_name(cpu));
+    return static_cast<jint>(registered);
 }
 
 extern "C"

@@ -18,6 +18,14 @@ trap 'rm -f "$ZIPLIST"' EXIT
 unzip -Z1 "$APK" > "$ZIPLIST"
 grep -qx 'lib/arm64-v8a/libai-chat.so' "$ZIPLIST"
 grep -qx 'lib/arm64-v8a/libllama.so' "$ZIPLIST"
+# GGML_BACKEND_DL needs extracted .so files; simply shipping libraries in
+# the APK with extractNativeLibs=false reproduces the original failure.
+grep -Eq '^lib/arm64-v8a/libggml-cpu-android_armv8.*\.so$' "$ZIPLIST"
+MANIFEST=$("$AAPT" dump xmltree "$APK" AndroidManifest.xml)
+if ! printf '%s\n' "$MANIFEST" | grep -Eq 'android:extractNativeLibs.*0xffffffff'; then
+    echo "Native library extraction is disabled; GGML CPU backend discovery will fail" >&2
+    exit 1
+fi
 if grep -q '^lib/x86_64/' "$ZIPLIST"; then
     echo "Unexpected x86_64 libraries in arm64-only APK" >&2
     exit 1

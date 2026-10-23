@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 0.1.0-alpha.4** Debug APK builds; testing inference on the physical Pixel is still pending.
+**Status: 0.1.0-alpha.5** Debug APK builds; testing inference on the physical Pixel is still pending.
 
 ## Features
 
@@ -96,3 +96,18 @@ The vendored MIT-licensed JNI wrapper in inference/ now captures bounded native 
 warnings/errors and displays them in the error dialog. Tap Diagnose kopieren to copy
 the detail for a reproducible bug report. The settings page shows the actual installed
 version. This improves observability, not universal GGUF compatibility.
+
+
+## Android GGML CPU backend initialization (Alpha 5)
+
+The GGUF model loader previously failed with "no backends are loaded". The
+ARM64 CPU variant libraries were included in the APK, but the manifest had
+extractNativeLibs=false. Dynamic GGML backend enumeration scans the physical
+nativeLibraryDir, so it could not see or load any of these .so files.
+
+Alpha 5 sets jniLibs.useLegacyPackaging=true to extract the native libraries,
+checks that a CPU backend is actually registered during JNI initialization,
+tries the ARMv8.0 baseline backend if the automatic variant score fails, and
+reports actionable errors if backend initialization still fails. APK verification
+now asserts physical native extraction is enabled and an ARM CPU backend exists
+in the archive. The app upgrade does not delete private model files.

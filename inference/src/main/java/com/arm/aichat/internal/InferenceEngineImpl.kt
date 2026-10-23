@@ -79,7 +79,7 @@ internal class InferenceEngineImpl private constructor(
      * @see ai_chat.cpp
      */
     @FastNative
-    private external fun init(nativeLibDir: String)
+    private external fun init(nativeLibDir: String): Int
 
     @FastNative
     private external fun load(modelPath: String): Int
@@ -135,13 +135,17 @@ internal class InferenceEngineImpl private constructor(
                 _state.value = InferenceEngine.State.Initializing
                 Log.i(TAG, "Loading native library...")
                 System.loadLibrary("ai-chat")
-                init(nativeLibDir)
+                val backendCount = init(nativeLibDir)
+                check(backendCount > 0) {
+                    "Kein GGML-CPU-Backend geladen. Bitte die JNI-Bibliotheken als echte " +
+                    ".so-Dateien installieren (extractNativeLibs=true). Verzeichnis: $nativeLibDir"
+                }
                 _state.value = InferenceEngine.State.Initialized
                 Log.i(TAG, "Native library loaded! System info: \n${systemInfo()}")
 
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load native library", e)
-                throw e
+                Log.e(TAG, "Failed to initialize native inference backend", e)
+                _state.value = InferenceEngine.State.Error(e)
             }
         }
     }
