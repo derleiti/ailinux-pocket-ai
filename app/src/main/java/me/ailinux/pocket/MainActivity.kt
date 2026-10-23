@@ -349,7 +349,7 @@ class MainActivity : AppCompatActivity() {
                 // Preserve the previously loaded model if the preflight is rejected.
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT" else "Ladefehler")
-                showError("GGUF konnte nicht geladen werden", error)
+                showError("Modell/Chat-Template konnte nicht gestartet werden", error)
             } finally {
                 prefs.edit().remove(PREF_LOADING_MODEL).apply()
                 setModelLoading(false)

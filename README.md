@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 0.1.0-alpha.7** Debug APK builds; testing inference on the physical Pixel is still pending.
+**Status: 0.1.0-alpha.8** Debug APK builds; testing inference on the physical Pixel is still pending.
 
 ## Features
 
@@ -160,3 +160,39 @@ buffer, so old crash traces might have been overwritten.
 Do not delete or re-download GGUF models to collect the crash trace.
 Prefer tapping SETUP > Letzte App-Abstuerze pruefen immediately after
 installing Alpha 7, before attempting another model load.
+
+
+## Chat-template SIGABRT fix (Alpha 8)
+
+An Android 17 native tombstone provided a reproducible root cause on
+Spark-X2.6-4B-Q8_0.gguf:
+
+    phase=system_prompt
+    std::runtime_error: this custom template is not supported, try using --jinja
+    common_chat_templates_apply -> common_chat_format_single
+      -> InferenceEngineImpl_processSystemPrompt -> SIGABRT (signal 6)
+
+The old JNI bridge explicitly set use_jinja=false, which only supports
+specific legacy hard-coded templates. The model's actual GGUF metadata
+contains a custom Jinja template with system/user/assistant roles and a
+thinking prefix. Alpha 8 enables Jinja rendering on all chat message
+formats. It catches standard C++ exceptions at the native load, context
+preparation, system prompt, user prompt, and generation JNI boundaries,
+converting them to actionable errors rather than allowing exceptions to
+terminate the Android process.
+
+Prompt strings are copied from JNI and released before rendering, even
+when formatting throws. Native model and prompt error details propagate
+to the Kotlin UI. Heavy JNI operations no longer use @FastNative,
+which is intended for short-running methods.
+
+The pinned upstream llama.cpp test-chat-template binary has been built
+on the AILinux server and successfully rendered the exact public
+Spark-X2.6-4B Q8_0 GGUF chat template, retrieved via an HTTP Range
+request (only the GGUF header/metadata, not full model weights). Test
+messages included a system instruction and multiple user/assistant
+turns. This verifies template rendering; it is NOT a substitute for
+on-device model load, decoding and throughput testing.
+
+Do not delete or re-download models when upgrading Alpha 7 to Alpha 8;
+the APK is signed with the same development certificate.

@@ -80,37 +80,28 @@ internal class InferenceEngineImpl private constructor(
      * JNI methods
      * @see ai_chat.cpp
      */
-    @FastNative
     private external fun init(nativeLibDir: String): Int
 
-    @FastNative
     private external fun load(modelPath: String): Int
 
     @FastNative
     private external fun lastLoadError(): String
 
-    @FastNative
     private external fun prepare(): Int
 
     @FastNative
     private external fun systemInfo(): String
 
-    @FastNative
     private external fun benchModel(pp: Int, tg: Int, pl: Int, nr: Int): String
 
-    @FastNative
     private external fun processSystemPrompt(systemPrompt: String): Int
 
-    @FastNative
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
 
-    @FastNative
     private external fun generateNextToken(): String?
 
-    @FastNative
     private external fun unload()
 
-    @FastNative
     private external fun shutdown()
 
     private val _state =
@@ -242,10 +233,13 @@ internal class InferenceEngineImpl private constructor(
             recordNativeStage("system_prompt")
             processSystemPrompt(prompt).let { result ->
                 if (result != 0) {
-                    RuntimeException("Failed to process system prompt: $result").also {
-                        _state.value = InferenceEngine.State.Error(it)
-                        throw it
-                    }
+                    val nativeDetail = lastLoadError().trim().takeLast(3000)
+                        .ifEmpty { "Kein weiterer nativer Fehlertext vorhanden." }
+                    val error = IOException(
+                        "Chat-Template/System-Prompt fehlgeschlagen (Code $result):\n$nativeDetail"
+                    )
+                    _state.value = InferenceEngine.State.Error(error)
+                    throw error
                 }
             }
             Log.i(TAG, "System prompt processed! Awaiting user prompt...")
@@ -270,15 +264,18 @@ internal class InferenceEngineImpl private constructor(
             _readyForSystemPrompt = false
             _state.value = InferenceEngine.State.ProcessingUserPrompt
 
+            recordNativeStage("user_prompt")
             processUserPrompt(message, predictLength).let { result ->
                 if (result != 0) {
-                    Log.e(TAG, "Failed to process user prompt: $result")
-                    return@flow
+                    val nativeDetail = lastLoadError().trim().takeLast(3000)
+                        .ifEmpty { "Kein weiterer nativer Fehlertext vorhanden." }
+                    throw IOException("Chat-Template/Benutzer-Prompt fehlgeschlagen (Code $result):\n$nativeDetail")
                 }
             }
 
             Log.i(TAG, "User prompt processed. Generating assistant prompt...")
             _state.value = InferenceEngine.State.Generating
+            recordNativeStage("generating")
             while (!_cancelGeneration) {
                 generateNextToken()?.let { utf8token ->
                     if (utf8token.isNotEmpty()) emit(utf8token)
@@ -296,8 +293,14 @@ internal class InferenceEngineImpl private constructor(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error during generation!", e)
-            _state.value = InferenceEngine.State.Error(e)
-            throw e
+            // A native std::exception from token generation is translated to a
+            // Java IOException. Expose the last safe diagnostics to the user.
+            val detail = runCatching { lastLoadError().trim().takeLast(2500) }.getOrNull().orEmpty()
+            val error = if (e is IOException && detail.isNotEmpty()) {
+                IOException((e.message ?: "Native Generierung fehlgeschlagen") + "\n" + detail, e)
+            } else e
+            _state.value = InferenceEngine.State.Error(error)
+            throw error
         }
     }.flowOn(llamaDispatcher)
 

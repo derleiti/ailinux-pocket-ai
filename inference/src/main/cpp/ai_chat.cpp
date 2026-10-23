@@ -5,6 +5,8 @@
 #include <string>
 #include <atomic>
 #include <mutex>
+#include <exception>
+#include <stdexcept>
 #include <unistd.h>
 #include <sampling.h>
 
@@ -64,6 +66,49 @@ static void pocket_recording_log_callback(enum ggml_log_level level, const char*
 static void reset_load_diagnostics() {
     std::lock_guard<std::mutex> guard(g_diagnostic_mutex);
     g_load_diagnostics.clear();
+}
+
+// All native exceptions must terminate at the JNI boundary, NEVER cross into ART.
+// Exposing the actual stage and reason turns SIGABRT into a recoverable error.
+static void set_native_error(const char *stage, const char *reason) noexcept {
+    LOGe("Pocket AI native %s failed: %s", stage, reason ? reason : "unknown");
+    try {
+        std::lock_guard<std::mutex> guard(g_diagnostic_mutex);
+        g_load_diagnostics = std::string(stage) + ": " + (reason ? reason : "unknown error");
+    } catch (...) {
+        // The diagnostic itself must not throw across JNI, including low-RAM cases.
+    }
+}
+
+static std::string java_string(JNIEnv *env, jstring input) {
+    if (!input) {
+        throw std::invalid_argument("Java input string is null");
+    }
+    const char *utf = env->GetStringUTFChars(input, nullptr);
+    if (!utf) {
+        throw std::runtime_error("Cannot read Java UTF-8 string");
+    }
+    // Copy and release before any chat-template evaluation can throw.
+    std::string value;
+    try {
+        value = utf;
+    } catch (...) {
+        env->ReleaseStringUTFChars(input, utf);
+        throw;
+    }
+    env->ReleaseStringUTFChars(input, utf);
+    return value;
+}
+
+static void throw_java_native_error(JNIEnv *env, const char *stage, const char *message) noexcept {
+    set_native_error(stage, message);
+    // The class is part of Android's boot classpath. JNI will translate the
+    // error into Kotlin's normal exception handling, without killing the process.
+    jclass io_exception = env->FindClass("java/io/IOException");
+    if (io_exception) {
+        env->ThrowNew(io_exception, "Native GGUF processing failed; see device logs for details");
+        env->DeleteLocalRef(io_exception);
+    }
 }
 
 extern "C"
@@ -130,6 +175,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unu
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {
+    try {
     llama_model_params model_params = llama_model_default_params();
     // Low-RAM Android profile: memory-map weights; avoid additional CPU weight
     // repacking allocations and any unintended GPU offload.
@@ -137,20 +183,28 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstr
     model_params.use_extra_bufts = false;
     model_params.n_gpu_layers = 0;
 
-    const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
-    LOGd("%s: Loading model from: \n%s\n", __func__, model_path);
+    const std::string model_path = java_string(env, jmodel_path);
+    LOGd("%s: Starting GGUF model load", __func__);
 
     reset_load_diagnostics();
     g_capture_load_log.store(true, std::memory_order_release);
-    auto *model = llama_model_load_from_file(model_path, model_params);
+    auto *model = llama_model_load_from_file(model_path.c_str(), model_params);
     g_capture_load_log.store(false, std::memory_order_release);
-    env->ReleaseStringUTFChars(jmodel_path, model_path);
     if (!model) {
         LOGe("llama_model_load_from_file returned null (native details available via lastLoadError)");
         return 1;
     }
     g_model = model;
     return 0;
+    } catch (const std::exception &e) {
+        g_capture_load_log.store(false, std::memory_order_release);
+        set_native_error("model_load", e.what());
+        return 3;
+    } catch (...) {
+        g_capture_load_log.store(false, std::memory_order_release);
+        set_native_error("model_load", "Unknown native C++ exception");
+        return 4;
+    }
 }
 
 static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE) {
@@ -195,6 +249,7 @@ static common_sampler *new_sampler(float temp) {
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobject /*unused*/) {
+    try {
     reset_load_diagnostics();
     g_capture_load_log.store(true, std::memory_order_release);
     auto *context = init_context(g_model);
@@ -208,6 +263,15 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobje
     g_chat_templates = common_chat_templates_init(g_model, "");
     g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
     return 0;
+    } catch (const std::exception &e) {
+        g_capture_load_log.store(false, std::memory_order_release);
+        set_native_error("context_prepare", e.what());
+        return 3;
+    } catch (...) {
+        g_capture_load_log.store(false, std::memory_order_release);
+        set_native_error("context_prepare", "Unknown native C++ exception");
+        return 4;
+    }
 }
 
 static std::string get_backend() {
@@ -378,10 +442,13 @@ static std::string chat_add_and_format(const std::string &role, const std::strin
     common_chat_msg new_msg;
     new_msg.role = role;
     new_msg.content = content;
+    // Legacy mode recognizes only selected hard-coded chat formats; modern
+    // GGUF files (Spark, Qwen, Gemma, etc.) can embed custom Jinja templates.
+    // The old false argument threw std::runtime_error and caused SIGABRT.
     auto formatted = common_chat_format_single(
-            g_chat_templates.get(), chat_msgs, new_msg, role == ROLE_USER, /* use_jinja */ false);
+            g_chat_templates.get(), chat_msgs, new_msg, role == ROLE_USER, /* use_jinja */ true);
     chat_msgs.push_back(new_msg);
-    LOGi("%s: Formatted and added %s message: \n%s\n", __func__, role.c_str(), formatted.c_str());
+    LOGi("%s: Formatted %s message (%zu characters)", __func__, role.c_str(), formatted.size());
     return formatted;
 }
 
@@ -445,13 +512,15 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
         jobject /*unused*/,
         jstring jsystem_prompt
 ) {
+    try {
+    reset_load_diagnostics();
     // Reset long-term & short-term states
     reset_long_term_states();
     reset_short_term_states();
 
     // Obtain system prompt from JEnv
-    const auto *system_prompt = env->GetStringUTFChars(jsystem_prompt, nullptr);
-    LOGd("%s: System prompt received: \n%s", __func__, system_prompt);
+    const std::string system_prompt = java_string(env, jsystem_prompt);
+    LOGd("%s: System prompt length: %zu bytes", __func__, system_prompt.size());
     std::string formatted_system_prompt(system_prompt);
 
     // Format system prompt if applicable
@@ -459,7 +528,6 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
     if (has_chat_template) {
         formatted_system_prompt = chat_add_and_format(ROLE_SYSTEM, system_prompt);
     }
-    env->ReleaseStringUTFChars(jsystem_prompt, system_prompt);
 
     // Tokenize system prompt
     const auto system_tokens = common_tokenize(g_context, formatted_system_prompt,
@@ -485,6 +553,13 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
     // Update position
     system_prompt_position = current_position = (int) system_tokens.size();
     return 0;
+    } catch (const std::exception &e) {
+        set_native_error("system_prompt", e.what());
+        return 3;
+    } catch (...) {
+        set_native_error("system_prompt", "Unknown native C++ exception");
+        return 4;
+    }
 }
 
 extern "C"
@@ -495,12 +570,14 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
         jstring juser_prompt,
         jint n_predict
 ) {
+    try {
+    reset_load_diagnostics();
     // Reset short-term states
     reset_short_term_states();
 
     // Obtain and tokenize user prompt
-    const auto *const user_prompt = env->GetStringUTFChars(juser_prompt, nullptr);
-    LOGd("%s: User prompt received: \n%s", __func__, user_prompt);
+    const std::string user_prompt = java_string(env, juser_prompt);
+    LOGd("%s: User prompt length: %zu bytes", __func__, user_prompt.size());
     std::string formatted_user_prompt(user_prompt);
 
     // Format user prompt if applicable
@@ -508,7 +585,6 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
     if (has_chat_template) {
         formatted_user_prompt = chat_add_and_format(ROLE_USER, user_prompt);
     }
-    env->ReleaseStringUTFChars(juser_prompt, user_prompt);
 
     // Decode formatted user prompts
     auto user_tokens = common_tokenize(g_context, formatted_user_prompt, has_chat_template, has_chat_template);
@@ -533,8 +609,15 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
 
     // Update position
     current_position += user_prompt_size;
-    stop_generation_position = current_position + user_prompt_size + n_predict;
+    stop_generation_position = current_position + n_predict;
     return 0;
+    } catch (const std::exception &e) {
+        set_native_error("user_prompt", e.what());
+        return 3;
+    } catch (...) {
+        set_native_error("user_prompt", "Unknown native C++ exception");
+        return 4;
+    }
 }
 
 static bool is_valid_utf8(const char *string) {
@@ -577,6 +660,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
         JNIEnv *env,
         jobject /*unused*/
 ) {
+    try {
     // Infinite text generation via context shifting
     if (current_position >= g_effective_context_size - OVERFLOW_HEADROOM) {
         LOGw("%s: Context full! Shifting...", __func__);
@@ -628,6 +712,13 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
         result = env->NewStringUTF("");
     }
     return result;
+    } catch (const std::exception &e) {
+        throw_java_native_error(env, "generation", e.what());
+        return nullptr;
+    } catch (...) {
+        throw_java_native_error(env, "generation", "Unknown native C++ exception");
+        return nullptr;
+    }
 }
 
 
