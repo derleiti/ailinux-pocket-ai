@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 0.1.0-alpha.6** Debug APK builds; testing inference on the physical Pixel is still pending.
+**Status: 0.1.0-alpha.7** Debug APK builds; testing inference on the physical Pixel is still pending.
 
 ## Features
 
@@ -136,3 +136,27 @@ them. If the app process dies while loading a model, the next startup
 shows a recovery notice using a persisted load-attempt marker. Stored GGUF
 files are preserved on upgrades. There is no automatic crash telemetry or
 upload of logs.
+
+
+## Native crash tombstone diagnostics (Alpha 7)
+
+Pocket AI Alpha 6 can identify SIGABRT (status 6) but cannot determine the
+native assertion from ApplicationExitInfo alone. Android API 31+ can expose
+a protobuf native tombstone via ApplicationExitInfo.getTraceInputStream().
+Alpha 7 adds a bounded local reader for the public Android debuggerd
+tombstone.proto schema. SETUP > Letzte App-Abstuerze pruefen now displays
+the latest native crash's abort message, signal, faulting thread and up to
+18 backtrace frames, with a copy button for manual bug reporting. It does
+not upload logs automatically or require additional Android permissions.
+
+The diagnosis also includes the custom native inference phase recorded via
+ActivityManager.setProcessStateSummary(): backend_init, model_load,
+context_prepare, model_ready, system_prompt etc. This limited state
+is stored in the Android process exit record for *future* crashes; old records
+may not contain it. The Android tombstone history is a bounded circular
+buffer, so old crash traces might have been overwritten.
+
+**This is instrumentation, not a confirmed fix for a SIGABRT native crash.**
+Do not delete or re-download GGUF models to collect the crash trace.
+Prefer tapping SETUP > Letzte App-Abstuerze pruefen immediately after
+installing Alpha 7, before attempting another model load.

@@ -639,38 +639,77 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showProcessExitInfo() {
-        try {
-            val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            val history = manager.getHistoricalProcessExitReasons(packageName, 0, 8)
-            val entries = history.take(5).map { exit ->
-                val reasonName = when (exit.reason) {
-                    ApplicationExitInfo.REASON_LOW_MEMORY -> "Speichermangel (Low Memory)"
-                    ApplicationExitInfo.REASON_CRASH_NATIVE -> "Native Crash (C++/JNI)"
-                    ApplicationExitInfo.REASON_CRASH -> "Java/Kotlin Crash"
-                    ApplicationExitInfo.REASON_ANR -> "App reagiert nicht (ANR)"
-                    ApplicationExitInfo.REASON_SIGNALED -> "Signalbedingter Abbruch"
-                    else -> "Android-Code " + exit.reason
+        val button = findViewById<MaterialButton>(R.id.crashDiagnosticsButton)
+        button.isEnabled = false
+        button.text = "Analysiere Android-Tombstones …"
+        lifecycleScope.launch {
+            try {
+                val report = withContext(Dispatchers.IO) {
+                    val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                    val history = manager.getHistoricalProcessExitReasons(packageName, 0, 10)
+                    var tracesRead = 0
+                    val entries = history.take(6).map { exit ->
+                        val reasonName = when (exit.reason) {
+                            ApplicationExitInfo.REASON_LOW_MEMORY -> "Speichermangel (Low Memory)"
+                            ApplicationExitInfo.REASON_CRASH_NATIVE -> "Native Crash (C++/JNI)"
+                            ApplicationExitInfo.REASON_CRASH -> "Java/Kotlin Crash"
+                            ApplicationExitInfo.REASON_ANR -> "App reagiert nicht (ANR)"
+                            ApplicationExitInfo.REASON_SIGNALED -> "Signalbedingter Abbruch"
+                            else -> "Android-Code " + exit.reason
+                        }
+                        val date = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.GERMANY)
+                            .format(Date(exit.timestamp))
+                        val summary = exit.processStateSummary
+                            ?.toString(Charsets.UTF_8)?.take(125).orEmpty()
+                        val entry = StringBuilder().apply {
+                            append(date).append(" • ").append(reasonName)
+                            append(" (Status ").append(exit.status).append(")")
+                            append("\nRSS: ").append(exit.rss).append(" kB, PSS: ")
+                            append(exit.pss).append(" kB")
+                            if (summary.isNotEmpty()) append("\nPhase: ").append(summary)
+                            exit.description?.takeIf { it.isNotBlank() }?.let {
+                                append("\n").append(it.take(200))
+                            }
+                        }
+                        // Android 12+ exposes native tombstones for the calling app
+                        // as a protobuf. Only inspect the two most recent native
+                        // crashes to keep UI responsive and clipboard size bounded.
+                        if (exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE && tracesRead < 2) {
+                            tracesRead++
+                            val traceText = try {
+                                exit.traceInputStream?.use { stream ->
+                                    NativeTombstoneDecoder.read(stream)
+                                } ?: "Kein Tombstone mehr im Android-Ringpuffer vorhanden."
+                            } catch (error: Exception) {
+                                "Tombstone-Lesefehler: " +
+                                    (error.message ?: error.javaClass.simpleName)
+                            }
+                            entry.append("\n\n").append(traceText.take(8500))
+                        }
+                        entry.toString()
+                    }
+                    if (entries.isEmpty()) {
+                        "Android hat keine früheren Prozessabbrüche für Pocket AI erfasst."
+                    } else {
+                        "NATIVE CRASH DIAGNOSE – keine automatische Übertragung\n\n" +
+                            entries.joinToString("\n\n---\n\n")
+                    }
                 }
-                val date = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.GERMANY)
-                    .format(Date(exit.timestamp))
-                date + " • " + reasonName + " (Status " + exit.status + ")" +
-                    "\nRSS: " + exit.rss + " kB, PSS: " + exit.pss + " kB" +
-                    "\n" + (exit.description ?: "").take(220)
+                if (!isFinishing && !isDestroyed) {
+                    showError("Android-Prozessdiagnose", IllegalStateException(report))
+                }
+            } catch (error: Exception) {
+                showError("Systemdiagnose konnte nicht gelesen werden", error)
+            } finally {
+                button.isEnabled = true
+                button.text = "Letzte App-Abstürze prüfen"
             }
-            val report = if (entries.isEmpty()) {
-                "Android hat keine früheren Prozessabbrüche für Pocket AI erfasst."
-            } else {
-                entries.joinToString("\n\n")
-            }
-            showError("Android-Prozessdiagnose", IllegalStateException(report))
-        } catch (error: Exception) {
-            showError("Systemdiagnose konnte nicht gelesen werden", error)
         }
     }
 
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_SHORT).show()
     private fun showError(title: String, error: Throwable) {
-        val details = (error.message ?: error.javaClass.simpleName).take(5000)
+        val details = (error.message ?: error.javaClass.simpleName).take(15000)
         AlertDialog.Builder(this).setTitle(title)
             .setMessage(details)
             .setNeutralButton("Diagnose kopieren") { _, _ ->

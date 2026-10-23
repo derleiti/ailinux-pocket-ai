@@ -1,6 +1,7 @@
 package com.arm.aichat.internal
 
 import android.content.Context
+import android.app.ActivityManager
 import android.util.Log
 import com.arm.aichat.InferenceEngine
 import com.arm.aichat.internal.InferenceEngineImpl.Companion.getInstance
@@ -43,7 +44,8 @@ import java.io.IOException
  * @see ai_chat.cpp for the native implementation details
  */
 internal class InferenceEngineImpl private constructor(
-    private val nativeLibDir: String
+    private val nativeLibDir: String,
+    private val context: Context
 ) : InferenceEngine {
 
     companion object {
@@ -66,7 +68,7 @@ internal class InferenceEngineImpl private constructor(
 
                 try {
                     Log.i(TAG, "Instantiating InferenceEngineImpl,,,")
-                    InferenceEngineImpl(nativeLibDir).also { instance = it }
+                    InferenceEngineImpl(nativeLibDir, context.applicationContext).also { instance = it }
                 } catch (e: UnsatisfiedLinkError) {
                     Log.e(TAG, "Failed to load native library from $nativeLibDir", e)
                     throw e
@@ -115,6 +117,17 @@ internal class InferenceEngineImpl private constructor(
         MutableStateFlow<InferenceEngine.State>(InferenceEngine.State.Uninitialized)
     override val state: StateFlow<InferenceEngine.State> = _state.asStateFlow()
 
+    // Included in Android's historical process exit record if the native code
+    // aborts before Kotlin can catch an error. Do not include prompts or paths.
+    private fun recordNativeStage(phase: String) {
+        try {
+            val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            manager.setProcessStateSummary(("PocketAI phase=" + phase).toByteArray(Charsets.UTF_8))
+        } catch (ignored: Exception) {
+            Log.w(TAG, "Process-exit state summary unavailable", ignored)
+        }
+    }
+
     private var _readyForSystemPrompt = false
     @Volatile
     private var _cancelGeneration = false
@@ -134,6 +147,7 @@ internal class InferenceEngineImpl private constructor(
                 }
                 _state.value = InferenceEngine.State.Initializing
                 Log.i(TAG, "Loading native library...")
+                recordNativeStage("backend_init")
                 System.loadLibrary("ai-chat")
                 val backendCount = init(nativeLibDir)
                 check(backendCount > 0) {
@@ -141,6 +155,7 @@ internal class InferenceEngineImpl private constructor(
                     ".so-Dateien installieren (extractNativeLibs=true). Verzeichnis: $nativeLibDir"
                 }
                 _state.value = InferenceEngine.State.Initialized
+                recordNativeStage("backend_ready")
                 Log.i(TAG, "Native library loaded! System info: \n${systemInfo()}")
 
             } catch (e: Exception) {
@@ -170,6 +185,7 @@ internal class InferenceEngineImpl private constructor(
                 Log.i(TAG, "Loading model... \n$pathToModel")
                 _readyForSystemPrompt = false
                 _state.value = InferenceEngine.State.LoadingModel
+                recordNativeStage("model_load")
                 load(pathToModel).let { code ->
                     if (code != 0) {
                         val details = lastLoadError().trim().takeLast(3500)
@@ -177,6 +193,7 @@ internal class InferenceEngineImpl private constructor(
                         throw IOException("llama.cpp-Modellladefehler (Code $code):\n$details")
                     }
                 }
+                recordNativeStage("context_prepare")
                 prepare().let { code ->
                     if (code != 0) {
                         val details = lastLoadError().trim().takeLast(3500)
@@ -185,6 +202,7 @@ internal class InferenceEngineImpl private constructor(
                     }
                 }
                 Log.i(TAG, "Model loaded!")
+                recordNativeStage("model_ready")
                 _readyForSystemPrompt = true
 
                 _cancelGeneration = false
@@ -199,6 +217,7 @@ internal class InferenceEngineImpl private constructor(
                     Log.e(TAG, "Native cleanup after failed load also failed", cleanupFailure)
                 }
                 _readyForSystemPrompt = false
+                recordNativeStage("model_load_failed")
                 _state.value = InferenceEngine.State.Error(e)
                 throw e
             }
@@ -220,6 +239,7 @@ internal class InferenceEngineImpl private constructor(
             Log.i(TAG, "Sending system prompt...")
             _readyForSystemPrompt = false
             _state.value = InferenceEngine.State.ProcessingSystemPrompt
+            recordNativeStage("system_prompt")
             processSystemPrompt(prompt).let { result ->
                 if (result != 0) {
                     RuntimeException("Failed to process system prompt: $result").also {
@@ -230,6 +250,7 @@ internal class InferenceEngineImpl private constructor(
             }
             Log.i(TAG, "System prompt processed! Awaiting user prompt...")
             _state.value = InferenceEngine.State.ModelReady
+            recordNativeStage("prompt_ready")
         }
 
     /**
