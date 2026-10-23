@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 0.1.0-alpha.10.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.1.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -12,7 +12,9 @@ Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 - Interrupted download resume (HTTP Range) and SHA-256 verification when provided by the source.
 - Model library: load, switch, delete and inspect storage usage.
 - Token streaming with stop action, editable system prompt and generation-length setting.
-- No account, analytics, telemetry, cloud inference or API key.
+- Offline chat works without an account, telemetry or cloud inference. Optional
+  MCP servers can require API keys, passwords or OAuth; those network services
+  are used only when explicitly configured and tested by the user.
 
 ## Privacy and permissions
 
@@ -245,3 +247,79 @@ turns, and incremental conversation prefixes. Native test source is
 in tests/native/chat_template_thinking_test.cpp. This release is
 locally compiled for Android ARM64, but user device confirmation of
 the newly disabled thinking mode is still needed.
+
+
+## MCP connections – RC1
+
+Under SETUP > MCP VERBINDUNGEN, create and maintain multiple encrypted
+MCP server profiles. Supported authentication:
+- Ohne Anmeldung / No authentication
+- Authorization: Bearer token
+- API key in a selectable, validated HTTP header, e.g. X-API-Key
+- HTTP Basic username/password (only over HTTPS except 127.0.0.1)
+- OAuth authorization-code with PKCE S256, protected-resource metadata
+  discovery, authorization-server metadata, dynamic client registration
+  where supported, RFC 8707 resource binding, state/issuer validation,
+  refresh tokens and explicit logout/disconnect.
+
+MCP transport: Streamable HTTP (2026-07-28 server/discover and legacy 2025
+initialize), request-scoped JSON/SSE, as well as original 2024 HTTP+SSE
+GET endpoint / POST messages. AUTO transport recognizes conventional
+/sse endpoints; otherwise Streamable HTTP is used. The Streamable HTTP
+client negotiates 2026 server/discover first and can fall back to the
+older initialize handshake when supported. It does not silently convert
+a failed /mcp request to the separate legacy HTTP+SSE transport.
+Older SSE servers may require manually selecting LEGACY SSE.
+Authentication failures never trigger a silent downgrade.
+
+Redirects: default native loopback callback
+http://127.0.0.1:18467/oauth/callback; optional custom-app callback
+me.ailinux.pocket://oauth/callback for providers that require an
+app-registered callback. Register exactly the selected URI with your
+OAuth provider. The app opens the external system browser, not a WebView.
+An app-specific and session-specific PKCE verifier and state are encrypted
+before launching the browser. The callback validates matching state and
+exact redirect before exchanging authorization code; tokens are never
+placed in outgoing MCP URLs. OAuth provider interoperability depends on
+the particular authorization server. If auto-registration is unsupported,
+enter your provider-issued public client ID in the MCP profile.
+
+Secrets are encrypted locally using Android Keystore AES-GCM and stored
+only in app-private storage. Android backup is disabled, credentials are
+never embedded in source, and HTTP redirects are never automatically
+followed with credentials. MCP access is optional. The setup screen can
+test a connection, inspect tools, copy details, disconnect and delete
+profiles. Tools with side effects must be chosen by the user with
+explicit per-call confirmation; model-generated text does not
+automatically invoke MCP tools. An explicit button allows user-approved
+tool results to be inserted into the chat.
+
+The existing llama.cpp/Spark-X2.6 offline chat inference path is unchanged.
+Android ARM64 build, JVM/mock-server tests and APK signing checks cover
+the transport, security and settings UI. External OAuth provider
+authorization and live account-specific MCP tool use need testing with
+the user's own registered server/client; they cannot be conclusively
+verified by unit tests alone.
+
+
+### RC1 verification status and scope
+
+- Android ARM64 debug package built and tests run on AILinux server; never
+  assume on-device OAuth/provider interoperability before testing the
+  exact server identity and registered callback URI.
+- MCP tests cover legacy 2024 HTTP+SSE, 2025 handshake Streamable HTTP,
+  stateless 2026-07-28, headers, user-approved tool calls, HTTP redirect
+  security, OAuth PKCE state and issuer, one-use callbacks, dynamic
+  registration and refresh token storage behavior.
+- MCP is a manual tool console with per-call confirmation and optional
+  display of results in CHAT; the GGUF language model does not autonomously
+  pick tools, see MCP credentials or ingest untrusted tool output.
+- OAuth uses a public client ID or dynamic registration where offered.
+  Providers requiring CIMD (Client ID Metadata Documents), a registered
+  Android signing certificate or provider-specific native redirect
+  registration may need extra integration; no universal provider login
+  is claimed. Avoid using a secret client key in a mobile application.
+- The bundled debug APK is signed with the same *development test*
+  certificate as the preceding AILinux-server Alpha releases so users may
+  update in place without losing locally downloaded GGUF models. This is a
+  release candidate for device QA, not an audited production security release.

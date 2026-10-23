@@ -8,6 +8,9 @@ import android.content.Context
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.net.Uri
+import android.content.Intent
+import me.ailinux.pocket.mcp.McpSettingsUi
+import me.ailinux.pocket.mcp.McpSecurity
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
@@ -44,6 +47,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MainActivity : AppCompatActivity() {
     private lateinit var store: ModelStore
     private lateinit var engine: InferenceEngine
+    private lateinit var mcpUi: McpSettingsUi
     private val messages = mutableListOf<ChatMessage>()
     private val chatAdapter = ChatAdapter(messages)
     private var activeModel: File? = null
@@ -83,6 +87,12 @@ class MainActivity : AppCompatActivity() {
         val installedVersion = packageManager.getPackageInfo(packageName, 0).versionName ?: "unbekannt"
         findViewById<TextView>(R.id.appVersion).text = "AILinux Pocket AI  •  $installedVersion"
         store = ModelStore(this)
+        mcpUi = McpSettingsUi(this,
+            findViewById(R.id.mcpServerList),
+            findViewById(R.id.addMcpServerButton)) { result ->
+            displayMcpToolResult(result)
+        }
+        handleMcpOAuthIntent(intent)
 
         messagesView.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
         messagesView.adapter = chatAdapter
@@ -90,6 +100,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.navChat).setOnClickListener { showPage(0) }
         findViewById<TextView>(R.id.navModels).setOnClickListener { showPage(1) }
         findViewById<TextView>(R.id.navSettings).setOnClickListener { showPage(2) }
+        findViewById<MaterialButton>(R.id.chatMcpButton).setOnClickListener {
+            mcpUi.showToolsChooser()
+        }
         findViewById<MaterialButton>(R.id.importButton).setOnClickListener {
             if (!transferBusy) modelPicker.launch(arrayOf("*/*"))
         }
@@ -730,6 +743,37 @@ class MainActivity : AppCompatActivity() {
                 button.text = "Letzte App-Abstürze prüfen"
             }
         }
+    }
+
+    private fun displayMcpToolResult(result: String) {
+        messages.add(ChatMessage(false, result))
+        chatAdapter.notifyItemInserted(messages.lastIndex)
+        findViewById<View>(R.id.emptyState).visibility = View.GONE
+        showPage(0)
+        messagesView.scrollToPosition(messages.lastIndex)
+    }
+
+    private fun handleMcpOAuthIntent(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme == "me.ailinux.pocket" && uri.host == "oauth" &&
+            uri.path == "/callback") {
+            try {
+                mcpUi.onOAuthCallback(java.net.URI(uri.toString()))
+            } catch (e: Exception) {
+                showError("MCP OAuth Rückleitung", e)
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleMcpOAuthIntent(intent)
+    }
+
+    override fun onDestroy() {
+        if (::mcpUi.isInitialized) mcpUi.close()
+        super.onDestroy()
     }
 
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_SHORT).show()

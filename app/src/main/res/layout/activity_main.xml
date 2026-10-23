@@ -65,6 +65,15 @@
                     android:gravity="end"
                     android:text="Warte auf Modell"
                     android:textColor="@color/muted" android:textSize="11sp"/>
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/chatMcpButton"
+                    android:layout_width="wrap_content" android:layout_height="40dp"
+                    android:layout_marginStart="7dp"
+                    android:text="MCP" android:textAllCaps="false"
+                    android:textSize="10sp" android:minWidth="48dp"
+                    android:textColor="@color/ink"
+                    app:backgroundTint="@color/surface_raised"
+                    app:cornerRadius="12dp"/>
             </LinearLayout>
 
             <FrameLayout android:layout_width="match_parent" android:layout_height="0dp"
@@ -272,6 +281,37 @@
                     android:text="Letzte App-Abstürze prüfen" android:textAllCaps="false"
                     android:textColor="@color/ink" app:backgroundTint="@color/surface_raised"
                     app:cornerRadius="14dp"/>
+                <TextView android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="35dp"
+                    android:text="MCP VERBINDUNGEN" android:letterSpacing=".15"
+                    android:textColor="@color/primary"
+                    android:textStyle="bold" android:textSize="11sp"/>
+                <TextView android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="7dp"
+                    android:text="Streamable HTTP: Ohne Auth, Bearer, API-Key, Basic und OAuth mit PKCE. Zugangsdaten werden mit Android Keystore verschlüsselt."
+                    android:textColor="@color/muted" android:textSize="12sp"/>
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/addMcpServerButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="14dp"
+                    android:text="+ MCP-Server hinzufügen"
+                    android:textAllCaps="false"
+                    android:textColor="@color/background"
+                    app:backgroundTint="@color/primary"
+                    app:cornerRadius="14dp"/>
+                <LinearLayout android:id="@+id/mcpServerList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="13dp"
+                    android:orientation="vertical"/>
+                <TextView android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:text="Tools werden nur nach deiner ausdrücklichen Bestätigung ausgeführt. OAuth-Anmeldung erfolgt im externen Browser."
+                    android:textColor="@color/muted" android:textSize="11sp"/>
                 <TextView android:id="@+id/appVersion"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="40dp"

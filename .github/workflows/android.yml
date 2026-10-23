@@ -39,10 +39,10 @@ jobs:
       - name: Compact and verify test APK
         run: |
           python3 scripts/compact-debug-apk.py
-          ./scripts/verify-apk.sh dist/AILinux-Pocket-AI-0.1.0-alpha.10-arm64-debug.apk
+          ./scripts/verify-apk.sh dist/AILinux-Pocket-AI-1.0.0-rc.1-arm64-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: AILinux-Pocket-AI-debug-arm64
-          path: dist/AILinux-Pocket-AI-0.1.0-alpha.10-arm64-debug.apk
+          path: dist/AILinux-Pocket-AI-1.0.0-rc.1-arm64-debug.apk
           if-no-files-found: error
           retention-days: 14

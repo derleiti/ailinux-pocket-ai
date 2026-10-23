@@ -9,8 +9,8 @@ android {
         applicationId = "me.ailinux.pocket"
         minSdk = 33
         targetSdk = 35
-        versionCode = 10
-        versionName = "0.1.0-alpha.10"
+        versionCode = 11
+        versionName = "1.0.0-rc.1"
         ndk { abiFilters += "arm64-v8a" }
     }
     buildTypes {
@@ -40,4 +40,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation(project(":inference"))
     testImplementation(libs.junit)
+    // Real org.json is necessary in local JVM protocol integration tests;
+    // the Android test stub otherwise throws "Method not mocked".
+    testImplementation("org.json:json:20240303")
 }
