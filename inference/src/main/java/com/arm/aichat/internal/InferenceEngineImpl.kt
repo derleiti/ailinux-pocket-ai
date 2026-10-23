@@ -97,6 +97,9 @@ internal class InferenceEngineImpl private constructor(
 
     private external fun setThinkingEnabledNative(enabled: Boolean)
 
+    /** Must be called on llamaDispatcher before a fresh system prefix. */
+    private external fun setReasoningModeNative(mode: String)
+
     private external fun processSystemPrompt(systemPrompt: String, toolsJson: String): Int
 
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
@@ -220,15 +223,19 @@ internal class InferenceEngineImpl private constructor(
             }
         }
 
-    override suspend fun setThinkingMode(enabled: Boolean) = withContext(llamaDispatcher) {
+    override suspend fun setThinkingMode(
+        enabled: Boolean, effort: String
+    ) = withContext(llamaDispatcher) {
         check(_state.value is InferenceEngine.State.ModelReady) {
             "Denkmodus kann nur bei geladenem und bereitem Modell konfiguriert werden."
         }
         check(_readyForSystemPrompt) {
             "Denkmodus kann nur vor dem ersten System-Prompt eingestellt werden. Modell neu laden."
         }
-        setThinkingEnabledNative(enabled)
-        Log.i(TAG, "GGUF thinking mode configured for new chat: $enabled")
+        val mode = if (!enabled) "off" else effort
+        require(mode in setOf("off", "low", "high")) { "Ungültiger Thinking-Modus" }
+        setReasoningModeNative(mode)
+        Log.i(TAG, "GGUF reasoning mode for new chat: $mode")
         Unit
     }
 
@@ -236,13 +243,15 @@ internal class InferenceEngineImpl private constructor(
     override suspend fun setSystemPrompt(prompt: String, toolsJson: String) =
         bindSystemPrompt(prompt, toolsJson, firstPrompt = true)
 
-    override suspend fun resetConversationWithTools(prompt: String, toolsJson: String) =
-        bindSystemPrompt(prompt, toolsJson, firstPrompt = false)
+    override suspend fun resetConversationWithTools(
+        prompt: String, toolsJson: String, thinkingMode: String
+    ) = bindSystemPrompt(prompt, toolsJson, firstPrompt = false, reasoningMode = thinkingMode)
 
     private suspend fun bindSystemPrompt(
         prompt: String,
         toolsJson: String,
-        firstPrompt: Boolean
+        firstPrompt: Boolean,
+        reasoningMode: String? = null
     ) = withContext(llamaDispatcher) {
         require(prompt.isNotBlank()) { "System-Prompt darf nicht leer sein" }
         require(toolsJson.length <= 14_000) { "Zu viele MCP-Tooldefinitionen" }
@@ -255,6 +264,14 @@ internal class InferenceEngineImpl private constructor(
 
         _state.value = InferenceEngine.State.ProcessingSystemPrompt
         recordNativeStage("system_prompt")
+        // Mode switches are allowed ONLY when reinitializing the entire chat.
+        // The same single-threaded dispatcher serializes mode, reset, KV prefill.
+        if (reasoningMode != null) {
+            require(reasoningMode in setOf("off", "low", "high")) {
+                "Ungültiger MCP Thinking-Modus"
+            }
+            setReasoningModeNative(reasoningMode)
+        }
         // Native reset clears chat_msgs and llama memory before binding tools.
         // Never call this during generation or network dispatch.
         val code = processSystemPrompt(prompt, toolsJson)

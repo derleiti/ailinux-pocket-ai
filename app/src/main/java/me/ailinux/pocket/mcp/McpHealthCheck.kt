@@ -28,6 +28,24 @@ object McpHealthCheck {
         RegexOption.IGNORE_CASE
     )
 
+    // Natural requests like "check triforce dev server status" intentionally
+    // omit the word "MCP". Detect that named endpoint rather than forwarding
+    // the question to the offline LLM to fabricate a server result.
+    private val namedTriForce = Regex(
+        "(?:\\btriforce\\b|\\btri[ -]?force\\b|api\\.ailinux\\.me)",
+        RegexOption.IGNORE_CASE
+    )
+    private val statusSubject = Regex(
+        "\\b(?:server|endpoint|status|state|health|healthcheck|connection|" +
+            "verbindung|erreichbarkeit|zustand)\\b",
+        RegexOption.IGNORE_CASE
+    )
+    private val statusRequest = Regex(
+        "\\b(?:check\\w*|prüf\\w*|pruef\\w*|test\\w*|health|" +
+            "status|zustand|erreichbar|funktioniert|läuft|laeuft)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
     /** null: not a health request; empty: any configured server. */
     fun requestedTarget(message: String): String? {
         val text = message.trim().replace(Regex("\\s+"), " ")
@@ -37,11 +55,20 @@ object McpHealthCheck {
             return if (name == "all") "" else if (name == "ailinux") "triforce" else name
         }
         val normalized = text.lowercase(Locale.ROOT)
-        if (normalized.startsWith("was ist ") ||
-            normalized.startsWith("erklär") || normalized.startsWith("was bedeutet ") ||
-            normalized.startsWith("what is ")) return null
-        if (!normalized.contains("mcp")) return null
-        if (!health.containsMatchIn(text) &&
+        if (normalized.startsWith("was ist ein ") ||
+            normalized.startsWith("was ist eine ") ||
+            normalized.startsWith("erklär") ||
+            normalized.startsWith("was bedeutet ") ||
+            normalized.startsWith("what is a ") ||
+            normalized.startsWith("what does ")) return null
+        val namesTriForce = namedTriForce.containsMatchIn(text)
+        val explicitMcp = normalized.contains("mcp")
+        val namedStatusRequest = namesTriForce &&
+            statusSubject.containsMatchIn(text) &&
+            statusRequest.containsMatchIn(text)
+        if (!explicitMcp && !namedStatusRequest) return null
+        if (!namedStatusRequest &&
+            !health.containsMatchIn(text) &&
             !(normalized.contains("verbindung") && check.containsMatchIn(text)) &&
             !(normalized.contains("status") && check.containsMatchIn(text))) return null
         return when {
@@ -96,7 +123,9 @@ object McpHealthCheck {
             "BESTÄTIGT: Der konfigurierte Server war für diese MCP-Abfragen erreichbar.\n" +
             "NICHT BESTÄTIGT: Rechte für einzelne Tools, Discord-Serverfreigaben, " +
             "Voice-Verbindung oder weitere Endpunkte.\n" +
-            "Dafür ist ein gesonderter, ausdrücklich freigegebener Toolaufruf nötig."
+            "Auch Host-Betriebssystem, Hintergrunddienste, Entwicklungsserver, " +
+            "Datenbanken und CI wurden NICHT geprüft.\n" +
+            "Dafür sind separate, ausdrücklich freigegebene Diagnosetools nötig."
     }
 
     fun failure(profile: McpProfile, error: Throwable): String {
@@ -121,10 +150,14 @@ object McpHealthCheck {
     /** Used when a small LLM claims a check without an actual MCP result. */
     fun modelOnlyClaim(text: String): Boolean {
         val lower = text.lowercase(Locale.ROOT)
-        if (!Regex("mcp|discord|server|health|zugriffsberechtigung|endpunkt|voice").containsMatchIn(lower))
-            return false
+        if (!Regex("mcp|discord|triforce|server|health|zugriffsberechtigung|endpunkt|voice")
+                .containsMatchIn(lower)) return false
         return Regex(
-            "(?:check\\s+(?:ist\\s+)?abgeschlossen|alles\\s+läuft\\s+(?:in\\s+ordnung|gut)|" +
+            "(?:check\\s+(?:ist\\s+)?abgeschlossen|" +
+                "alles\\s+läuft\\s+(?:in\\s+ordnung|gut|reibungslos|stabil)|" +
+                "alle\\s+systeme\\s+(?:sind\\s+)?(?:bereit|stabil|online|gesund|in\\s+ordnung)|" +
+                "server\\s+[^.\\n]{0,90}(?:ist|läuft)\\s+[^.\\n]{0,50}" +
+                    "(?:online|bereit|gesund|stabil|im\\s+stand|reibungslos)|" +
                 "verbindung\\s+[^.\\n]{0,130}(?:aktiv|hergestellt|bestätigt|geprüft)|" +
                 "ich\\s+habe\\s+[^.\\n]{0,140}(?:geprüft|überprüft|verbunden|bestätigt)|" +
                 "zugriffsberechtigungen\\s+[^.\\n]{0,90}(?:überprüft|geprüft))",

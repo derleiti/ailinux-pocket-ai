@@ -110,6 +110,9 @@ class MainActivity : AppCompatActivity() {
             updateMcpBadge(active)
             if (activeModel != null) rebindNativeMcpTools(active)
         }
+        // No agent session does not mean the device, its saved MCP profiles,
+        // or the remote server is offline. Show exactly what is disabled.
+        updateMcpBadge(null)
         handleMcpOAuthIntent(intent)
 
         messagesView.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
@@ -414,8 +417,11 @@ class MainActivity : AppCompatActivity() {
                     // The mode must be set BEFORE the system prompt enters
                     // the KV cache; changing it within an active chat corrupts
                     // incremental Jinja template prefixes.
-                    engine.setThinkingMode(prefs.getBoolean(PREF_ENABLE_THINKING, false))
                     val activeMcp = mcpAgent.current()
+                    val thinkingMode = activeMcp?.thinkingMode ?:
+                        if (prefs.getBoolean(PREF_ENABLE_THINKING, false)) "high" else "off"
+                    engine.setThinkingMode(thinkingMode != "off",
+                        if (thinkingMode == "low") "low" else "high")
                     val nativeTools = activeMcp?.let {
                         McpAgentBridge.nativeToolsJson(it.tools)
                     } ?: "[]"
@@ -463,9 +469,16 @@ class MainActivity : AppCompatActivity() {
     private fun updateMcpBadge(active: McpAgentSession?) {
         val chip = findViewById<TextView>(R.id.onlineChip)
         val button = findViewById<MaterialButton>(R.id.chatMcpButton)
-        chip.text = if (active == null) "●  OFFLINE" else "●  LOKAL + MCP"
+        chip.text = if (active == null) "●  MCP AUS" else
+            "●  MCP " + active.thinkingMode.uppercase()
+        chip.contentDescription = if (active == null) {
+            "MCP-Agentenmodus ausgeschaltet. Direkte MCP-Abfragen sind weiterhin möglich."
+        } else {
+            "MCP-Agentenmodus aktiviert mit Thinking " +
+                active.thinkingMode.uppercase() + " und ausgewählten Werkzeugen."
+        }
         button.text = if (active == null) "MCP" else "MCP ✓"
-        chip.setTextColor(getColor(if (active == null) R.color.primary else R.color.secondary))
+        chip.setTextColor(getColor(if (active == null) R.color.muted else R.color.secondary))
     }
 
     /**
@@ -493,7 +506,11 @@ class MainActivity : AppCompatActivity() {
         setStatus("● MCP-WERKZEUGE WERDEN EINGEBUNDEN …")
         lifecycleScope.launch {
             try {
-                engine.resetConversationWithTools(groundedSystemPrompt(active), json)
+                val thinkingMode = active?.thinkingMode ?:
+                    if (prefs.getBoolean(PREF_ENABLE_THINKING, false)) "high" else "off"
+                engine.resetConversationWithTools(
+                    groundedSystemPrompt(active), json, thinkingMode
+                )
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -501,7 +518,8 @@ class MainActivity : AppCompatActivity() {
                 toast(
                     if (active == null) "MCP ausgeschaltet · Chatkontext neu gestartet"
                     else "Spark hat " + active.tools.size +
-                        " native MCP-Tools eingebunden · Chatkontext neu gestartet"
+                        " native MCP-Tools eingebunden, Thinking " +
+                        active.thinkingMode.uppercase() + " · Chatkontext neu gestartet"
                 )
             } catch (problem: Exception) {
                 mcpAgent.clearSessionSilently()
@@ -738,7 +756,10 @@ class MainActivity : AppCompatActivity() {
                     chatAdapter.notifyItemChanged(index)
                 }
                 if (agentSession != null) {
-                    when (val proposal = McpAgentBridge.parse(fullReply.toString(), agentSession.tools)) {
+                    when (val proposal = McpAgentBridge.parse(
+                        fullReply.toString(), agentSession.tools,
+                        thinkingEnabled = agentSession.thinkingMode != "off"
+                    )) {
                         is McpAgentBridge.Decision.Answer -> {
                             // Explicitly refuse to present an unsupported health
                             // check or claimed external change as a successful action.
@@ -753,6 +774,24 @@ class MainActivity : AppCompatActivity() {
                         is McpAgentBridge.Decision.Invalid -> {
                             answer.content = "⚠️ Kein MCP-Aufruf ausgeführt: " + proposal.reason +
                                 "\nBitte die Anfrage präzisieren oder das Tool manuell wählen."
+                            // An unterminated Spark thinking prefix cannot be
+                            // faithfully replayed in native KV history.
+                            if (agentSession.thinkingMode != "off" &&
+                                (proposal.reason.contains("Thinking") ||
+                                 proposal.reason.contains("Denkschleife"))) {
+                                try {
+                                    engine.resetConversationWithTools(
+                                        groundedSystemPrompt(agentSession),
+                                        McpAgentBridge.nativeToolsJson(agentSession.tools),
+                                        agentSession.thinkingMode
+                                    )
+                                    answer.content +=
+                                        "\nDer lokale Chatkontext wurde sicher neu gestartet."
+                                } catch (resetFailure: Exception) {
+                                    answer.content += "\nKontextreset fehlgeschlagen: " +
+                                        (resetFailure.message ?: "Modell neu laden").take(160)
+                                }
+                            }
                             chatAdapter.notifyItemChanged(index)
                         }
                         is McpAgentBridge.Decision.Proposed -> {
@@ -794,7 +833,10 @@ class MainActivity : AppCompatActivity() {
                                                 160
                                             ).collect { summary.append(it) }
                                         }
-                                        val reply = McpAgentBridge.parse(summary.toString(), agentSession.tools)
+                                        val reply = McpAgentBridge.parse(
+                                            summary.toString(), agentSession.tools,
+                                            thinkingEnabled = agentSession.thinkingMode != "off"
+                                        )
                                         val summarization = when (reply) {
                                             is McpAgentBridge.Decision.Answer -> reply.text
                                             else -> "Weiterer Toolaufruf blockiert. Siehe MCP-Serverergebnis."

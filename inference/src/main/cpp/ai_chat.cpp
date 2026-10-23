@@ -414,14 +414,21 @@ static std::vector<common_chat_msg> chat_msgs;
 // Direct-answer mode by default: GGUF templates such as Spark-X2.6 otherwise
 // inject high-effort thinking instructions and start generation with <think>.
 static bool g_enable_thinking = false;
+// Spark-X2.6 supports low or high thinking. Normal local chat defaults OFF.
+// Keep the exact effort unchanged throughout one decoded conversation.
+static std::string g_reasoning_effort = "high";
 // MCP tools are bound to the actual GGUF/Jinja system template, not prepended
 // as instructions to an arbitrary user message. Changes require KV reset.
 static std::vector<common_chat_tool> g_chat_tools;
+// An unfinished reasoning segment cannot be replayed as a completed Jinja
+// assistant turn. Reject the next question until the native chat is reset.
+static bool g_incomplete_thinking_turn = false;
 static llama_pos system_prompt_position;
 static llama_pos current_position;
 
 static void reset_long_term_states(const bool clear_kv_cache = true) {
     chat_msgs.clear();
+    g_incomplete_thinking_turn = false;
     system_prompt_position = 0;
     current_position = 0;
 
@@ -458,6 +465,12 @@ static std::string chat_render(const std::vector<common_chat_msg> &messages, boo
     inputs.messages = messages;
     inputs.use_jinja = true;
     inputs.enable_thinking = g_enable_thinking;
+    if (g_enable_thinking) {
+        // common_chat_template_apply JSON-parses kwargs before Jinja:
+        // quote the value as a JSON string, not a raw word.
+        inputs.chat_template_kwargs["reasoning_effort"] =
+            "\"" + g_reasoning_effort + "\"";
+    }
     inputs.tools = g_chat_tools;
     inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
     inputs.parallel_tool_calls = false;
@@ -465,11 +478,8 @@ static std::string chat_render(const std::vector<common_chat_msg> &messages, boo
     return common_chat_templates_apply(g_chat_templates.get(), inputs).prompt.str();
 }
 
-static std::string chat_add_and_format(const std::string &role, const std::string &content) {
-    common_chat_msg new_msg;
-    new_msg.role = role;
-    new_msg.content = content;
-
+static std::string chat_add_and_format_msg(const common_chat_msg & new_msg) {
+    const std::string & role = new_msg.role;
     const std::string rendered_past = chat_msgs.empty() ? "" : chat_render(chat_msgs, false);
     auto updated_msgs = chat_msgs;
     updated_msgs.push_back(new_msg);
@@ -481,10 +491,17 @@ static std::string chat_add_and_format(const std::string &role, const std::strin
         throw std::runtime_error("Chat template rewrote its previous messages. Start a new conversation.");
     }
     const std::string formatted = rendered_updated.substr(rendered_past.size());
-    chat_msgs.push_back(std::move(new_msg));
+    chat_msgs.push_back(new_msg);
     LOGi("%s: Formatted %s message (%zu chars, thinking=%s)",
          __func__, role.c_str(), formatted.size(), g_enable_thinking ? "on" : "off");
     return formatted;
+}
+
+static std::string chat_add_and_format(const std::string & role, const std::string & content) {
+    common_chat_msg msg;
+    msg.role = role;
+    msg.content = content;
+    return chat_add_and_format_msg(msg);
 }
 
 extern "C"
@@ -494,7 +511,27 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_setThinkingEnabledNative(
     // Called on the single-threaded llamaDispatcher before system prompt decode.
     // Changing this mid-conversation requires rebuilding the prompt/KV cache.
     g_enable_thinking = enabled == JNI_TRUE;
+    g_reasoning_effort = "high";
     LOGi("GGUF chat thinking mode: %s", g_enable_thinking ? "enabled" : "disabled");
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_setReasoningModeNative(
+        JNIEnv *env, jobject /*unused*/, jstring jmode) {
+    try {
+        const std::string mode = java_string(env, jmode);
+        if (mode != "off" && mode != "low" && mode != "high") {
+            throw std::invalid_argument("MCP reasoning mode must be off, low or high");
+        }
+        g_enable_thinking = mode != "off";
+        g_reasoning_effort = mode == "low" ? "low" : "high";
+        LOGi("GGUF native chat reasoning mode: %s", mode.c_str());
+    } catch (const std::exception &e) {
+        throw_java_native_error(env, "reasoning_mode", e.what());
+    } catch (...) {
+        throw_java_native_error(env, "reasoning_mode", "Unknown native C++ exception");
+    }
 }
 
 /**
@@ -510,9 +547,31 @@ static std::ostringstream assistant_ss;
 static bool g_pending_assistant = false;
 
 // Commit generated assistant text once, including partial Stop-button output.
+// With Spark thinking ON, the rendered user prefix ALREADY ends in <think>.
+// The generated text begins INSIDE reasoning and must be split at </think>
+// into chat_msg.reasoning_content + content. Without that split, Jinja's
+// subsequent turns wrongly re-render the past as </think>reasoning...</think>.
 static void finalize_assistant_turn() {
     if (!g_pending_assistant) return;
-    chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
+    const std::string generated = assistant_ss.str();
+    if (g_enable_thinking) {
+        const auto close = generated.find("</think>");
+        if (close == std::string::npos || close == 0 ||
+                generated.compare(0, 7, "<think>") == 0) {
+            // Incomplete or non-canonical reasoning cannot be faithfully
+            // replayed from the KV cache. Never pretend it completed.
+            g_incomplete_thinking_turn = true;
+            LOGw("Spark reasoning not completed; require chat reset before next turn");
+        } else {
+            common_chat_msg msg;
+            msg.role = ROLE_ASSISTANT;
+            msg.reasoning_content = generated.substr(0, close);
+            msg.content = generated.substr(close + std::string("</think>").size());
+            chat_add_and_format_msg(msg);
+        }
+    } else {
+        chat_add_and_format(ROLE_ASSISTANT, generated);
+    }
     g_pending_assistant = false;
 }
 
@@ -660,6 +719,11 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
     // Complete any partial assistant left by a previously cancelled Flow.
     finalize_assistant_turn();
     reset_short_term_states();
+    if (g_incomplete_thinking_turn) {
+        set_native_error("user_prompt",
+            "Spark Thinking nicht abgeschlossen: Chat zuruecksetzen oder Modell neu laden");
+        return 1;
+    }
 
     // Obtain and tokenize user prompt
     const std::string user_prompt = java_string(env, juser_prompt);

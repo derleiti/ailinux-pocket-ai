@@ -33,6 +33,45 @@ class McpHealthCheckTest {
         assertEquals("triforce", McpHealthCheck.requestedTarget("TriForce MCP-Health-Check"))
     }
 
+    @Test fun routesTheExactUnrecognizedPixelRequestWithoutMcpKeyword() {
+        val requests = listOf(
+            "check triforce dev server status",
+            "CHECK TRIFORCE DEV SERVER STATUS",
+            "check triforce server status",
+            "Prüfe bitte den TriForce Server Status",
+            "TriForce Dev Server Status",
+            "Was ist der Status des TriForce Dev Servers?",
+            "teste den TriForce Dev Server",
+            "check api.ailinux.me server status"
+        )
+        requests.forEach { request ->
+            assertEquals(request, "triforce", McpHealthCheck.requestedTarget(request))
+        }
+        assertNull(McpHealthCheck.requestedTarget("Triforce ist unser Projektname."))
+        assertNull(McpHealthCheck.requestedTarget("Was bedeutet TriForce Dev Server?"))
+        assertNull(McpHealthCheck.requestedTarget("Die TriForce-Server wurden aktualisiert."))
+    }
+
+    @Test fun marksTheExactFalsePixelServerStatusClaimAsUnverified() {
+        val observed = "(bläst die Hand leicht, die Augen leuchten ein bisschen) " +
+            "Triforce Dev Server ist im Stand, alle Systeme sind aufgearbeitet, " +
+            "alles läuft reibungslos."
+        assertTrue(McpHealthCheck.modelOnlyClaim(observed))
+        assertTrue(McpHealthCheck.unverifiedModelClaim()
+            .contains("KEIN MCP-HEALTH-CHECK AUSGEFÜHRT"))
+    }
+
+    @Test fun theMcpAgentChipNoLongerConfusesInactiveWithDisconnected() {
+        val layout = File("src/main/res/layout/activity_main.xml").readText()
+        val activity = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        assertTrue(layout.contains("●  MCP AUS"))
+        assertFalse(layout.contains("●  OFFLINE"))
+        assertTrue(activity.contains("updateMcpBadge(null)"))
+        assertTrue(activity.contains("MCP-Agentenmodus ausgeschaltet"))
+        assertTrue(activity.contains("active.thinkingMode.uppercase()"))
+        assertFalse(activity.contains("●  OFFLINE"))
+    }
+
     @Test fun doesNotHijackOrdinaryQuestionsOrExplanations() {
         for (text in listOf(
             "Was ist ein MCP-Health-Check?",
@@ -69,6 +108,8 @@ class McpHealthCheckTest {
         assertTrue(result.contains("Gemeldete Tools: 3"))
         assertTrue(result.contains("Prüfdauer: 53 ms"))
         assertTrue(result.contains("NICHT BESTÄTIGT: Rechte für einzelne Tools"))
+        assertTrue(result.contains("Host-Betriebssystem"))
+        assertTrue(result.contains("Entwicklungsserver"))
         assertTrue(result.contains("Discord-Serverfreigaben"))
         assertFalse(result.contains("alle Berechtigungen erfolgreich überprüft"))
     }

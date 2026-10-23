@@ -73,15 +73,34 @@ object McpAgentBridge {
         return encoded
     }
 
-    fun parse(output: String, tools: List<McpTool>): Decision {
+    fun parse(
+        output: String, tools: List<McpTool>, thinkingEnabled: Boolean = false
+    ): Decision {
         if (output.length > 12_000) return Decision.Invalid("Modellantwort zu lang")
         var text = output.trim()
-        if (text.startsWith("<think>")) {
+        if (thinkingEnabled) {
+            // Spark's template ALREADY prefills <think> before generation.
+            // The generated token stream thus starts WITHIN reasoning and
+            // commonly begins with plain thought text, not a literal <think>.
+            // Tool syntax after </think> must be parsed as the final answer.
+            if (text.startsWith("<think>")) {
+                return Decision.Invalid("Unerwarteter doppelter Thinking-Start; Chat zurücksetzen")
+            }
             val end = text.indexOf("</think>")
-            if (end < 0) return Decision.Invalid("Unvollständige Denkschleife")
-            text = text.substring(end + 8).trim()
+            if (end <= 0) {
+                return Decision.Invalid("Thinking nicht abgeschlossen; Chat zurücksetzen")
+            }
+            text = text.substring(end + "</think>".length).trim()
+        } else {
+            if (text.startsWith("<think>")) {
+                val end = text.indexOf("</think>")
+                if (end < 0) return Decision.Invalid("Unvollständige Denkschleife")
+                text = text.substring(end + "</think>".length).trim()
+            }
+            if (text.startsWith("</think>")) {
+                text = text.removePrefix("</think>").trim()
+            }
         }
-        if (text.startsWith("</think>")) text = text.removePrefix("</think>").trim()
         val spark = text.startsWith("<tool_call>")
         val parsed = try {
             if (spark) parseSpark(text)

@@ -30,13 +30,17 @@ interface InferenceEngine {
      * model's actual Jinja system template. This clears previous chat turns.
      * Tools must be serialized OpenAI-compatible function descriptions.
      */
-    suspend fun resetConversationWithTools(systemPrompt: String, toolsJson: String)
+    suspend fun resetConversationWithTools(
+        systemPrompt: String, toolsJson: String, thinkingMode: String = "off"
+    )
 
     /**
      * Configure optional GGUF reasoning before the initial system prompt.
-     * Reopening the model is required to change it during an active chat.
+     * Use "low" for compact MCP reasoning, or "high" for full reasoning.
+     * Changing modes within a chat is only safe through a full decoded
+     * conversation reset with resetConversationWithTools().
      */
-    suspend fun setThinkingMode(enabled: Boolean)
+    suspend fun setThinkingMode(enabled: Boolean, effort: String = "high")
 
     /**
      * Sends a user prompt to the loaded model and returns a Flow of generated tokens.

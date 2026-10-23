@@ -60,6 +60,81 @@ class McpAgentBridgeTest {
         assertEquals(42, args.getInt("volume"))
     }
 
+    @Test fun mcpThinkingModeDefaultsToLowButOffersAllSparkOptions() {
+        val session = McpAgentSession(
+            profileId = "test", endpoint = "https://example.com/mcp",
+            serverName = "Test", tools = listOf(tool())
+        )
+        assertEquals("low", session.thinkingMode)
+        val chooser = java.io.File(
+            "src/main/java/me/ailinux/pocket/mcp/McpAgentUi.kt"
+        ).readText()
+        assertTrue(chooser.contains("LOW · empfohlen für MCP"))
+        assertTrue(chooser.contains("AUS · schnell"))
+        assertTrue(chooser.contains("HIGH · gründlicher"))
+        assertTrue(chooser.contains("thinkingPicker.selectedItemPosition"))
+        val main = java.io.File(
+            "src/main/java/me/ailinux/pocket/MainActivity.kt"
+        ).readText()
+        assertTrue(main.contains("agentSession.thinkingMode != \"off\""))
+        assertTrue(main.contains("engine.setThinkingMode(thinkingMode != \"off\""))
+        assertTrue(main.contains("groundedSystemPrompt(active), json, thinkingMode"))
+    }
+
+    @Test fun nativeThinkingConfigurationIsRebuiltWithNewSystemPrefix() {
+        val kotlin = java.io.File(
+            "../inference/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt"
+        ).readText()
+        val native = java.io.File(
+            "../inference/src/main/cpp/ai_chat.cpp"
+        ).readText()
+        assertTrue(kotlin.contains("setReasoningModeNative(reasoningMode)"))
+        assertTrue(kotlin.contains("reasoningMode in setOf(\"off\", \"low\", \"high\")"))
+        assertTrue(native.contains("chat_template_kwargs[\"reasoning_effort\"]"))
+        assertTrue(native.contains("g_reasoning_effort = mode == \"low\" ? \"low\" : \"high\""))
+        assertTrue(native.contains("msg.reasoning_content = generated.substr"))
+        assertTrue(native.contains("g_incomplete_thinking_turn"))
+    }
+
+    @Test fun sparkThinkingLowPrefilledPrefixCanProduceRealToolCall() {
+        // The actual Spark GGUF generation prompt ends in <think>; the
+        // generated stream therefore starts inside a thought, not at <think>.
+        val streamed = "I should query the authorized Discord account status." +
+            "</think><tool_call>discord_voice_join" +
+            "<arg_key>channel_id</arg_key><arg_value>999</arg_value>" +
+            "</tool_call>"
+        val result = McpAgentBridge.parse(
+            streamed, listOf(tool()), thinkingEnabled = true
+        )
+        assertTrue(result is McpAgentBridge.Decision.Proposed)
+        assertEquals("999",
+            (result as McpAgentBridge.Decision.Proposed).args.getString("channel_id"))
+        val answer = McpAgentBridge.parse(
+            "I cannot prove the server status.</think>Keine Verbindung geprüft.",
+            listOf(tool()), thinkingEnabled = true
+        )
+        assertEquals("Keine Verbindung geprüft.",
+            (answer as McpAgentBridge.Decision.Answer).text)
+    }
+
+    @Test fun unfinishedOrMalformedThinkingMustNeverExecuteATool() {
+        val toolCall = "<tool_call>discord_voice_join" +
+            "<arg_key>channel_id</arg_key><arg_value>999</arg_value></tool_call>"
+        val cases = listOf(
+            "I need to think about $toolCall",
+            toolCall,
+            "</think>$toolCall",
+            "<think>thought</think>$toolCall",
+            "I am still thinking and do not have a completed tool result"
+        )
+        for (raw in cases) {
+            val result = McpAgentBridge.parse(
+                raw, listOf(tool()), thinkingEnabled = true
+            )
+            assertTrue(raw, result is McpAgentBridge.Decision.Invalid)
+        }
+    }
+
     @Test fun acceptsJsonFallbackButNeverCallsUnknownTool() {
         val text = """{"mcp_tool":"discord_voice_join","arguments":{"channel_id":"123"}}"""
         val yes = McpAgentBridge.parse(text, listOf(tool()))

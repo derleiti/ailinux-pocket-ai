@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 1.0.0-rc.4.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.5.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -491,3 +491,70 @@ Jinja host tests, APK signature continuity and the published release
 asset are checked during packaging. The real Pixel and OAuth permission
 scopes must still be validated after installation. The Android APK
 is a debug-signed device-QA prerelease and should update RC3 in place.
+
+
+## RC5 - Optional Spark-X2.6 Thinking LOW for native MCP tool planning
+
+The Spark-X2.6 upstream template supports Thinking OFF, LOW and HIGH. RC4
+proved the original GGUF Jinja tool section works with Thinking OFF,
+but live Pixel tests showed the 4B model may still answer a server-status
+question with fiction rather than choosing a tool. Thinking is a possible
+improvement to model planning, NOT an alternative to actual MCP execution.
+
+- CHAT > MCP > KI + MCP aktivieren > server > selected tools now offers
+  **Thinking LOW (recommended)**, **AUS** and **HIGH**. LOW is the default
+  for newly activated MCP model sessions; standalone offline chat retains
+  the existing Thinking preference.
+- The selected thinking mode is visible in the chat header (MCP LOW, MCP
+  OFF or MCP HIGH). No more misleading OFFLINE badge when only the agent
+  is disabled: the default now reads MCP AUS. Direct read-only MCP health
+  and tools/list remain usable when the model-based agent is disabled.
+- The Android JNI/llama.cpp wrapper supplies the requested reasoning
+  effort to the original GGUF Jinja template using the JSON string
+  reasoning_effort=low or high. Changing the MCP mode first resets the
+  decoded native chat/system prefix on the serial inference dispatcher,
+  so the stored KV-cache never has a mixture of thinking modes.
+- A critical Spark-specific bug is fixed: when Thinking is enabled, the
+  template ALREADY prefills the opening <think> token. Model output
+  therefore starts with the reasoning BODY, followed by </think> and
+  (optionally) a <tool_call>...</tool_call> block. Pocket AI now parses
+  the final tool proposal AFTER </think>, rather than treating all
+  output as an ordinary model answer.
+- Native assistant history now stores completed reasoning separately in
+  reasoning_content. This preserves the exact original GGUF/Jinja
+  prefix when the next user turn is rendered.
+- An incomplete thinking trace, an unexpected duplicate <think>, or a
+  malformed tool proposal is NEVER dispatched as an MCP call. The model
+  chat KV cache is reset after incomplete reasoning; the user can retry
+  with shorter prompts or with Thinking AUS.
+- Natural status requests such as "check triforce dev server status" now
+  trigger a real MCP protocol health probe, even without the word MCP.
+  This ONLY proves the configured MCP endpoint responded; it cannot
+  certify the entire TriForce development server, host OS, database,
+  other services or user-specific tool permissions.
+- The top badge previously said OFFLINE when the MCP model-agent session
+  was disabled. It now reports MCP AUS and, when active, the real
+  Thinking mode (MCP LOW, MCP OFF or MCP HIGH).
+
+### How to compare on your Pixel
+
+1. Install the RC5 APK directly over RC4 (do not uninstall; same test
+   signing certificate preserves app-private downloaded GGUF models).
+2. Load Spark-X2.6 Q4_K_M and select a connected MCP server under
+   CHAT > MCP > KI + MCP aktivieren.
+3. Select one read-only tool such as discord_connection_status, choose
+   Thinking LOW and activate; the top should show MCP LOW.
+4. Ask the model to use that exact tool and report the actual result.
+   Success means a visible, explicit MCP permission dialog followed by
+   a genuine server receipt, not merely an encouraging Spark response.
+5. Disable/reconnect with Thinking AUS and compare the same request.
+   Thinking HIGH is available but may need more output tokens and time.
+6. Use /mcp health triforce and /mcp tools discord for deterministic,
+   model-independent connection/inventory checks. Neither request
+   should ever be treated as proof that unrelated services are healthy.
+
+Host Jinja tests verify original Spark template rendering for OFF, LOW
+and HIGH, including tool parameters and multi-turn reasoning reconstruction.
+Android JVM tests also cover the actual observed misleading screenshot
+request and malformed Thinking output. On-device sampling behavior must
+still be tested: these checks do not imply guaranteed 4B tool selection.

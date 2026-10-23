@@ -26,7 +26,9 @@ data class McpAgentSession(
     val profileId: String,
     val endpoint: String,
     val serverName: String,
-    val tools: List<McpTool>
+    val tools: List<McpTool>,
+    // Native Spark GGUF template thinking mode; default LOW for MCP planning.
+    val thinkingMode: String = "low"
 )
 
 class McpAgentUi(
@@ -129,6 +131,23 @@ class McpAgentUi(
             textSize = 12f
         }
         root.addView(intro)
+        val thinkingLabel = TextView(activity).apply {
+            text = "Spark Werkzeug-Planning: Thinking-Modus"
+            textSize = 12f
+            setPadding(0, dp(7), 0, dp(2))
+        }
+        root.addView(thinkingLabel)
+        val thinkingChoices = arrayOf(
+            "LOW · empfohlen für MCP",
+            "AUS · schnell, weniger Planung",
+            "HIGH · gründlicher, braucht mehr Tokens"
+        )
+        val thinkingPicker = android.widget.Spinner(activity).apply {
+            adapter = ArrayAdapter(activity,
+                android.R.layout.simple_spinner_dropdown_item, thinkingChoices)
+            setSelection(0)
+        }
+        root.addView(thinkingPicker, LinearLayout.LayoutParams(-1, dp(43)))
         val search = EditText(activity).apply {
             hint = "Tools suchen (z. B. discord, status …)"
             setSingleLine(true)
@@ -201,9 +220,17 @@ class McpAgentUi(
                     }.isFailure) {
                     // Keep the old session; never enable an unbound tool list.
                 } else {
-                    session = McpAgentSession(profile.id, profile.endpoint, profile.title, tools)
+                    val mode = when (thinkingPicker.selectedItemPosition) {
+                        1 -> "off"
+                        2 -> "high"
+                        else -> "low"
+                    }
+                    session = McpAgentSession(
+                        profile.id, profile.endpoint, profile.title, tools, mode
+                    )
                     onActiveChanged(session)
-                    toast("MCP-Chat bereit: " + profile.title)
+                    toast("MCP-Werkzeuge mit Thinking " + mode.uppercase() +
+                        " werden in Spark eingebunden.")
                     dialog.dismiss()
                 }
             }
