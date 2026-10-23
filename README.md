@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 0.1.0-alpha.** Debug APK builds; testing inference on the physical Pixel is still pending.
+**Status: 0.1.0-alpha.2** Debug APK builds; testing inference on the physical Pixel is still pending.
 
 ## Features
 
@@ -57,3 +57,19 @@ Repository browser supports public GitHub release GGUF assets and public Hugging
 - .github/workflows/android.yml: CI tests and debug artifact.
 
 Upstream llama.cpp and its Arm AI Chat Android binding are licensed under MIT. See third_party/llama.cpp/LICENSE and THIRD_PARTY_LICENSE_LLAMA_CPP.txt. The AILinux app code uses MIT.
+
+## Architecture diagnostics
+
+Before JNI model loading, Pocket AI reads GGUF metadata and checks for known
+image-generation/diffusion architectures. These models remain in your library, but
+cannot be run as chat models by llama.cpp. Qwen-Image 2.1 GGUF requires an
+image-specific backend such as ComfyUI-GGUF plus the matching text encoder and VAE.
+An unknown architecture is not automatically rejected; if llama.cpp rejects the
+model, the error now names the detected architecture and possible reasons.
+
+Try a text model such as
+https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf?download=true
+
+Note: CI debug builds use their own temporary Android signing certificates and
+are **not** update-compatible with releases signed on the AILinux build server.
+Release APKs are debug-signed for alpha tests only.

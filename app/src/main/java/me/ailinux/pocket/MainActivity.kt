@@ -20,6 +20,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
+import com.arm.aichat.UnsupportedArchitectureException
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import kotlinx.coroutines.CancellationException
@@ -240,16 +241,28 @@ class MainActivity : AppCompatActivity() {
         if (busy) return
         if (!::engine.isInitialized) { toast("Engine initialisiert noch."); return }
         busy = true
-        setStatus("Lade GGUF …")
+        setStatus("Prüfe GGUF-Architektur …")
         lifecycleScope.launch {
+            var previousModelUnloaded = false
             try {
+                val inspection = withContext(Dispatchers.IO) { ModelCompatibility.inspect(file) }
+                inspection.incompatibleReason?.let { throw IllegalArgumentException(it) }
+                setStatus("Lade " + (inspection.architecture ?: "GGUF") + " …")
                 withContext(Dispatchers.IO) {
                     when (engine.state.value) {
                         is InferenceEngine.State.ModelReady,
-                        is InferenceEngine.State.Error -> engine.cleanUp()
+                        is InferenceEngine.State.Error -> {
+                            previousModelUnloaded = true
+                            engine.cleanUp()
+                        }
                         else -> Unit
                     }
-                    engine.loadModel(file.absolutePath)
+                    previousModelUnloaded = true
+                    try {
+                        engine.loadModel(file.absolutePath)
+                    } catch (error: UnsupportedArchitectureException) {
+                        throw IllegalStateException(inspection.loaderError(), error)
+                    }
                     val instruction = prefs.getString("system_prompt", DEFAULT_SYSTEM_PROMPT).orEmpty()
                     if (instruction.isNotBlank()) engine.setSystemPrompt(instruction)
                 }
@@ -265,8 +278,9 @@ class MainActivity : AppCompatActivity() {
                 refreshLibrary()
                 showPage(0)
             } catch (error: Exception) {
-                activeModel = null
-                setStatus("Ladefehler")
+                // Preserve the previously loaded model if the preflight is rejected.
+                if (previousModelUnloaded) activeModel = null
+                setStatus(if (activeModel != null) "● BEREIT" else "Ladefehler")
                 showError("GGUF konnte nicht geladen werden", error)
             } finally {
                 busy = false
