@@ -1,0 +1,11 @@
+<resources>
+    <color name="background">#090E1B</color>
+    <color name="surface">#121B2B</color>
+    <color name="surface_raised">#192539</color>
+    <color name="primary">#5BEECC</color>
+    <color name="secondary">#9A8CFF</color>
+    <color name="ink">#F2F5FF</color>
+    <color name="muted">#A1B3CB</color>
+    <color name="line">#2B3A53</color>
+    <color name="warn">#FFAE85</color>
+</resources>
