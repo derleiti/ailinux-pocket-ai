@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 1.0.0-rc.1.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.2.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -12,6 +12,9 @@ Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 - Interrupted download resume (HTTP Range) and SHA-256 verification when provided by the source.
 - Model library: load, switch, delete and inspect storage usage.
 - Token streaming with stop action, editable system prompt and generation-length setting.
+- Opt-in MCP agent bridge: local GGUF proposes selected tools, user confirms
+  each invocation, and Pocket AI displays the server's real result separately.
+- TriForce MCP quick-add preset, searchable tool picker and OAuth/Bearer/API-key support.
 - Offline chat works without an account, telemetry or cloud inference. Optional
   MCP servers can require API keys, passwords or OAuth; those network services
   are used only when explicitly configured and tested by the user.
@@ -323,3 +326,72 @@ verified by unit tests alone.
   certificate as the preceding AILinux-server Alpha releases so users may
   update in place without losing locally downloaded GGUF models. This is a
   release candidate for device QA, not an audited production security release.
+
+
+## MCP Agent Bridge – RC2 (TriForce-style tool orchestration)
+
+RC2 adds opt-in model-assisted tool proposals **without requiring a GGUF
+model to implement the MCP transport itself**. Spark-X2.6-4B supports
+function/tool-call formatting, but an on-device model's proposed action
+is not a verified action. Only an actual MCP server response counts.
+
+1. Under SETUP > MCP VERBINDUNGEN > + Server, choose the **AILinux TriForce**
+   preset for https://api.ailinux.me/v1/mcp or enter another compatible
+   HTTPS endpoint. For private operations, configure OAuth, a Bearer
+   token or other server-accepted authentication and test the connection.
+   The preset itself does NOT inject credentials or authorize privileged actions.
+2. Load a GGUF under MODELLE, then open CHAT > MCP > KI + MCP aktivieren.
+3. Select one MCP server and use the search box to find relevant tools
+   among up to 250 discovered entries. Mark up to **five** tools.
+   These are exposed to the model as a compact, dynamically composed
+   catalog; token/secret values are **never** included.
+4. Chat normally. If Spark proposes a matching function call using
+   Spark's <tool_call> syntax or the JSON fallback, the application
+   validates the tool name and argument types against the selected list.
+5. Each request displays a **one-time consent dialog** showing the exact
+   server URI, tool and all arguments. Only "Einmal ausführen" performs
+   tools/call through the stored encrypted credentials.
+6. A separate result receipt reports what the MCP server actually sent.
+   The local model may summarize a bounded, untrusted copy. Failed or
+   uncertain outcomes are **not** presented as completed tasks.
+
+No tool call is executed when the model only writes text, even if it
+asserts "I connected Discord." Its output then explicitly says "Nur
+Modellantwort – kein MCP-Aufruf ausgeführt." Invalid, extra or unknown
+tool arguments are rejected. Parallel, chained and silent tool calls
+are deliberately disabled in RC2. Error responses from side-effecting
+tool calls are **never automatically retried through another transport**.
+
+The top "OFFLINE" chip changes to "LOKAL + MCP" only while the
+user-enabled agent mode is active; LLM inference itself remains
+fully local. Enabled tools are a session-only selection. They do
+not persist as a durable "execute anything" permission after restarting.
+
+The native Android CPU backend still uses the conservative 2048-token
+context. The native decoder now reserves user-response space, shifts old
+KV history before (never in the middle of) a new prompt, preserves the
+system prompt and finalizes partial assistant history after Stop.
+Oversized MCP requests are rejected instead of being silently truncated.
+Keep selected tool schemas small; tool descriptions have
+length caps. A model may occasionally fail to produce parseable
+arguments; in that case use the manual MCP tool console. Tool-enabled
+chat has a short result-summary step; if that cannot fit into native
+context, the verified MCP receipt is still displayed.
+
+**Live TriForce probe:** On 2026-10-23, unauthenticated, read-only
+server/discover and tools/list requests to https://api.ailinux.me/v1/mcp
+returned MCP SSE JSON-RPC responses with HTTP 200 and 91 advertised tools.
+This does not mean all 91 tools are callable without a login/grant.
+
+**Discord Voice caveat:** A voice channel can only be joined if the
+configured MCP server actually exposes, authorizes and successfully
+executes a matching voice-connect tool. The Android app itself is
+not a persistent Discord voice client or full-duplex audio bridge.
+This RC verifies protocol and orchestration behavior with deterministic
+tests, not that a specific live Discord server was connected.
+
+Android historical process-exit reason 16 is officially
+ApplicationExitInfo.REASON_PACKAGE_UPDATED. RC2 now labels these
+events "App-Update (kein Crash)" and distinguishes historical SIGABRT
+tombstones from normal APK installations. Prior tombstones may still
+appear in Android's process history; they are not new RC2 crashes.

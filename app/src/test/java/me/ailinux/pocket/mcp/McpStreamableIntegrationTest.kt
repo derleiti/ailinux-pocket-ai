@@ -129,6 +129,34 @@ class McpStreamableIntegrationTest {
         assertEquals(401, error.code)
     }
 
+    @Test fun toolHttpErrorIsNotAutomaticallyReplayedViaLegacyTransport() {
+        val methods = mutableListOf<String>()
+        val fake = object : McpHttp() {
+            override fun call(
+                url: String, method: String, body: String?,
+                headers: Map<String, String>, contentType: String,
+                allowLocal: Boolean
+            ): McpHttpReply {
+                val rpcMethod = JSONObject(body!!).getString("method")
+                methods.add(rpcMethod)
+                if (rpcMethod == "server/discover") {
+                    return McpHttpReply(200, "application/json",
+                        JSONObject().put("jsonrpc", "2.0")
+                            .put("id", JSONObject(body).getInt("id"))
+                            .put("result", JSONObject()
+                                .put("supportedVersions", org.json.JSONArray().put("2026-07-28"))
+                                .put("capabilities", JSONObject().put("tools", JSONObject())))
+                            .toString(), null, null)
+                }
+                throw McpHttpFailure(404, null, "Result lost after server dispatch")
+            }
+        }
+        assertThrows(McpHttpFailure::class.java) {
+            McpClient(profile(), fake).callTool("some_action", JSONObject())
+        }
+        assertEquals(listOf("server/discover", "tools/call"), methods)
+    }
+
     @Test fun rejectsUnsafeOrDuplicateCustomHeaders() {
         val bad = JSONObject().put("properties", JSONObject()
             .put("x", JSONObject().put("type", "string").put("x-mcp-header", "Authorization")))

@@ -11,6 +11,8 @@ import android.net.Uri
 import android.content.Intent
 import me.ailinux.pocket.mcp.McpSettingsUi
 import me.ailinux.pocket.mcp.McpSecurity
+import me.ailinux.pocket.mcp.McpAgentBridge
+import me.ailinux.pocket.mcp.McpAgentUi
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
@@ -48,6 +50,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var store: ModelStore
     private lateinit var engine: InferenceEngine
     private lateinit var mcpUi: McpSettingsUi
+    private lateinit var mcpAgent: McpAgentUi
+    @Volatile private var mcpDispatchInFlight = false
     private val messages = mutableListOf<ChatMessage>()
     private val chatAdapter = ChatAdapter(messages)
     private var activeModel: File? = null
@@ -92,6 +96,13 @@ class MainActivity : AppCompatActivity() {
             findViewById(R.id.addMcpServerButton)) { result ->
             displayMcpToolResult(result)
         }
+        mcpAgent = McpAgentUi(this) { active ->
+            val chip = findViewById<TextView>(R.id.onlineChip)
+            val button = findViewById<MaterialButton>(R.id.chatMcpButton)
+            chip.text = if (active == null) "●  OFFLINE" else "●  LOKAL + MCP"
+            button.text = if (active == null) "MCP" else "MCP ✓"
+            chip.setTextColor(getColor(if (active == null) R.color.primary else R.color.secondary))
+        }
         handleMcpOAuthIntent(intent)
 
         messagesView.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
@@ -101,7 +112,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.navModels).setOnClickListener { showPage(1) }
         findViewById<TextView>(R.id.navSettings).setOnClickListener { showPage(2) }
         findViewById<MaterialButton>(R.id.chatMcpButton).setOnClickListener {
-            mcpUi.showToolsChooser()
+            mcpAgent.showMenu { mcpUi.showToolsChooser() }
         }
         findViewById<MaterialButton>(R.id.importButton).setOnClickListener {
             if (!transferBusy) modelPicker.launch(arrayOf("*/*"))
@@ -112,7 +123,13 @@ class MainActivity : AppCompatActivity() {
         cancelDownload.setOnClickListener { cancelTransfer.set(true) }
 
         sendButton.setOnClickListener {
-            if (generationJob?.isActive == true) generationJob?.cancel() else sendMessage()
+            if (generationJob?.isActive == true) {
+                if (mcpDispatchInFlight) {
+                    toast("Der MCP-Aufruf läuft bereits. Status nach Serverantwort prüfen.")
+                } else {
+                    generationJob?.cancel()
+                }
+            } else sendMessage()
         }
         messageInput.setOnEditorActionListener { _, action, _ ->
             if (action == EditorInfo.IME_ACTION_SEND) {
@@ -371,7 +388,13 @@ class MainActivity : AppCompatActivity() {
                     // incremental Jinja template prefixes.
                     engine.setThinkingMode(prefs.getBoolean(PREF_ENABLE_THINKING, false))
                     val instruction = prefs.getString("system_prompt", DEFAULT_SYSTEM_PROMPT).orEmpty()
-                    if (instruction.isNotBlank()) engine.setSystemPrompt(instruction)
+                    // A model cannot report successful external actions based on prose
+                    // alone. Actual proof comes exclusively from the MCP call receipt.
+                    val grounded = instruction.trim() + "\n" +
+                        "Ohne bestätigtes Werkzeugresultat darfst du NIEMALS behaupten, " +
+                        "Discord, Voice, Server oder andere externe Dienste verbunden, " +
+                        "verändert oder abgefragt zu haben."
+                    engine.setSystemPrompt(grounded)
                 }
                 activeModel = file
                 messages.clear()
@@ -401,6 +424,16 @@ class MainActivity : AppCompatActivity() {
         }
         val text = messageInput.text.toString().trim()
         if (text.isEmpty()) return
+        val agentSession = mcpAgent.current()
+        // Only a user-enabled session gets the catalog of explicitly selected
+        // MCP tools. Authentication tokens never enter an LLM prompt.
+        val request = try {
+            if (agentSession == null) text else McpAgentBridge.prompt(text, agentSession.tools)
+        } catch (problem: Exception) {
+            showError("MCP-Planung nicht möglich", problem)
+            return
+        }
+
         messageInput.setText("")
         val answer = ChatMessage(false, "")
         messages.add(ChatMessage(true, text))
@@ -412,15 +445,93 @@ class MainActivity : AppCompatActivity() {
         busy = true
         sendButton.text = "■"
         messageInput.isEnabled = false
-        setStatus("● GENERIERT …")
+        setStatus(if (agentSession == null) "● GENERIERT …" else "● MCP PLANT …")
         generationJob = lifecycleScope.launch {
             try {
+                val fullReply = StringBuilder()
                 withContext(Dispatchers.Default) {
-                    engine.sendUserPrompt(text, prefs.getInt("max_tokens", 512)).collect { token ->
-                        withContext(Dispatchers.Main) {
+                    engine.sendUserPrompt(request, prefs.getInt("max_tokens", 512)).collect { token ->
+                        if (agentSession != null) {
+                            // Withhold unverified model tool syntax from the chat.
+                            fullReply.append(token)
+                        } else withContext(Dispatchers.Main) {
                             answer.content += token
                             chatAdapter.notifyItemChanged(index)
                             messagesView.scrollToPosition(index)
+                        }
+                    }
+                }
+                if (agentSession != null) {
+                    when (val proposal = McpAgentBridge.parse(fullReply.toString(), agentSession.tools)) {
+                        is McpAgentBridge.Decision.Answer -> {
+                            // Label any unverified model assertions: no MCP action occurred.
+                            answer.content = "ⓘ Nur Modellantwort · kein MCP-Aufruf ausgeführt.\n\n" +
+                                proposal.text.ifBlank { "Keine Antwort erzeugt." }
+                            chatAdapter.notifyItemChanged(index)
+                        }
+                        is McpAgentBridge.Decision.Invalid -> {
+                            answer.content = "⚠️ Kein MCP-Aufruf ausgeführt: " + proposal.reason +
+                                "\nBitte die Anfrage präzisieren oder das Tool manuell wählen."
+                            chatAdapter.notifyItemChanged(index)
+                        }
+                        is McpAgentBridge.Decision.Proposed -> {
+                            answer.content = "🔎 Das Modell schlägt " + proposal.tool.name +
+                                " vor. Ausführung noch nicht bestätigt."
+                            chatAdapter.notifyItemChanged(index)
+                            setStatus("● MCP FREIGABE …")
+                            val approved = mcpAgent.requestApproval(agentSession, proposal)
+                            if (!approved) {
+                                answer.content = "⛔ MCP-Aufruf abgelehnt. Keine Aktion ausgeführt."
+                                chatAdapter.notifyItemChanged(index)
+                            } else {
+                                answer.content = "🔧 Aufruf bestätigt. Warte auf MCP-Server …"
+                                chatAdapter.notifyItemChanged(index)
+                                setStatus("● MCP TOOL …")
+                                mcpDispatchInFlight = true
+                                val toolResult = try {
+                                    mcpAgent.execute(agentSession, proposal)
+                                } catch (problem: Exception) {
+                                    answer.content = "⚠️ MCP-Aufruf fehlgeschlagen/Erfolg unbekannt: " +
+                                        (problem.message ?: "Netzwerkfehler").take(1000) +
+                                        "\nDer Server könnte den Auftrag bereits erhalten haben. Kein automatischer Retry."
+                                    chatAdapter.notifyItemChanged(index)
+                                    null
+                                } finally {
+                                    mcpDispatchInFlight = false
+                                }
+                                if (toolResult != null) {
+                                    answer.content = McpAgentBridge.receipt(proposal.tool, toolResult)
+                                    chatAdapter.notifyItemChanged(index)
+                                    // The model sees a bounded external DATA record, not an instruction
+                                    // from the server. The receipt itself remains visible separately.
+                                    val summary = StringBuilder()
+                                    setStatus("● MCP ERGEBNIS …")
+                                    try {
+                                        withContext(Dispatchers.Default) {
+                                            engine.sendUserPrompt(
+                                                McpAgentBridge.summaryPrompt(proposal.tool, toolResult),
+                                                160
+                                            ).collect { summary.append(it) }
+                                        }
+                                        val reply = McpAgentBridge.parse(summary.toString(), agentSession.tools)
+                                        val summarization = when (reply) {
+                                            is McpAgentBridge.Decision.Answer -> reply.text
+                                            else -> "Weiterer Toolaufruf blockiert. Siehe MCP-Serverergebnis."
+                                        }
+                                        messages.add(ChatMessage(false, summarization.ifBlank {
+                                            "Das MCP-Serverergebnis steht oben."
+                                        }))
+                                        chatAdapter.notifyItemInserted(messages.lastIndex)
+                                        messagesView.scrollToPosition(messages.lastIndex)
+                                    } catch (_: Exception) {
+                                        // Never hide the actual receipt if the second LLM
+                                        // turn cannot fit into the native context.
+                                        messages.add(ChatMessage(false,
+                                            "Das überprüfbare MCP-Serverergebnis steht oben."))
+                                        chatAdapter.notifyItemInserted(messages.lastIndex)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -693,6 +804,7 @@ class MainActivity : AppCompatActivity() {
                             ApplicationExitInfo.REASON_CRASH -> "Java/Kotlin Crash"
                             ApplicationExitInfo.REASON_ANR -> "App reagiert nicht (ANR)"
                             ApplicationExitInfo.REASON_SIGNALED -> "Signalbedingter Abbruch"
+                            ApplicationExitInfo.REASON_PACKAGE_UPDATED -> "App-Update (kein Crash)"
                             else -> "Android-Code " + exit.reason
                         }
                         val date = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.GERMANY)
@@ -729,7 +841,7 @@ class MainActivity : AppCompatActivity() {
                     if (entries.isEmpty()) {
                         "Android hat keine früheren Prozessabbrüche für Pocket AI erfasst."
                     } else {
-                        "NATIVE CRASH DIAGNOSE – keine automatische Übertragung\n\n" +
+                        "ANDROID-PROZESSDIAGNOSE – normale Updates sind keine Abstürze; keine Übertragung\n\n" +
                             entries.joinToString("\n\n---\n\n")
                     }
                 }

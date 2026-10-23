@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
@@ -101,6 +102,9 @@ internal class InferenceEngineImpl private constructor(
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
 
     private external fun generateNextToken(): String?
+
+    /** Idempotently close a native assistant turn if generation was stopped. */
+    private external fun finalizeGenerationNative()
 
     private external fun unload()
 
@@ -295,6 +299,8 @@ internal class InferenceEngineImpl private constructor(
                     if (utf8token.isNotEmpty()) emit(utf8token)
                 } ?: break
             }
+            // Idempotent after EOG/token budget, required after a stop flag.
+            finalizeGenerationNative()
             if (_cancelGeneration) {
                 Log.i(TAG, "Assistant generation aborted per requested.")
             } else {
@@ -303,7 +309,17 @@ internal class InferenceEngineImpl private constructor(
             _state.value = InferenceEngine.State.ModelReady
         } catch (e: CancellationException) {
             Log.i(TAG, "Assistant generation's flow collection cancelled.")
-            _state.value = InferenceEngine.State.ModelReady
+            // Do not leave a partially decoded assistant turn in the native KV
+            // cache when the user presses Stop. This runs on the same dispatcher.
+            withContext(NonCancellable + llamaDispatcher) {
+                try {
+                    finalizeGenerationNative()
+                    _state.value = InferenceEngine.State.ModelReady
+                } catch (error: Exception) {
+                    Log.e(TAG, "Native assistant finalization failed", error)
+                    _state.value = InferenceEngine.State.Error(error)
+                }
+            }
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error during generation!", e)

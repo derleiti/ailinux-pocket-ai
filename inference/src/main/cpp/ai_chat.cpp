@@ -35,6 +35,8 @@ constexpr int   N_THREADS_HEADROOM      = 2;
 // Conservative Android default: memory is shared with the system and other apps.
 constexpr int   DEFAULT_CONTEXT_SIZE    = 2048;
 constexpr int   OVERFLOW_HEADROOM       = 4;
+constexpr int   SYSTEM_PROMPT_RESERVE   = 512;  // Leave room for an actual chat turn
+constexpr int   USER_PREFILL_RESERVE    = 32;   // Leave room for first response logits
 constexpr int   BATCH_SIZE              = 128;
 constexpr float DEFAULT_SAMPLER_TEMP    = 0.3f;
 
@@ -424,21 +426,26 @@ static void reset_long_term_states(const bool clear_kv_cache = true) {
         llama_memory_clear(llama_get_memory(g_context), false);
 }
 
-/**
- * TODO-hyin: implement sliding-window version as a better alternative
- *
- * Context shifting by discarding the older half of the tokens appended after system prompt:
- * - take the [system_prompt_position] first tokens from the original prompt
- * - take half of the last (system_prompt_position - system_prompt_position) tokens
- * - recompute the logits in batches
- */
-static void shift_context() {
-    const int n_discard = (current_position - system_prompt_position) / 2;
-    LOGi("%s: Discarding %d tokens", __func__, n_discard);
-    llama_memory_seq_rm(llama_get_memory(g_context), 0, system_prompt_position, system_prompt_position + n_discard);
-    llama_memory_seq_add(llama_get_memory(g_context), 0, system_prompt_position + n_discard, current_position, -n_discard);
+/** Drop the oldest half of non-system decoded KV history, preserving the
+ * pinned system-prompt prefix. New prompts are shifted only before prefill. */
+static bool shift_context() {
+    // Preserve system prompt. When no non-system history can be discarded,
+    // fail with a recoverable native error instead of decoding past n_ctx.
+    const int non_system_tokens = current_position - system_prompt_position;
+    if (non_system_tokens < 32) {
+        LOGe("%s: No room to shift (position=%d, system=%d)", __func__,
+             current_position, system_prompt_position);
+        return false;
+    }
+    const int n_discard = non_system_tokens / 2;
+    LOGi("%s: Discarding %d previous tokens", __func__, n_discard);
+    llama_memory_seq_rm(llama_get_memory(g_context), 0,
+                        system_prompt_position, system_prompt_position + n_discard);
+    llama_memory_seq_add(llama_get_memory(g_context), 0,
+                         system_prompt_position + n_discard, current_position, -n_discard);
     current_position -= n_discard;
-    LOGi("%s: Context shifting done! Current position: %d", __func__, current_position);
+    LOGi("%s: Shifted context to position %d", __func__, current_position);
+    return true;
 }
 
 static std::string chat_render(const std::vector<common_chat_msg> &messages, bool generation_prefix) {
@@ -486,18 +493,30 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_setThinkingEnabledNative(
 
 /**
  * Completion loop's short-term states:
- * - stop generation position
+ * - per-response generation token limit (independent of KV positions)
  * - token chars caching
  * - current assistant message being generated
  */
-static llama_pos stop_generation_position;
+static int g_generated_tokens = 0;
+static int g_generation_token_limit = 0;
 static std::string cached_token_chars;
 static std::ostringstream assistant_ss;
+static bool g_pending_assistant = false;
+
+// Commit generated assistant text once, including partial Stop-button output.
+static void finalize_assistant_turn() {
+    if (!g_pending_assistant) return;
+    chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
+    g_pending_assistant = false;
+}
 
 static void reset_short_term_states() {
-    stop_generation_position = 0;
+    g_generated_tokens = 0;
+    g_generation_token_limit = 0;
     cached_token_chars.clear();
     assistant_ss.str("");
+    assistant_ss.clear();
+    g_pending_assistant = false;
 }
 
 static int decode_tokens_in_batches(
@@ -506,33 +525,36 @@ static int decode_tokens_in_batches(
         const llama_tokens &tokens,
         const llama_pos start_pos,
         const bool compute_last_logit = false) {
-    // Process tokens in batches using the global batch
-    LOGd("%s: Decode %d tokens starting at position %d", __func__, (int) tokens.size(), start_pos);
+    // Track actual KV position per processed batch. A context shift changes
+    // this position, so the old start_pos+i arithmetic was unsafe.
+    LOGd("%s: Decode %d tokens from position %d", __func__, (int) tokens.size(), start_pos);
+    if (start_pos != current_position) {
+        LOGe("%s: Native KV position mismatch", __func__);
+        return 1;
+    }
     for (int i = 0; i < (int) tokens.size(); i += BATCH_SIZE) {
         const int cur_batch_size = std::min((int) tokens.size() - i, BATCH_SIZE);
         batch.clear();
-        LOGv("%s: Preparing a batch size of %d starting at: %d", __func__, cur_batch_size, i);
 
-        // Shift context if current batch cannot fit into the context
-        if (start_pos + i + cur_batch_size >= g_effective_context_size - OVERFLOW_HEADROOM) {
-            LOGw("%s: Current batch won't fit into context! Shifting...", __func__);
-            shift_context();
+        // Context shifting is deliberately prohibited in the middle of
+        // decoding a NEW prompt. Otherwise the prompt's beginning (including
+        // selected MCP tool definitions) could be lost before sampling.
+        if (current_position + cur_batch_size >= g_effective_context_size - OVERFLOW_HEADROOM) {
+            LOGe("%s: Prompt batch exceeds reserved KV space", __func__);
+            return 1;
         }
 
-        // Add tokens to the batch with proper positions
         for (int j = 0; j < cur_batch_size; j++) {
             const llama_token token_id = tokens[i + j];
-            const llama_pos position = start_pos + i + j;
-            const bool want_logit = compute_last_logit && (i + j == tokens.size() - 1);
-            batch.add(token_id, position, 0, want_logit);
+            const bool want_logit = compute_last_logit && (i + j == (int) tokens.size() - 1);
+            batch.add(token_id, current_position + j, 0, want_logit);
         }
-
-        // Decode this batch
         const int decode_result = llama_process(context, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         if (decode_result) {
             LOGe("%s: llama_decode failed w/ %d", __func__, decode_result);
             return 1;
         }
+        current_position += cur_batch_size;
     }
     return 0;
 }
@@ -568,11 +590,13 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
         LOGv("token: `%s`\t -> `%d`", common_token_to_piece(g_context, id).c_str(), id);
     }
 
-    // Handle context overflow
-    const int max_batch_size = g_effective_context_size - OVERFLOW_HEADROOM;
-    if ((int) system_tokens.size() > max_batch_size) {
-        LOGe("%s: System prompt too long for context! %d tokens, max: %d",
-             __func__, (int) system_tokens.size(), max_batch_size);
+    // Reserve context for real user turns. Never discard system-prompt tokens.
+    const int max_system_tokens = g_effective_context_size -
+            OVERFLOW_HEADROOM - SYSTEM_PROMPT_RESERVE;
+    if ((int) system_tokens.size() >= max_system_tokens) {
+        set_native_error("system_prompt", "System-Prompt zu lang fuer lokalen Kontext");
+        LOGe("%s: System prompt uses %d tokens, max allowed: %d",
+             __func__, (int) system_tokens.size(), max_system_tokens);
         return 1;
     }
 
@@ -582,8 +606,8 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
         return 2;
     }
 
-    // Update position
-    system_prompt_position = current_position = (int) system_tokens.size();
+    // decode_tokens_in_batches advanced the real KV position.
+    system_prompt_position = current_position;
     return 0;
     } catch (const std::exception &e) {
         set_native_error("system_prompt", e.what());
@@ -604,7 +628,8 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
 ) {
     try {
     reset_load_diagnostics();
-    // Reset short-term states
+    // Complete any partial assistant left by a previously cancelled Flow.
+    finalize_assistant_turn();
     reset_short_term_states();
 
     // Obtain and tokenize user prompt
@@ -624,13 +649,25 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
         LOGv("token: `%s`\t -> `%d`", common_token_to_piece(g_context, id).c_str(), id);
     }
 
-    // Ensure user prompt doesn't exceed the context size by truncating if necessary.
+    // Do not accept a prompt that cannot fit in full after preserving the
+    // system tokens. The model must never act on a partially decoded command.
     const int user_prompt_size = (int) user_tokens.size();
-    const int max_batch_size = g_effective_context_size - OVERFLOW_HEADROOM;
-    if (user_prompt_size > max_batch_size) {
-        const int skipped_tokens = user_prompt_size - max_batch_size;
-        user_tokens.resize(max_batch_size);
-        LOGw("%s: User prompt too long! Skipped %d tokens!", __func__, skipped_tokens);
+    const int capacity = g_effective_context_size - OVERFLOW_HEADROOM;
+    const int max_prompt_tokens = capacity - system_prompt_position -
+            USER_PREFILL_RESERVE - 1;
+    if (user_prompt_size > max_prompt_tokens) {
+        set_native_error("user_prompt",
+                         "MCP-/Chat-Anfrage zu lang: weniger Tools waehlen oder Anfrage kuerzen");
+        return 1;
+    }
+    // Shift only completed PRIOR turns before decoding the entire new user
+    // prompt. This prevents stripping newly supplied tool argument schemas.
+    while (current_position + user_prompt_size + USER_PREFILL_RESERVE >= capacity) {
+        if (!shift_context()) {
+            set_native_error("user_prompt",
+                             "Zu wenig Kontext: Chat zuruecksetzen oder weniger MCP-Tools waehlen");
+            return 1;
+        }
     }
 
     // Decode user tokens in batches
@@ -639,9 +676,12 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
         return 2;
     }
 
-    // Update position
-    current_position += user_prompt_size;
-    stop_generation_position = current_position + n_predict;
+    // The prefill loop already advanced current_position (including shifts).
+    // Count output tokens separately; shifting the KV cache must not extend
+    // the generation budget or create a never-ending generation loop.
+    g_generated_tokens = 0;
+    g_generation_token_limit = std::max(1, (int) n_predict);
+    g_pending_assistant = true;
     return 0;
     } catch (const std::exception &e) {
         set_native_error("user_prompt", e.what());
@@ -649,6 +689,20 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
     } catch (...) {
         set_native_error("user_prompt", "Unknown native C++ exception");
         return 4;
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_finalizeGenerationNative(
+        JNIEnv *env, jobject /*unused*/) {
+    try {
+        finalize_assistant_turn();
+    } catch (const std::exception &e) {
+        throw_java_native_error(env, "finalize_generation", e.what());
+    } catch (...) {
+        throw_java_native_error(env, "finalize_generation",
+                                "Unknown native C++ exception");
     }
 }
 
@@ -693,16 +747,20 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
         jobject /*unused*/
 ) {
     try {
-    // Infinite text generation via context shifting
-    if (current_position >= g_effective_context_size - OVERFLOW_HEADROOM) {
-        LOGw("%s: Context full! Shifting...", __func__);
-        shift_context();
-    }
-
-    // Stop if reaching the marked position
-    if (current_position >= stop_generation_position) {
-        LOGw("%s: STOP: hitting stop position: %d", __func__, stop_generation_position);
+    // Generation length is token-count based, not an absolute KV position.
+    if (!g_pending_assistant) return nullptr;
+    // On a token-budget stop, finalize assistant history like on EOG.
+    if (g_generated_tokens >= g_generation_token_limit) {
+        LOGi("%s: Generation budget reached (%d tokens)", __func__, g_generated_tokens);
+        finalize_assistant_turn();
         return nullptr;
+    }
+    if (current_position >= g_effective_context_size - OVERFLOW_HEADROOM) {
+        LOGw("%s: Context full during generation; shifting...", __func__);
+        if (!shift_context()) {
+            finalize_assistant_turn();
+            return nullptr;
+        }
     }
 
     // Sample next token
@@ -717,13 +775,14 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
         return nullptr;
     }
 
-    // Update position
+    // Update KV and output-token positions independently.
     current_position++;
+    g_generated_tokens++;
 
     // Stop if next token is EOG
     if (llama_vocab_is_eog(llama_model_get_vocab(g_model), new_token_id)) {
         LOGd("id: %d,\tIS EOG!\nSTOP.", new_token_id);
-        chat_add_and_format(ROLE_ASSISTANT, assistant_ss.str());
+        finalize_assistant_turn();
         return nullptr;
     }
 

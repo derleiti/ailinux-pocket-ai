@@ -17,6 +17,33 @@ class McpSetupIntegrationTest {
         assertFalse(chat.contains("mcpServerList"))
     }
 
+    @Test fun triforcePresetUsesHttpsAndNoAutomaticCredentials() {
+        val settings = File("src/main/java/me/ailinux/pocket/mcp/McpSettingsUi.kt").readText()
+        assertTrue(settings.contains("addServerChooser()"))
+        assertTrue(settings.contains("https://api.ailinux.me/v1/mcp"))
+        assertTrue(settings.contains("auth = McpAuth.NONE"))
+        assertTrue(settings.contains("McpTransport.STREAMABLE_HTTP"))
+    }
+
+    @Test fun toolChooserSupportsFilteringWithoutApprovingAllTools() {
+        val chooser = File("src/main/java/me/ailinux/pocket/mcp/McpAgentUi.kt").readText()
+        assertTrue(chooser.contains("search.addTextChangedListener"))
+        assertTrue(chooser.contains("linkedSetOf<String>()"))
+        assertTrue(chooser.contains("McpAgentBridge.MAX_TOOLS"))
+        assertTrue(chooser.contains("requestApproval("))
+        assertTrue(chooser.contains("McpConnection.callTool("))
+    }
+
+    @Test fun nativeStopFinalizerRunsWithoutCancellableContext() {
+        val kotlin = File("../inference/src/main/java/com/arm/aichat/internal/InferenceEngineImpl.kt")
+            .readText()
+        val cpp = File("../inference/src/main/cpp/ai_chat.cpp").readText()
+        assertTrue(kotlin.contains("withContext(NonCancellable + llamaDispatcher)"))
+        assertTrue(kotlin.contains("finalizeGenerationNative()"))
+        assertTrue(cpp.contains("Java_com_arm_aichat_internal_InferenceEngineImpl_finalizeGenerationNative"))
+        assertTrue(cpp.contains("g_pending_assistant"))
+    }
+
     @Test fun androidOAuthCallbackExactlyMatchesConfiguredApplicationUri() {
         val manifest = File("src/main/AndroidManifest.xml").readText()
         assertEquals("me.ailinux.pocket://oauth/callback", McpSecurity.APP_REDIRECT)

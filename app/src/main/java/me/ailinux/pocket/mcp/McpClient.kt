@@ -40,7 +40,7 @@ class McpClient(
             params.put("_meta", JSONObject()
                 .put("io.modelcontextprotocol/protocolVersion", version)
                 .put("io.modelcontextprotocol/clientInfo", JSONObject()
-                    .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.1"))
+                    .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.2"))
                 .put("io.modelcontextprotocol/clientCapabilities", JSONObject()))
         }
         if (modern || rawParams != null) body.put("params", params)
@@ -106,7 +106,7 @@ class McpClient(
             .put("protocolVersion", version)
             .put("capabilities", JSONObject())
             .put("clientInfo", JSONObject()
-                .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.1")))
+                .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.2")))
         version = result.optString("protocolVersion", version)
         require(version in setOf("2025-11-25", "2025-06-18", "2025-03-26")) {
             "Nicht unterstützte alte MCP-Version: " + version
@@ -119,14 +119,10 @@ class McpClient(
         if (profile.transport == McpTransport.LEGACY_SSE) {
             return McpLegacySseClient(profile).use { it.open(); it.inspect() }
         }
-        if (profile.transport == McpTransport.AUTO) {
-            try {
-                return inspectModern()
-            } catch (error: McpHttpFailure) {
-                if (error.code !in setOf(400, 404, 405)) throw error
-                return McpLegacySseClient(profile).use { it.open(); it.inspect() }
-            }
-        }
+        // AUTO selects 2026/2025 Streamable HTTP for /mcp, whereas the
+        // external McpConnection dispatcher recognises conventional /sse.
+        // Do NOT downgrade on 400/404/405: a successful legacy inspection
+        // would otherwise advertise tools the execution transport cannot call.
         return inspectModern()
     }
 
@@ -163,14 +159,9 @@ class McpClient(
         if (profile.transport == McpTransport.LEGACY_SSE) {
             return McpLegacySseClient(profile).use { it.open(); it.callTool(name, params) }
         }
-        if (profile.transport == McpTransport.AUTO) {
-            try {
-                return callToolModern(name, params, schema)
-            } catch (error: McpHttpFailure) {
-                if (error.code !in setOf(400, 404, 405)) throw error
-                return McpLegacySseClient(profile).use { it.open(); it.callTool(name, params) }
-            }
-        }
+        // Never retry a side-effecting tools/call through a different transport.
+        // An HTTP error may happen AFTER the server performed the action.
+        // Legacy endpoints are selected by the explicit dispatcher McpConnection.
         return callToolModern(name, params, schema)
     }
 

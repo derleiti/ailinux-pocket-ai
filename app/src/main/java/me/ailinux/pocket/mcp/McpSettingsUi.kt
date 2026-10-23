@@ -41,8 +41,29 @@ class McpSettingsUi(
     private var working = false
 
     init {
-        add.setOnClickListener { edit(null) }
+        add.setOnClickListener { addServerChooser() }
         render()
+    }
+
+    private fun addServerChooser() {
+        AlertDialog.Builder(activity)
+            .setTitle("MCP-Server hinzufügen")
+            .setItems(arrayOf(
+                "AILinux TriForce · api.ailinux.me/v1/mcp",
+                "Anderen MCP-Server konfigurieren"
+            )) { _, index ->
+                if (index == 0) {
+                    // An endpoint preset, never automatic login or privileged tools.
+                    edit(McpProfile(
+                        title = "AILinux TriForce",
+                        endpoint = "https://api.ailinux.me/v1/mcp",
+                        transport = McpTransport.STREAMABLE_HTTP,
+                        auth = McpAuth.NONE
+                    ), adding = true)
+                } else edit(null)
+            }
+            .setNegativeButton("Abbrechen", null)
+            .show()
     }
 
     private fun dp(value: Int): Int =
@@ -141,7 +162,7 @@ class McpSettingsUi(
             .setPositiveButton("OK", null).show()
     }
 
-    private fun edit(existing: McpProfile?) {
+    private fun edit(existing: McpProfile?, adding: Boolean = false) {
         val base = existing ?: McpProfile()
         val form = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
@@ -228,7 +249,7 @@ class McpSettingsUi(
         visibility()
         val content = ScrollView(activity).apply { addView(form) }
         val dialog = AlertDialog.Builder(activity)
-            .setTitle(if (existing == null) "MCP-Server hinzufügen" else "MCP-Server bearbeiten")
+            .setTitle(if (existing == null || adding) "MCP-Server hinzufügen" else "MCP-Server bearbeiten")
             .setView(content)
             .setNegativeButton("Abbrechen", null)
             .setPositiveButton("Speichern", null)
