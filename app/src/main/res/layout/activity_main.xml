@@ -235,9 +235,10 @@
                     android:text="Gespräch zurücksetzen" android:textAllCaps="false"
                     android:textColor="@color/ink" app:backgroundTint="@color/surface_raised"
                     app:cornerRadius="14dp"/>
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                <TextView android:id="@+id/appVersion"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="40dp"
-                    android:text="AILinux Pocket AI  •  Alpha 0.1.0"
+                    android:text="AILinux Pocket AI"
                     android:textColor="@color/muted" android:textSize="12sp"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="9dp"

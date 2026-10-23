@@ -7,4 +7,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "AILinuxPocketAI"
 include(":app", ":inference")
-project(":inference").projectDir = file("third_party/llama.cpp/examples/llama.android/lib")
+project(":inference").projectDir = file("inference")

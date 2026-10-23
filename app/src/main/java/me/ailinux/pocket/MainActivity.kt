@@ -2,6 +2,9 @@ package me.ailinux.pocket
 
 import android.content.res.ColorStateList
 import android.os.Bundle
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.net.Uri
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -20,7 +23,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
-import com.arm.aichat.UnsupportedArchitectureException
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import kotlinx.coroutines.CancellationException
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : AppCompatActivity() {
@@ -70,6 +73,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        val installedVersion = packageManager.getPackageInfo(packageName, 0).versionName ?: "unbekannt"
+        findViewById<TextView>(R.id.appVersion).text = "AILinux Pocket AI  •  $installedVersion"
         store = ModelStore(this)
 
         messagesView.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
@@ -274,8 +279,13 @@ class MainActivity : AppCompatActivity() {
                     previousModelUnloaded = true
                     try {
                         engine.loadModel(file.absolutePath)
-                    } catch (error: UnsupportedArchitectureException) {
-                        throw IllegalStateException(inspection.loaderError(), error)
+                    } catch (error: IOException) {
+                        throw IOException(
+                            "Modell: " + file.name + "\n" +
+                            "Architektur: " + (inspection.architecture ?: "unbekannt") + "\n" +
+                            (error.message ?: "Natives Modellladen fehlgeschlagen."),
+                            error
+                        )
                     }
                     val instruction = prefs.getString("system_prompt", DEFAULT_SYSTEM_PROMPT).orEmpty()
                     if (instruction.isNotBlank()) engine.setSystemPrompt(instruction)
@@ -573,8 +583,16 @@ class MainActivity : AppCompatActivity() {
     private fun setStatus(value: String) { statusLabel.text = value }
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_SHORT).show()
     private fun showError(title: String, error: Throwable) {
+        val details = (error.message ?: error.javaClass.simpleName).take(5000)
         AlertDialog.Builder(this).setTitle(title)
-            .setMessage(error.message ?: error.javaClass.simpleName)
+            .setMessage(details)
+            .setNeutralButton("Diagnose kopieren") { _, _ ->
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val version = packageManager.getPackageInfo(packageName, 0).versionName
+                val report = "Pocket AI $version\n$title\n$details"
+                clipboard.setPrimaryClip(ClipData.newPlainText("Pocket AI Diagnose", report))
+                toast("Diagnose in Zwischenablage kopiert")
+            }
             .setPositiveButton("OK", null).show()
     }
     private fun dp(value: Int) = (resources.displayMetrics.density * value + 0.5f).toInt()

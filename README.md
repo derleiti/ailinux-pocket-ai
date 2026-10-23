@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 0.1.0-alpha.2** Debug APK builds; testing inference on the physical Pixel is still pending.
+**Status: 0.1.0-alpha.4** Debug APK builds; testing inference on the physical Pixel is still pending.
 
 ## Features
 
@@ -52,7 +52,8 @@ Repository browser supports public GitHub release GGUF assets and public Hugging
 ## Structure
 
 - app: Kotlin Material UI and model manager.
-- third_party/llama.cpp: pinned upstream submodule; official JNI module under examples/llama.android/lib.
+- third_party/llama.cpp: pinned upstream C/C++ model engine submodule.
+- inference: vendored MIT-licensed Android JNI bridge with native diagnostics forwarding; upstream submodule is untouched.
 - scripts/verify-apk.sh: archive and signature checks.
 - .github/workflows/android.yml: CI tests and debug artifact.
 
@@ -85,3 +86,13 @@ transfer progress. Interrupted downloads are still resumable through HTTP Range.
 the Activity lifecycle, so Android can interrupt a download when the process
 is killed. Reopen the app and use Fortsetzen; a foreground download service
 is still planned. For large GGUFs, keep Pocket AI active while transferring.
+
+
+## Native load diagnostics (Alpha 4)
+
+The original upstream Android JNI bridge converted every failed native model load
+(return code 1) into UnsupportedArchitectureException, regardless of why the load failed.
+The vendored MIT-licensed JNI wrapper in inference/ now captures bounded native llama.cpp
+warnings/errors and displays them in the error dialog. Tap Diagnose kopieren to copy
+the detail for a reproducible bug report. The settings page shows the actual installed
+version. This improves observability, not universal GGUF compatibility.
