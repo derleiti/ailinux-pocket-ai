@@ -9,8 +9,8 @@ android {
         applicationId = "me.ailinux.pocket"
         minSdk = 33
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.0.0-rc.3"
+        versionCode = 14
+        versionName = "1.0.0-rc.4"
         ndk { abiFilters += "arm64-v8a" }
     }
     buildTypes {

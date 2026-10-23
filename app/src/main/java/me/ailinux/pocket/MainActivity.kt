@@ -2,6 +2,7 @@ package me.ailinux.pocket
 
 import android.content.res.ColorStateList
 import android.os.Bundle
+import android.os.SystemClock
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -15,6 +16,7 @@ import me.ailinux.pocket.mcp.McpAgentBridge
 import me.ailinux.pocket.mcp.McpAgentUi
 import me.ailinux.pocket.mcp.McpAgentSession
 import me.ailinux.pocket.mcp.McpToolCatalog
+import me.ailinux.pocket.mcp.McpHealthCheck
 import me.ailinux.pocket.mcp.McpVault
 import me.ailinux.pocket.mcp.McpProfile
 import me.ailinux.pocket.mcp.McpAuth
@@ -118,7 +120,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.navSettings).setOnClickListener { showPage(2) }
         findViewById<MaterialButton>(R.id.chatMcpButton).setOnClickListener {
             if (busy) toast("MCP-Modus erst nach der aktuellen Aktion wechseln.")
-            else mcpAgent.showMenu { mcpUi.showToolsChooser() }
+            else mcpAgent.showMenu(
+                openManualTools = { mcpUi.showToolsChooser() },
+                openHealthCheck = { showLiveMcpHealth("/mcp health", "") }
+            )
         }
         findViewById<MaterialButton>(R.id.importButton).setOnClickListener {
             if (!transferBusy) modelPicker.launch(arrayOf("*/*"))
@@ -510,6 +515,83 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * A protocol health request is not a modelling problem: directly probe
+     * the selected MCP endpoint and return a bounded, evidence-backed receipt.
+     */
+    private fun showLiveMcpHealth(question: String, target: String) {
+        val profiles = try {
+            McpVault(applicationContext).list()
+        } catch (problem: Exception) {
+            showError("MCP-Tresor konnte nicht gelesen werden", problem)
+            return
+        }
+        val candidates = profiles.filter { McpHealthCheck.relevantProfile(it, target) }
+        if (candidates.isEmpty()) {
+            messageInput.setText("")
+            appendReadOnlyChat(question, McpHealthCheck.missingProfile(target))
+            return
+        }
+        val activeId = mcpAgent.current()?.profileId
+        val preferred = candidates.firstOrNull { it.id == activeId }
+        if (preferred != null || candidates.size == 1) {
+            runMcpHealth(question, preferred ?: candidates.single())
+        } else {
+            AlertDialog.Builder(this)
+                .setTitle("MCP-Health-Check: Server auswählen")
+                .setItems(candidates.map { it.title + " · " + it.endpoint }.toTypedArray()) { _, index ->
+                    runMcpHealth(question, candidates[index])
+                }
+                .setNegativeButton("Abbrechen", null).show()
+        }
+    }
+
+    private fun runMcpHealth(question: String, profile: McpProfile) {
+        if (busy) { toast("Pocket AI arbeitet bereits."); return }
+        messageInput.setText("")
+        messages.add(ChatMessage(true, question))
+        messages.add(ChatMessage(false,
+            "🔎 Prüfe MCP-Verbindung und tools/list am echten Server …"))
+        val index = messages.lastIndex
+        chatAdapter.notifyItemRangeInserted(index - 1, 2)
+        findViewById<View>(R.id.emptyState).visibility = View.GONE
+        showPage(0)
+        messagesView.scrollToPosition(index)
+        busy = true
+        renderChatState()
+        setStatus("● MCP HEALTH-CHECK …")
+        lifecycleScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    val vault = McpVault(applicationContext)
+                    val fresh = vault.get(profile.id)
+                        ?: throw IllegalStateException("MCP-Profil wurde entfernt")
+                    if (fresh.auth == McpAuth.OAUTH &&
+                        fresh.oauthAccessToken.isBlank() &&
+                        fresh.oauthRefreshToken.isBlank()) {
+                        McpHealthCheck.loginRequired(fresh)
+                    } else {
+                        val authorized = McpOAuth(vault).refreshIfNeeded(fresh)
+                        val started = SystemClock.elapsedRealtime()
+                        val server = McpConnection.inspect(authorized)
+                        val duration = SystemClock.elapsedRealtime() - started
+                        McpHealthCheck.success(authorized, server, duration)
+                    }
+                }
+                messages[index].content = result
+                setStatus("● MCP PRÜFUNG BEENDET")
+            } catch (problem: Exception) {
+                messages[index].content = McpHealthCheck.failure(profile, problem)
+                setStatus("● MCP NICHT BESTÄTIGT")
+            } finally {
+                chatAdapter.notifyItemChanged(index)
+                messagesView.scrollToPosition(index)
+                busy = false
+                renderChatState()
+            }
+        }
+    }
+
     /** A tool inventory is a real authenticated tools/list call, never LLM prose. */
     private fun showLiveMcpCatalog(question: String, filter: String) {
         val profiles = try {
@@ -602,6 +684,10 @@ class MainActivity : AppCompatActivity() {
         if (busy) { toast("Pocket AI ist beschäftigt."); return }
         val text = messageInput.text.toString().trim()
         if (text.isEmpty()) return
+        McpHealthCheck.requestedTarget(text)?.let {
+            showLiveMcpHealth(text, it)
+            return
+        }
         McpToolCatalog.requestedFilter(text)?.let {
             showLiveMcpCatalog(text, it)
             return
@@ -647,12 +733,21 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+                if (agentSession == null && McpHealthCheck.modelOnlyClaim(answer.content)) {
+                    answer.content = McpHealthCheck.unverifiedModelClaim()
+                    chatAdapter.notifyItemChanged(index)
+                }
                 if (agentSession != null) {
                     when (val proposal = McpAgentBridge.parse(fullReply.toString(), agentSession.tools)) {
                         is McpAgentBridge.Decision.Answer -> {
-                            // Label any unverified model assertions: no MCP action occurred.
-                            answer.content = "ⓘ Nur Modellantwort · kein MCP-Aufruf ausgeführt.\n\n" +
-                                proposal.text.ifBlank { "Keine Antwort erzeugt." }
+                            // Explicitly refuse to present an unsupported health
+                            // check or claimed external change as a successful action.
+                            answer.content = if (McpHealthCheck.modelOnlyClaim(proposal.text)) {
+                                McpHealthCheck.unverifiedModelClaim()
+                            } else {
+                                "ⓘ Nur Modellantwort · kein MCP-Aufruf ausgeführt.\n\n" +
+                                    proposal.text.ifBlank { "Keine Antwort erzeugt." }
+                            }
                             chatAdapter.notifyItemChanged(index)
                         }
                         is McpAgentBridge.Decision.Invalid -> {

@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 1.0.0-rc.3.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.4.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -449,3 +449,45 @@ Correct template injection is necessary, but a small local 4B model may
 still occasionally choose no tool or produce malformed arguments.
 Specific Discord OAuth consent and actual Pixel/device inference must
 be tested on the phone; a real tool result is required to claim success.
+
+
+## RC4 - Grounded MCP Health Checks (no fake model successes)
+
+RC3 correctly bound selected functions to Spark-X2.6's native GGUF Jinja
+template, and direct MCP tools/list worked on the Pixel. However, a real
+device test revealed that Spark could still claim it had checked MCP
+endpoints and account access, despite producing neither a function call
+nor a server receipt. This was a fabricated model assertion, not a
+successful health check. RC4 prevents that error:
+
+- CHAT > MCP > MCP Health-Check (echte Serverprüfung) provides a
+  model-independent, read-only live connection test. No GGUF required.
+- /mcp health, /mcp status, /mcp health discord, /mcp health triforce,
+  MCP-Health-Check and natural German requests such as "Prüfe die MCP
+  Verbindung" are routed directly to the configured MCP profile.
+  If several profiles exist, choose the server.
+- The Android UI refreshes OAuth credentials when configured, invokes
+  the real MCP handshake (server/discover on 2026 endpoints or
+  initialize on older servers), and calls tools/list.
+- A passing report includes the EXACT profile endpoint, responding
+  server name, MCP version, number of advertised tools and real request
+  duration. Failure, no profile, missing OAuth consent or HTTP 401/403
+  produce conspicuous non-success messages.
+- CRUCIAL DISTINCTION: server/discover + tools/list confirms reachability
+  for that configured profile. It does NOT prove that each individual
+  tools/call has permission, that a Discord guild is authorized, that a
+  voice channel is joined, or that other endpoints are working. Those
+  need separate explicitly approved tool calls.
+- A second truth gate suppresses strong unsupported model claims of
+  completed Discord/health/server checks when no MCP call actually
+  occurred. The chat instead offers /mcp health and explains that the
+  model's assertion was not a result. Plain offline questions still work.
+- Tests include the literal false Spark health-check response sent
+  during device evaluation. A proof-status report can only be created
+  from a successfully completed, authenticated live MCP inspection.
+
+Verification: Android JVM tests, Android Lint, original Spark GGUF
+Jinja host tests, APK signature continuity and the published release
+asset are checked during packaging. The real Pixel and OAuth permission
+scopes must still be validated after installation. The Android APK
+is a debug-signed device-QA prerelease and should update RC3 in place.

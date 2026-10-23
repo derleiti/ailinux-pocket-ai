@@ -44,10 +44,12 @@ class McpAgentUi(
      * be represented as having active tool access in the Android chat UI. */
     fun clearSessionSilently() { session = null }
 
-    fun showMenu(openManualTools: () -> Unit) {
+    fun showMenu(openManualTools: () -> Unit, openHealthCheck: () -> Unit) {
         val options = if (session != null)
-            arrayOf("KI + MCP neu verbinden", "MCP-Tools manuell", "KI + MCP ausschalten")
-        else arrayOf("KI + MCP aktivieren", "MCP-Tools manuell")
+            arrayOf("KI + MCP neu verbinden", "MCP-Tools manuell",
+                "MCP Health-Check (echte Serverprüfung)", "KI + MCP ausschalten")
+        else arrayOf("KI + MCP aktivieren", "MCP-Tools manuell",
+            "MCP Health-Check (echte Serverprüfung)")
         val name = session?.let { "\nAktiv: " + it.serverName + " · " + it.tools.size + " Tools" }
             ?: "\nDein Modell arbeitet aktuell ohne automatisches MCP-Planning."
         AlertDialog.Builder(activity)
@@ -57,7 +59,8 @@ class McpAgentUi(
                 when (index) {
                     0 -> chooseServer()
                     1 -> openManualTools()
-                    2 -> {
+                    2 -> openHealthCheck()
+                    3 -> {
                         session = null
                         onActiveChanged(null)
                         toast("KI + MCP ausgeschaltet")
