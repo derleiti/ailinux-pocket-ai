@@ -191,6 +191,14 @@ internal class InferenceEngineImpl private constructor(
                 _state.value = InferenceEngine.State.ModelReady
             } catch (e: Exception) {
                 Log.e(TAG, (e.message ?: "Error loading model") + "\n" + pathToModel, e)
+                // Release partially initialized native model/context, not just
+                // state. Otherwise repeated attempts accumulate mapped weights.
+                try {
+                    unload()
+                } catch (cleanupFailure: Exception) {
+                    Log.e(TAG, "Native cleanup after failed load also failed", cleanupFailure)
+                }
+                _readyForSystemPrompt = false
                 _state.value = InferenceEngine.State.Error(e)
                 throw e
             }
@@ -308,9 +316,11 @@ internal class InferenceEngineImpl private constructor(
                 }
 
                 is InferenceEngine.State.Error -> {
-                    Log.i(TAG, "Resetting error states...")
+                    Log.i(TAG, "Cleaning up after native inference error...")
+                    unload()
+                    _readyForSystemPrompt = false
                     _state.value = InferenceEngine.State.Initialized
-                    Log.i(TAG, "States reset!")
+                    Log.i(TAG, "Native resources released and state reset.")
                     Unit
                 }
 

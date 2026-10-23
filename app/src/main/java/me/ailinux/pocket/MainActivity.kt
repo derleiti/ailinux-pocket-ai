@@ -5,6 +5,8 @@ import android.os.Bundle
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.net.Uri
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -33,6 +35,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : AppCompatActivity() {
@@ -121,6 +126,29 @@ class MainActivity : AppCompatActivity() {
                     messages.clear()
                     chatAdapter.notifyDataSetChanged()
                     findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
+                }
+            }
+        }
+        findViewById<MaterialButton>(R.id.crashDiagnosticsButton).setOnClickListener {
+            showProcessExitInfo()
+        }
+
+        // This preference is written synchronously before native load and only
+        // cleared on a normal outcome. It survives abrupt Android process kills.
+        val interruptedModel = prefs.getString(PREF_LOADING_MODEL, null)
+        if (interruptedModel != null) {
+            prefs.edit().remove(PREF_LOADING_MODEL).apply()
+            findViewById<View>(android.R.id.content).post {
+                if (!isFinishing && !isDestroyed) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Vorheriger Modell-Start abgebrochen")
+                        .setMessage("Android hat Pocket AI beim Laden von " +
+                            interruptedModel + " unerwartet beendet. " +
+                            "Prüfe unter Setup die Systemdiagnose. " +
+                            "Das Modell wurde nicht gelöscht.")
+                        .setNegativeButton("OK", null)
+                        .setPositiveButton("Systemdiagnose") { _, _ -> showProcessExitInfo() }
+                        .show()
                 }
             }
         }
@@ -256,10 +284,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun loadModel(file: File) {
+    private fun loadModel(file: File, acknowledgedLargeModel: Boolean = false) {
         if (busy) return
         if (!::engine.isInitialized) { toast("Engine initialisiert noch."); return }
+        val memory = ActivityManager.MemoryInfo().also {
+            (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
+        }
+        if (!acknowledgedLargeModel && ModelLoadSafety.requiresConfirmation(file.length(), memory.availMem)) {
+            AlertDialog.Builder(this)
+                .setTitle("Hoher RAM-Bedarf")
+                .setMessage(ModelLoadSafety.explain(file.length(), memory.availMem))
+                .setNegativeButton("Abbrechen", null)
+                .setPositiveButton("Trotzdem laden") { _, _ ->
+                    loadModel(file, acknowledgedLargeModel = true)
+                }.show()
+            return
+        }
         busy = true
+        setModelLoading(true, file.name)
         setStatus("Prüfe GGUF-Architektur …")
         lifecycleScope.launch {
             var previousModelUnloaded = false
@@ -267,6 +309,8 @@ class MainActivity : AppCompatActivity() {
                 val inspection = withContext(Dispatchers.IO) { ModelCompatibility.inspect(file) }
                 inspection.incompatibleReason?.let { throw IllegalArgumentException(it) }
                 setStatus("Lade " + (inspection.architecture ?: "GGUF") + " …")
+                // commit(), not apply(): we want the marker durable before JNI starts.
+                prefs.edit().putString(PREF_LOADING_MODEL, file.name).commit()
                 withContext(Dispatchers.IO) {
                     when (engine.state.value) {
                         is InferenceEngine.State.ModelReady,
@@ -307,6 +351,8 @@ class MainActivity : AppCompatActivity() {
                 setStatus(if (activeModel != null) "● BEREIT" else "Ladefehler")
                 showError("GGUF konnte nicht geladen werden", error)
             } finally {
+                prefs.edit().remove(PREF_LOADING_MODEL).apply()
+                setModelLoading(false)
                 busy = false
             }
         }
@@ -581,6 +627,47 @@ class MainActivity : AppCompatActivity() {
         }
 
     private fun setStatus(value: String) { statusLabel.text = value }
+
+    private fun setModelLoading(active: Boolean, modelName: String = "") {
+        findViewById<View>(R.id.modelLoadingPanel).visibility =
+            if (active) View.VISIBLE else View.GONE
+        if (active) {
+            findViewById<TextView>(R.id.modelLoadingLabel).text =
+                "Lade " + modelName + "\n" +
+                "Native CPU-Inferenz wird vorbereitet. Große Modelle können dauern."
+        }
+    }
+
+    private fun showProcessExitInfo() {
+        try {
+            val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val history = manager.getHistoricalProcessExitReasons(packageName, 0, 8)
+            val entries = history.take(5).map { exit ->
+                val reasonName = when (exit.reason) {
+                    ApplicationExitInfo.REASON_LOW_MEMORY -> "Speichermangel (Low Memory)"
+                    ApplicationExitInfo.REASON_CRASH_NATIVE -> "Native Crash (C++/JNI)"
+                    ApplicationExitInfo.REASON_CRASH -> "Java/Kotlin Crash"
+                    ApplicationExitInfo.REASON_ANR -> "App reagiert nicht (ANR)"
+                    ApplicationExitInfo.REASON_SIGNALED -> "Signalbedingter Abbruch"
+                    else -> "Android-Code " + exit.reason
+                }
+                val date = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.GERMANY)
+                    .format(Date(exit.timestamp))
+                date + " • " + reasonName + " (Status " + exit.status + ")" +
+                    "\nRSS: " + exit.rss + " kB, PSS: " + exit.pss + " kB" +
+                    "\n" + (exit.description ?: "").take(220)
+            }
+            val report = if (entries.isEmpty()) {
+                "Android hat keine früheren Prozessabbrüche für Pocket AI erfasst."
+            } else {
+                entries.joinToString("\n\n")
+            }
+            showError("Android-Prozessdiagnose", IllegalStateException(report))
+        } catch (error: Exception) {
+            showError("Systemdiagnose konnte nicht gelesen werden", error)
+        }
+    }
+
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_SHORT).show()
     private fun showError(title: String, error: Throwable) {
         val details = (error.message ?: error.javaClass.simpleName).take(5000)
@@ -603,6 +690,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val PREF_LOADING_MODEL = "pocket_loading_model"
         private const val DEFAULT_SYSTEM_PROMPT =
             "Du bist Pocket AI, ein hilfreicher, direkter, datenschutzfreundlicher Offline-Assistent. Antworte in der Sprache des Benutzers."
     }

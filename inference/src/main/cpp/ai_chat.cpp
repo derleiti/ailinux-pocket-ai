@@ -30,9 +30,10 @@ constexpr int   N_THREADS_MIN           = 2;
 constexpr int   N_THREADS_MAX           = 4;
 constexpr int   N_THREADS_HEADROOM      = 2;
 
-constexpr int   DEFAULT_CONTEXT_SIZE    = 8192;
+// Conservative Android default: memory is shared with the system and other apps.
+constexpr int   DEFAULT_CONTEXT_SIZE    = 2048;
 constexpr int   OVERFLOW_HEADROOM       = 4;
-constexpr int   BATCH_SIZE              = 512;
+constexpr int   BATCH_SIZE              = 128;
 constexpr float DEFAULT_SAMPLER_TEMP    = 0.3f;
 
 static llama_model                      * g_model;
@@ -40,6 +41,7 @@ static llama_context                    * g_context;
 static common_batch                       g_batch;
 static common_chat_templates_ptr          g_chat_templates;
 static common_sampler                   * g_sampler;
+static int g_effective_context_size = DEFAULT_CONTEXT_SIZE;
 
 // Record a bounded copy of llama.cpp native ERROR/WARN messages so Android UI
 // can report why a model load failed without privileged logcat access.
@@ -98,18 +100,18 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unu
     const std::string backend_dir(raw_dir);
     env->ReleaseStringUTFChars(nativeLibDir, raw_dir);
 
-    LOGi("Discovering GGML CPU backends in %s", backend_dir.c_str());
-    ggml_backend_load_all_from_path(backend_dir.c_str());
-
-    // Safe armv8.0 baseline fallback if the CPU-variant score lookup fails.
+    LOGi("Initializing safe Android ARMv8.0 CPU backend from %s", backend_dir.c_str());
+    // Start with the most compatible CPU backend. This is intentionally slower
+    // than a v9 variant; we need a reliable baseline before enabling optimizations.
+    const std::string baseline = backend_dir + "/libggml-cpu-android_armv8.0_1.so";
+    if (access(baseline.c_str(), R_OK) == 0) {
+        ggml_backend_load(baseline.c_str());
+    } else {
+        LOGe("Baseline ARM64 CPU backend missing: %s", baseline.c_str());
+    }
     if (!ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU)) {
-        const std::string baseline = backend_dir + "/libggml-cpu-android_armv8.0_1.so";
-        if (access(baseline.c_str(), R_OK) == 0) {
-            LOGw("Automatic CPU selection failed; trying %s", baseline.c_str());
-            ggml_backend_load(baseline.c_str());
-        } else {
-            LOGe("CPU backend file not accessible: %s (check extractNativeLibs)", baseline.c_str());
-        }
+        LOGw("Baseline backend unavailable; trying automatic backend discovery");
+        ggml_backend_load_all_from_path(backend_dir.c_str());
     }
 
     const auto registered = ggml_backend_reg_count();
@@ -129,6 +131,11 @@ extern "C"
 JNIEXPORT jint JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {
     llama_model_params model_params = llama_model_default_params();
+    // Low-RAM Android profile: memory-map weights; avoid additional CPU weight
+    // repacking allocations and any unintended GPU offload.
+    model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
+    model_params.use_extra_bufts = false;
+    model_params.n_gpu_layers = 0;
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
     LOGd("%s: Loading model from: \n%s\n", __func__, model_path);
@@ -165,7 +172,9 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
         LOGw("%s: Model was trained with only %d context size! Enforcing %d context size...",
              __func__, trained_context_size, n_ctx);
     }
-    ctx_params.n_ctx = n_ctx;
+    const int effective_ctx = (trained_context_size > 0)
+        ? std::min(n_ctx, trained_context_size) : n_ctx;
+    ctx_params.n_ctx = std::max(256, effective_ctx);
     ctx_params.n_batch = BATCH_SIZE;
     ctx_params.n_ubatch = BATCH_SIZE;
     ctx_params.n_threads = n_threads;
@@ -192,6 +201,9 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobje
     g_capture_load_log.store(false, std::memory_order_release);
     if (!context) { return 1; }
     g_context = context;
+    g_effective_context_size = static_cast<int>(llama_n_ctx(context));
+    LOGi("Android safe inference: context=%d, batch=%d, max_threads=%d",
+         g_effective_context_size, BATCH_SIZE, N_THREADS_MAX);
     g_batch = common_batch(context);
     g_chat_templates = common_chat_templates_init(g_model, "");
     g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
@@ -341,7 +353,7 @@ static void reset_long_term_states(const bool clear_kv_cache = true) {
     system_prompt_position = 0;
     current_position = 0;
 
-    if (clear_kv_cache)
+    if (clear_kv_cache && g_context)
         llama_memory_clear(llama_get_memory(g_context), false);
 }
 
@@ -403,7 +415,7 @@ static int decode_tokens_in_batches(
         LOGv("%s: Preparing a batch size of %d starting at: %d", __func__, cur_batch_size, i);
 
         // Shift context if current batch cannot fit into the context
-        if (start_pos + i + cur_batch_size >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+        if (start_pos + i + cur_batch_size >= g_effective_context_size - OVERFLOW_HEADROOM) {
             LOGw("%s: Current batch won't fit into context! Shifting...", __func__);
             shift_context();
         }
@@ -457,7 +469,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
     }
 
     // Handle context overflow
-    const int max_batch_size = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM;
+    const int max_batch_size = g_effective_context_size - OVERFLOW_HEADROOM;
     if ((int) system_tokens.size() > max_batch_size) {
         LOGe("%s: System prompt too long for context! %d tokens, max: %d",
              __func__, (int) system_tokens.size(), max_batch_size);
@@ -506,7 +518,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
 
     // Ensure user prompt doesn't exceed the context size by truncating if necessary.
     const int user_prompt_size = (int) user_tokens.size();
-    const int max_batch_size = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM;
+    const int max_batch_size = g_effective_context_size - OVERFLOW_HEADROOM;
     if (user_prompt_size > max_batch_size) {
         const int skipped_tokens = user_prompt_size - max_batch_size;
         user_tokens.resize(max_batch_size);
@@ -566,7 +578,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_generateNextToken(
         jobject /*unused*/
 ) {
     // Infinite text generation via context shifting
-    if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+    if (current_position >= g_effective_context_size - OVERFLOW_HEADROOM) {
         LOGw("%s: Context full! Shifting...", __func__);
         shift_context();
     }
@@ -626,12 +638,24 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_unload(JNIEnv * /*unused*/, job
     reset_long_term_states();
     reset_short_term_states();
 
-    // Free up resources
-    common_sampler_free(g_sampler);
+    // This must be safe even after a partially failed model/context allocation.
+    // The original bridge only cleaned up a fully ready model and leaked memory
+    // when context preparation failed.
+    if (g_sampler) {
+        common_sampler_free(g_sampler);
+        g_sampler = nullptr;
+    }
     g_chat_templates.reset();
     g_batch = common_batch();
-    llama_free(g_context);
-    llama_model_free(g_model);
+    if (g_context) {
+        llama_free(g_context);
+        g_context = nullptr;
+    }
+    if (g_model) {
+        llama_model_free(g_model);
+        g_model = nullptr;
+    }
+    g_effective_context_size = DEFAULT_CONTEXT_SIZE;
 }
 
 extern "C"

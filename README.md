@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 0.1.0-alpha.5** Debug APK builds; testing inference on the physical Pixel is still pending.
+**Status: 0.1.0-alpha.6** Debug APK builds; testing inference on the physical Pixel is still pending.
 
 ## Features
 
@@ -111,3 +111,28 @@ tries the ARMv8.0 baseline backend if the automatic variant score fails, and
 reports actionable errors if backend initialization still fails. APK verification
 now asserts physical native extraction is enabled and an ARM CPU backend exists
 in the archive. The app upgrade does not delete private model files.
+
+
+## Low-memory safe mode and crash reports (Alpha 6)
+
+The Android JNI wrapper previously reserved a fixed 8192-token context and
+512-token microbatch, and did not release partially loaded resources on errors.
+The safe profile uses a 2048-token default context and 128-token microbatch,
+with explicit memory-mapping and without extra CPU repack buffers. It initializes
+a conservative ARMv8 CPU backend before trying optimized variants. It now fully
+releases native model/context/sampler resources even after failed loads or
+context initialization errors.
+
+Before attempting a multi-GB model, the app shows the available-RAM estimate
+and a warning that Android may kill the process during allocation. Users can
+choose to attempt anyway. The native load progress indicator is indeterminate:
+loading depends on I/O, memory pressure, and architecture and cannot be
+meaningfully represented as a percentage without detailed callbacks.
+
+Android's ActivityManager historical process exit reasons can be inspected
+under SETUP -> Letzte App-Abstürze prüfen and copied from the dialog. This
+shows native crashes, ANRs or low-memory kills when Android has recorded
+them. If the app process dies while loading a model, the next startup
+shows a recovery notice using a persisted load-attempt marker. Stored GGUF
+files are preserved on upgrades. There is no automatic crash telemetry or
+upload of logs.
