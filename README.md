@@ -73,3 +73,15 @@ https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5
 Note: CI debug builds use their own temporary Android signing certificates and
 are **not** update-compatible with releases signed on the AILinux build server.
 Release APKs are debug-signed for alpha tests only.
+
+## Transfer UI (Alpha 3)
+
+Active `.gguf.part` files are labelled **Läuft gerade**, not **Unterbrochen**.
+The active model name and live downloaded bytes/percentage remain visible.
+Repository searches cannot hide the download cancel button or overwrite active
+transfer progress. Interrupted downloads are still resumable through HTTP Range.
+
+**Android background downloads:** The current alpha executes transfers inside
+the Activity lifecycle, so Android can interrupt a download when the process
+is killed. Reopen the app and use Fortsetzen; a foreground download service
+is still planned. For large GGUFs, keep Pocket AI active while transferring.

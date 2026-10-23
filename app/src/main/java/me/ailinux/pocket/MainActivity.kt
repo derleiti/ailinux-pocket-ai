@@ -41,6 +41,8 @@ class MainActivity : AppCompatActivity() {
     private var generationJob: Job? = null
     private var busy = false
     private var transferBusy = false
+    private var activeTransferName: String? = null
+    private var activePartialLabel: TextView? = null
     private var cancelTransfer = AtomicBoolean(false)
     private var currentPage = 0
     private val prefs by lazy { getSharedPreferences("pocket_settings", MODE_PRIVATE) }
@@ -150,6 +152,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshLibrary() {
+        activePartialLabel = null
         modelsContainer.removeAllViews()
         val files = store.list()
         findViewById<TextView>(R.id.storageLabel).text =
@@ -213,26 +216,37 @@ class MainActivity : AppCompatActivity() {
                 setPadding(dp(12), dp(12), dp(12), dp(12))
                 setBackgroundResource(R.drawable.bg_panel)
             }
-            line.addView(simpleLabel("↓ Unterbrochen: " + name + " (" +
-                ModelStore.displaySize(part.length()) + ")"))
-            if (source != null) {
-                val resume = smallButton("Fortsetzen", false)
-                resume.setOnClickListener {
-                    startDownload(RemoteModel(
-                        name, source, -1, prefs.getString("pending_sha_" + name, null)
-                    ))
+            val runningNow = DownloadPresentation.isActivePartial(
+                part.name, activeTransferName, transferBusy
+            )
+            val partialLabel = simpleLabel(DownloadPresentation.partialStatus(
+                name, part.length(), runningNow
+            ))
+            line.addView(partialLabel)
+            if (runningNow) {
+                activePartialLabel = partialLabel
+            } else {
+                if (source != null) {
+                    val resume = smallButton("Fortsetzen", false)
+                    resume.isEnabled = !transferBusy
+                    resume.setOnClickListener {
+                        startDownload(RemoteModel(
+                            name, source, -1, prefs.getString("pending_sha_" + name, null)
+                        ))
+                    }
+                    line.addView(resume)
                 }
-                line.addView(resume)
-            }
-            val remove = smallButton("Teil-Download verwerfen", false)
-            remove.setOnClickListener {
-                if (!transferBusy) {
-                    store.delete(part)
-                    prefs.edit().remove("pending_url_" + name).remove("pending_sha_" + name).apply()
-                    refreshLibrary()
+                val remove = smallButton("Teil-Download verwerfen", false)
+                remove.isEnabled = !transferBusy
+                remove.setOnClickListener {
+                    if (!transferBusy) {
+                        store.delete(part)
+                        prefs.edit().remove("pending_url_" + name).remove("pending_sha_" + name).apply()
+                        refreshLibrary()
+                    }
                 }
+                line.addView(remove)
             }
-            line.addView(remove)
             modelsContainer.addView(line)
         }
     }
@@ -332,10 +346,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun importModel(uri: Uri) {
-        if (transferBusy) return
+        if (transferBusy) { toast("Ein Transfer läuft bereits."); return }
         transferBusy = true
+        activeTransferName = store.sourceName(uri)
         cancelTransfer = AtomicBoolean(false)
-        setDownloadUi("Importiere GGUF …", true)
+        setDownloadUi("Importiere " + activeTransferName, true)
         lifecycleScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
@@ -349,6 +364,8 @@ class MainActivity : AppCompatActivity() {
                 showError("Import fehlgeschlagen", error)
             } finally {
                 transferBusy = false
+                activeTransferName = null
+                activePartialLabel = null
             }
         }
     }
@@ -362,6 +379,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         transferBusy = true
+        activeTransferName = model.name
         cancelTransfer = AtomicBoolean(false)
         prefs.edit().putString("pending_url_" + model.name, model.url)
             .putString("pending_sha_" + model.name, model.sha256).apply()
@@ -390,12 +408,15 @@ class MainActivity : AppCompatActivity() {
                 if (error !is TransferCancelled) showError("Download fehlgeschlagen", error)
             } finally {
                 transferBusy = false
+                activeTransferName = null
+                activePartialLabel = null
                 refreshLibrary()
             }
         }
     }
 
     private fun browseRepository() {
+        if (transferBusy) { toast("Ein Download läuft. Bitte erst abschließen oder abbrechen."); return }
         val field = EditText(this).apply {
             hint = "github.com/owner/repo oder huggingface.co/owner/repo"
             setSingleLine(true)
@@ -410,14 +431,14 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Suchen") { _, _ ->
                 val text = field.text.toString().trim()
                 lifecycleScope.launch {
-                    setDownloadUi("Suche Modelle …", false)
+                    catalogStatus("Suche Modelle …")
                     try {
                         val ref = SourceCatalog.parseRepository(text)
                         val found = withContext(Dispatchers.IO) { SourceCatalog.list(ref) }
                         prefs.edit().putString("recent_repo", text).apply()
                         if (found.isEmpty()) {
                             toast("Keine GGUF-Dateien gefunden.")
-                            setDownloadUi("Keine GGUF-Dateien gefunden", false)
+                            catalogStatus("Keine GGUF-Dateien gefunden")
                         } else {
                             val visible = found.take(100)
                             val options = visible.map {
@@ -425,7 +446,7 @@ class MainActivity : AppCompatActivity() {
                                     (if (it.bytes > 0) ModelStore.displaySize(it.bytes) else "Größe unbekannt") +
                                     " · " + it.source
                             }.toTypedArray()
-                            setDownloadUi(found.size.toString() + " GGUF-Dateien gefunden", false)
+                            catalogStatus(found.size.toString() + " GGUF-Dateien gefunden")
                             AlertDialog.Builder(this@MainActivity)
                                 .setTitle("Modell auswählen")
                                 .setItems(options) { _, index -> confirmDownload(visible[index]) }
@@ -440,6 +461,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun quickStart() {
+        if (transferBusy) { toast("Ein Download läuft. Bitte erst abschließen oder abbrechen."); return }
         data class Starter(val title: String, val repo: String, val filename: String)
         val models = listOf(
             Starter("SmolLM2 · 360M · 258 MB", "bartowski/SmolLM2-360M-Instruct-GGUF", "SmolLM2-360M-Instruct-Q4_K_M.gguf"),
@@ -452,7 +474,7 @@ class MainActivity : AppCompatActivity() {
             .setMessage("Öffentliche GGUFs im Format Q4_K_M. Die echten Dateien werden vor dem Download beim Anbieter abgefragt.")
             .setItems(models.map { it.title }.toTypedArray()) { _, index ->
                 val starter = models[index]
-                setDownloadUi("Prüfe " + starter.title + " …", false)
+                catalogStatus("Prüfe " + starter.title + " …")
                 lifecycleScope.launch {
                     try {
                         val found = withContext(Dispatchers.IO) {
@@ -460,7 +482,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         val model = found.firstOrNull { it.name.equals(starter.filename, true) }
                             ?: error("Ausgewähltes Modell nicht mehr verfügbar.")
-                        setDownloadUi("Bereit zum Download: " + model.name, false)
+                        catalogStatus("Bereit zum Download: " + model.name)
                         confirmDownload(model)
                     } catch (error: Exception) {
                         showError("Modell konnte nicht gefunden werden", error)
@@ -470,6 +492,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun promptDirectUrl() {
+        if (transferBusy) { toast("Ein Download läuft. Bitte erst abschließen oder abbrechen."); return }
         val field = EditText(this).apply {
             hint = "https://.../model.Q4_K_M.gguf"
             setSingleLine(false)
@@ -487,6 +510,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun confirmDownload(model: RemoteModel) {
+        if (transferBusy) { toast("Ein Transfer läuft bereits."); return }
         AlertDialog.Builder(this)
             .setTitle("Modell herunterladen?")
             .setMessage(model.name + "\n" +
@@ -495,6 +519,11 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Abbrechen", null)
             .setPositiveButton("Download starten") { _, _ -> startDownload(model) }
             .show()
+    }
+
+    // Catalog queries must not remove the ongoing download's progress/cancel controls.
+    private fun catalogStatus(label: String) {
+        if (!transferBusy) setDownloadUi(label, false)
     }
 
     private fun setDownloadUi(label: String, running: Boolean) {
@@ -506,11 +535,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateProgress(p: TransferProgress) {
+        // A completed transfer can leave progress callbacks queued on the main thread.
+        if (!transferBusy) return
         downloadProgress.isIndeterminate = p.percent < 0
         if (p.percent >= 0) downloadProgress.progress = p.percent
-        downloadStatus.text = ModelStore.displaySize(p.done) + " / " +
-            (if (p.total > 0) ModelStore.displaySize(p.total) else "unbekannt") +
-            (if (p.percent >= 0) "  •  " + p.percent + "%" else "")
+        downloadStatus.text = DownloadPresentation.progress(activeTransferName, p)
+        val activeName = activeTransferName
+        if (activeName != null) {
+            // The part file may be created AFTER the library was first rendered.
+            if (activePartialLabel == null && currentPage == 1 &&
+                File(store.dir, "$activeName.part").isFile) {
+                refreshLibrary()
+            }
+            activePartialLabel?.text = DownloadPresentation.partialStatus(activeName, p.done, true)
+        }
     }
 
     private fun simpleLabel(content: String): TextView = TextView(this).apply {
