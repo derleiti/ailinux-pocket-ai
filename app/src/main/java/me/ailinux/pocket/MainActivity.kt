@@ -62,8 +62,8 @@ class MainActivity : AppCompatActivity() {
     private val chatPage by lazy { findViewById<View>(R.id.chatPage) }
     private val libraryPage by lazy { findViewById<View>(R.id.libraryPage) }
     private val settingsPage by lazy { findViewById<View>(R.id.settingsPage) }
-    private val heroTitle by lazy { findViewById<TextView>(R.id.heroTitle) }
-    private val heroSubtitle by lazy { findViewById<TextView>(R.id.heroSubtitle) }
+    private val chatModelName by lazy { findViewById<TextView>(R.id.chatModelName) }
+    private val emptyHint by lazy { findViewById<TextView>(R.id.emptyHint) }
     private val statusLabel by lazy { findViewById<TextView>(R.id.statusLabel) }
     private val messageInput by lazy { findViewById<EditText>(R.id.messageInput) }
     private val sendButton by lazy { findViewById<MaterialButton>(R.id.sendButton) }
@@ -85,7 +85,6 @@ class MainActivity : AppCompatActivity() {
         messagesView.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
         messagesView.adapter = chatAdapter
 
-        findViewById<MaterialButton>(R.id.heroAction).setOnClickListener { showPage(1) }
         findViewById<TextView>(R.id.navChat).setOnClickListener { showPage(0) }
         findViewById<TextView>(R.id.navModels).setOnClickListener { showPage(1) }
         findViewById<TextView>(R.id.navSettings).setOnClickListener { showPage(2) }
@@ -154,6 +153,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         refreshLibrary()
+        renderChatState()
         setStatus("Engine wird initialisiert …")
         lifecycleScope.launch {
             try {
@@ -182,6 +182,22 @@ class MainActivity : AppCompatActivity() {
             ))
         }
         if (which == 1) refreshLibrary()
+        if (which == 0) renderChatState()
+    }
+
+    /**
+     * Keep the chat area free of model selection controls: display only a
+     * read-only model name, the inference status and the message composer.
+     */
+    private fun renderChatState() {
+        val loaded = activeModel != null
+        chatModelName.text = ChatPresentation.modelLabel(activeModel?.name)
+        emptyHint.text = ChatPresentation.emptyHint(loaded)
+        messageInput.hint = ChatPresentation.inputHint(loaded)
+        // During generation the send button must remain usable as STOP.
+        val canInteract = loaded && !busy
+        messageInput.isEnabled = canInteract
+        sendButton.isEnabled = canInteract || generationJob?.isActive == true
     }
 
     private fun refreshLibrary() {
@@ -301,6 +317,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         busy = true
+        renderChatState()
         setModelLoading(true, file.name)
         setStatus("Prüfe GGUF-Architektur …")
         lifecycleScope.launch {
@@ -338,10 +355,6 @@ class MainActivity : AppCompatActivity() {
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
-                heroTitle.text = file.name.removeSuffix(".gguf")
-                heroSubtitle.text = ModelStore.displaySize(file.length()) +
-                    "  •  Läuft lokal auf deinem Android-Gerät"
-                findViewById<MaterialButton>(R.id.heroAction).text = "Modell wechseln  →"
                 setStatus("● BEREIT")
                 refreshLibrary()
                 showPage(0)
@@ -354,6 +367,7 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().remove(PREF_LOADING_MODEL).apply()
                 setModelLoading(false)
                 busy = false
+                renderChatState()
             }
         }
     }
@@ -375,6 +389,7 @@ class MainActivity : AppCompatActivity() {
         messagesView.scrollToPosition(index)
         busy = true
         sendButton.text = "■"
+        messageInput.isEnabled = false
         setStatus("● GENERIERT …")
         generationJob = lifecycleScope.launch {
             try {
@@ -397,6 +412,7 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 busy = false
                 sendButton.text = "➤"
+                renderChatState()
             }
         }
     }

@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 0.1.0-alpha.8** Debug APK builds; testing inference on the physical Pixel is still pending.
+**Status: 0.1.0-alpha.9.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -196,3 +196,19 @@ on-device model load, decoding and throughput testing.
 
 Do not delete or re-download models when upgrading Alpha 7 to Alpha 8;
 the APK is signed with the same development certificate.
+
+
+## Chat-first layout (Alpha 9)
+
+The chat page no longer contains a large 'DEIN MODELL' hero card,
+GGUF selection button, download controls or model switching. It has a
+compact, non-interactive active-model/status row above the conversation,
+with the message list taking the remaining vertical space. Model import,
+downloads, installed model cards and model switching belong entirely to
+the MODELLE tab. The message composer is disabled until a model is
+loaded; it remains possible to stop a running generation.
+
+The model selection and chat layout remain separate when navigating
+between tabs. Four JVM UI-content/presentation regression tests validate
+this separation. This is a UI-only improvement; no changes are made to
+native inference or existing installed GGUF files.
