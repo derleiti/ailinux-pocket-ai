@@ -16,6 +16,37 @@ class McpAgentBridgeTest {
                 .put("volume", JSONObject().put("type", "integer")))
     )
 
+    @Test fun nativeToolSchemaActuallySuppliesFunctionDeclarations() {
+        val list = McpAgentBridge.nativeToolsJson(listOf(tool()))
+        val toolDefs = JSONArray(list)
+        assertEquals(1, toolDefs.length())
+        val descriptor = toolDefs.getJSONObject(0)
+        assertEquals("function", descriptor.getString("type"))
+        val function = descriptor.getJSONObject("function")
+        assertEquals("discord_voice_join", function.getString("name"))
+        assertTrue(function.getString("description").contains("Discord"))
+        val params = function.getJSONObject("parameters")
+        assertEquals("object", params.getString("type"))
+        assertEquals("channel_id", params.getJSONArray("required").getString(0))
+        assertTrue(params.getJSONObject("properties").has("channel_id"))
+        assertFalse(list.contains("Authorization"))
+        assertFalse(list.contains("Bearer"))
+    }
+
+    @Test fun nativeBindingRejectsExcessToolsAndIncompleteRequiredSchema() {
+        assertThrows(IllegalArgumentException::class.java) {
+            McpAgentBridge.nativeToolsJson(List(6) { n ->
+                tool().copy(name = "tool_" + n)
+            })
+        }
+        val invalid = McpTool("only_partial", "Test", JSONObject().put("type", "object")
+            .put("properties", JSONObject().put("known", JSONObject().put("type", "string")))
+            .put("required", JSONArray().put("secret_missing")))
+        assertThrows(IllegalArgumentException::class.java) {
+            McpAgentBridge.nativeToolsJson(listOf(invalid))
+        }
+    }
+
     @Test fun sparkNativeFunctionCallIsParsedWithSchema() {
         val answer = "<tool_call>discord_voice_join" +
             "<arg_key>channel_id</arg_key><arg_value>999</arg_value>" +
@@ -66,16 +97,8 @@ class McpAgentBridgeTest {
         assertEquals(modelLie, (output as McpAgentBridge.Decision.Answer).text)
     }
 
-    @Test fun toolPromptListsOnlyUserSelectedToolsNeverSecrets() {
-        val request = McpAgentBridge.prompt("Bitte verbinde Discord", listOf(tool()))
-        assertTrue(request.contains("discord_voice_join"))
-        assertTrue(request.contains("channel_id"))
-        assertTrue(request.contains("Behaupte niemals"))
-        assertFalse(request.contains("Bearer"))
-        assertFalse(request.contains("Authorization"))
-        assertThrows(IllegalArgumentException::class.java) {
-            McpAgentBridge.prompt("x".repeat(2000), listOf(tool()))
-        }
+    @Test fun disablingMcpRemovesAllNativeToolDefinitions() {
+        assertEquals("[]", McpAgentBridge.nativeToolsJson(emptyList()))
     }
 
     @Test fun rejectedEnumsDoNotReachToolExecutor() {

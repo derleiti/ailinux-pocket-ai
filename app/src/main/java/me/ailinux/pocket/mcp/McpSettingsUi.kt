@@ -50,17 +50,29 @@ class McpSettingsUi(
             .setTitle("MCP-Server hinzufügen")
             .setItems(arrayOf(
                 "AILinux TriForce · api.ailinux.me/v1/mcp",
+                "AILinux Discord MCP · discord.ailinux.me/mcp (OAuth)",
                 "Anderen MCP-Server konfigurieren"
             )) { _, index ->
-                if (index == 0) {
-                    // An endpoint preset, never automatic login or privileged tools.
-                    edit(McpProfile(
+                when (index) {
+                    0 -> edit(McpProfile(
                         title = "AILinux TriForce",
                         endpoint = "https://api.ailinux.me/v1/mcp",
                         transport = McpTransport.STREAMABLE_HTTP,
                         auth = McpAuth.NONE
                     ), adding = true)
-                } else edit(null)
+                    1 -> edit(McpProfile(
+                        title = "AILinux Discord MCP",
+                        endpoint = "https://discord.ailinux.me/mcp",
+                        transport = McpTransport.STREAMABLE_HTTP,
+                        auth = McpAuth.OAUTH,
+                        oauthIssuer = "https://discord.ailinux.me",
+                        oauthScopes = "discord:read offline_access",
+                        // Discord's authorization server registers HTTPS/loopback,
+                        // not custom Android URI schemes.
+                        oauthRedirect = McpRedirect.LOOPBACK
+                    ), adding = true)
+                    else -> edit(null)
+                }
             }
             .setNegativeButton("Abbrechen", null)
             .show()

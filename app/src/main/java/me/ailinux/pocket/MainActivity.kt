@@ -13,6 +13,14 @@ import me.ailinux.pocket.mcp.McpSettingsUi
 import me.ailinux.pocket.mcp.McpSecurity
 import me.ailinux.pocket.mcp.McpAgentBridge
 import me.ailinux.pocket.mcp.McpAgentUi
+import me.ailinux.pocket.mcp.McpAgentSession
+import me.ailinux.pocket.mcp.McpToolCatalog
+import me.ailinux.pocket.mcp.McpVault
+import me.ailinux.pocket.mcp.McpProfile
+import me.ailinux.pocket.mcp.McpAuth
+import me.ailinux.pocket.mcp.McpOAuth
+import me.ailinux.pocket.mcp.McpConnection
+import me.ailinux.pocket.mcp.McpHttpFailure
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
@@ -97,11 +105,8 @@ class MainActivity : AppCompatActivity() {
             displayMcpToolResult(result)
         }
         mcpAgent = McpAgentUi(this) { active ->
-            val chip = findViewById<TextView>(R.id.onlineChip)
-            val button = findViewById<MaterialButton>(R.id.chatMcpButton)
-            chip.text = if (active == null) "●  OFFLINE" else "●  LOKAL + MCP"
-            button.text = if (active == null) "MCP" else "MCP ✓"
-            chip.setTextColor(getColor(if (active == null) R.color.primary else R.color.secondary))
+            updateMcpBadge(active)
+            if (activeModel != null) rebindNativeMcpTools(active)
         }
         handleMcpOAuthIntent(intent)
 
@@ -112,7 +117,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.navModels).setOnClickListener { showPage(1) }
         findViewById<TextView>(R.id.navSettings).setOnClickListener { showPage(2) }
         findViewById<MaterialButton>(R.id.chatMcpButton).setOnClickListener {
-            mcpAgent.showMenu { mcpUi.showToolsChooser() }
+            if (busy) toast("MCP-Modus erst nach der aktuellen Aktion wechseln.")
+            else mcpAgent.showMenu { mcpUi.showToolsChooser() }
         }
         findViewById<MaterialButton>(R.id.importButton).setOnClickListener {
             if (!transferBusy) modelPicker.launch(arrayOf("*/*"))
@@ -172,14 +178,30 @@ class MainActivity : AppCompatActivity() {
         val interruptedModel = prefs.getString(PREF_LOADING_MODEL, null)
         if (interruptedModel != null) {
             prefs.edit().remove(PREF_LOADING_MODEL).apply()
+            val wasPackageUpdate = runCatching {
+                val mgr = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                mgr.getHistoricalProcessExitReasons(packageName, 0, 1)
+                    .firstOrNull()?.reason == ApplicationExitInfo.REASON_PACKAGE_UPDATED
+            }.getOrDefault(false)
             findViewById<View>(android.R.id.content).post {
                 if (!isFinishing && !isDestroyed) {
                     AlertDialog.Builder(this)
-                        .setTitle("Vorheriger Modell-Start abgebrochen")
-                        .setMessage("Android hat Pocket AI beim Laden von " +
-                            interruptedModel + " unerwartet beendet. " +
-                            "Prüfe unter Setup die Systemdiagnose. " +
-                            "Das Modell wurde nicht gelöscht.")
+                        .setTitle(
+                            if (wasPackageUpdate) "Modellstart durch App-Update unterbrochen"
+                            else "Vorheriger Modellstart wurde unterbrochen"
+                        )
+                        .setMessage(
+                            if (wasPackageUpdate) {
+                                "Android hat die vorherige Pocket-AI-Version während des " +
+                                    "APK-Updates beendet. Das ist kein neuer Absturz. " +
+                                    "Versuche das Modell " + interruptedModel + " erneut zu laden. " +
+                                    "Die heruntergeladene GGUF-Datei bleibt gespeichert."
+                            } else {
+                                "Der Start von " + interruptedModel +
+                                    " wurde vor Abschluss beendet. Unter SETUP kannst du " +
+                                    "die Android-Prozessdiagnose prüfen. Das Modell wurde nicht gelöscht."
+                            }
+                        )
                         .setNegativeButton("OK", null)
                         .setPositiveButton("Systemdiagnose") { _, _ -> showProcessExitInfo() }
                         .show()
@@ -230,7 +252,8 @@ class MainActivity : AppCompatActivity() {
         emptyHint.text = ChatPresentation.emptyHint(loaded)
         messageInput.hint = ChatPresentation.inputHint(loaded)
         // During generation the send button must remain usable as STOP.
-        val canInteract = loaded && !busy
+        // A live MCP tools/list query is useful even when no GGUF was loaded.
+        val canInteract = !busy
         messageInput.isEnabled = canInteract
         sendButton.isEnabled = canInteract || generationJob?.isActive == true
     }
@@ -387,14 +410,11 @@ class MainActivity : AppCompatActivity() {
                     // the KV cache; changing it within an active chat corrupts
                     // incremental Jinja template prefixes.
                     engine.setThinkingMode(prefs.getBoolean(PREF_ENABLE_THINKING, false))
-                    val instruction = prefs.getString("system_prompt", DEFAULT_SYSTEM_PROMPT).orEmpty()
-                    // A model cannot report successful external actions based on prose
-                    // alone. Actual proof comes exclusively from the MCP call receipt.
-                    val grounded = instruction.trim() + "\n" +
-                        "Ohne bestätigtes Werkzeugresultat darfst du NIEMALS behaupten, " +
-                        "Discord, Voice, Server oder andere externe Dienste verbunden, " +
-                        "verändert oder abgefragt zu haben."
-                    engine.setSystemPrompt(grounded)
+                    val activeMcp = mcpAgent.current()
+                    val nativeTools = activeMcp?.let {
+                        McpAgentBridge.nativeToolsJson(it.tools)
+                    } ?: "[]"
+                    engine.setSystemPrompt(groundedSystemPrompt(activeMcp), nativeTools)
                 }
                 activeModel = file
                 messages.clear()
@@ -417,22 +437,188 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendMessage() {
+    private fun groundedSystemPrompt(active: McpAgentSession?): String {
+        val configured = prefs.getString("system_prompt", DEFAULT_SYSTEM_PROMPT).orEmpty()
+        val root = configured.trim() + "\n" +
+            "Du darfst externe Aktionen nur als abgeschlossen bezeichnen, wenn " +
+            "ein echtes Werkzeugresultat ihren Erfolg bestätigt. " +
+            "Eine reine Modellantwort beweist niemals Discord- oder Serverzugriff."
+        if (active == null) return root
+        // Spark's Jinja template supplies the REAL function declarations in
+        // its SYSTEM block. This text is policy only, not the tool catalogue.
+        return root + "\n" +
+            "Die Pocket-AI-App hat dir genau " + active.tools.size +
+            " ausgewählte Funktionen im nativen GGUF-Tool-Template bereitgestellt. " +
+            "Wenn du aktuelle externe Informationen oder Aktionen brauchst, " +
+            "verwende den nativen Werkzeugaufruf. Bei fehlendem Werkzeug sage " +
+            "ausdrücklich, dass du es nicht ausführen kannst. " +
+            "Gib niemals erfundene Toolergebnisse aus."
+    }
+
+    private fun updateMcpBadge(active: McpAgentSession?) {
+        val chip = findViewById<TextView>(R.id.onlineChip)
+        val button = findViewById<MaterialButton>(R.id.chatMcpButton)
+        chip.text = if (active == null) "●  OFFLINE" else "●  LOKAL + MCP"
+        button.text = if (active == null) "MCP" else "MCP ✓"
+        chip.setTextColor(getColor(if (active == null) R.color.primary else R.color.secondary))
+    }
+
+    /**
+     * The Jinja tool block is part of the pinned SYSTEM prefix. Do not mutate
+     * it while the KV cache contains older turns. Reset the local conversation
+     * atomically on the native inference dispatcher before chat can resume.
+     */
+    private fun rebindNativeMcpTools(active: McpAgentSession?) {
         if (busy || !::engine.isInitialized || activeModel == null) {
-            toast("Bitte zuerst ein Modell laden.")
+            mcpAgent.clearSessionSilently()
+            updateMcpBadge(null)
+            toast("MCP-Werkzeugwechsel nur bei bereitstehendem Modell möglich.")
             return
         }
+        val json = try {
+            active?.let { McpAgentBridge.nativeToolsJson(it.tools) } ?: "[]"
+        } catch (problem: Exception) {
+            mcpAgent.clearSessionSilently()
+            updateMcpBadge(null)
+            showError("MCP-Funktionsschema ungültig", problem)
+            return
+        }
+        busy = true
+        renderChatState()
+        setStatus("● MCP-WERKZEUGE WERDEN EINGEBUNDEN …")
+        lifecycleScope.launch {
+            try {
+                engine.resetConversationWithTools(groundedSystemPrompt(active), json)
+                messages.clear()
+                chatAdapter.notifyDataSetChanged()
+                findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
+                setStatus("● BEREIT")
+                toast(
+                    if (active == null) "MCP ausgeschaltet · Chatkontext neu gestartet"
+                    else "Spark hat " + active.tools.size +
+                        " native MCP-Tools eingebunden · Chatkontext neu gestartet"
+                )
+            } catch (problem: Exception) {
+                mcpAgent.clearSessionSilently()
+                updateMcpBadge(null)
+                setStatus("MCP-Template-Fehler · Modell bitte neu laden")
+                showError("Native MCP-Funktionen konnten nicht eingebunden werden", problem)
+            } finally {
+                busy = false
+                renderChatState()
+            }
+        }
+    }
+
+    /** A tool inventory is a real authenticated tools/list call, never LLM prose. */
+    private fun showLiveMcpCatalog(question: String, filter: String) {
+        val profiles = try {
+            McpVault(applicationContext).list()
+        } catch (problem: Exception) {
+            showError("MCP-Tresor konnte nicht gelesen werden", problem)
+            return
+        }
+        val candidates = if (filter.equals("discord", true)) {
+            profiles.filter { McpToolCatalog.isDiscordServer(it) }
+        } else profiles
+        if (candidates.isEmpty()) {
+            messageInput.setText("")
+            appendReadOnlyChat(question, McpToolCatalog.missingProfile(filter))
+            return
+        }
+        val activeId = mcpAgent.current()?.profileId
+        val preferred = candidates.firstOrNull { it.id == activeId }
+        if (preferred != null || candidates.size == 1) {
+            readMcpToolCatalog(question, filter, preferred ?: candidates.single())
+        } else {
+            AlertDialog.Builder(this)
+                .setTitle("Welche MCP-Verbindung abfragen?")
+                .setItems(candidates.map { it.title + " · " + it.endpoint }.toTypedArray()) { _, index ->
+                    readMcpToolCatalog(question, filter, candidates[index])
+                }
+                .setNegativeButton("Abbrechen", null).show()
+        }
+    }
+
+    private fun appendReadOnlyChat(question: String, answer: String) {
+        messages.add(ChatMessage(true, question))
+        messages.add(ChatMessage(false, answer))
+        chatAdapter.notifyItemRangeInserted(messages.size - 2, 2)
+        findViewById<View>(R.id.emptyState).visibility = View.GONE
+        showPage(0)
+        messagesView.scrollToPosition(messages.lastIndex)
+    }
+
+    private fun readMcpToolCatalog(question: String, filter: String, profile: McpProfile) {
+        if (busy) { toast("Pocket AI arbeitet bereits."); return }
+        messageInput.setText("")
+        messages.add(ChatMessage(true, question))
+        messages.add(ChatMessage(false, "🔎 MCP tools/list wird direkt am Server abgefragt …"))
+        val answerIndex = messages.lastIndex
+        chatAdapter.notifyItemRangeInserted(answerIndex - 1, 2)
+        findViewById<View>(R.id.emptyState).visibility = View.GONE
+        showPage(0)
+        messagesView.scrollToPosition(answerIndex)
+        busy = true
+        renderChatState()
+        setStatus("● MCP TOOLLISTE …")
+        lifecycleScope.launch {
+            try {
+                val reply = withContext(Dispatchers.IO) {
+                    val vault = McpVault(applicationContext)
+                    val fresh = vault.get(profile.id) ?: error("MCP-Server wurde entfernt.")
+                    if (fresh.auth == McpAuth.OAUTH && fresh.oauthAccessToken.isBlank()) {
+                        McpToolCatalog.loginRequired(fresh)
+                    } else {
+                        val authorized = McpOAuth(vault).refreshIfNeeded(fresh)
+                        val actual = McpConnection.inspect(authorized)
+                        McpToolCatalog.format(authorized, actual, filter)
+                    }
+                }
+                messages[answerIndex].content = reply
+                setStatus("● BEREIT")
+            } catch (problem: Exception) {
+                val reason = if (problem is McpHttpFailure &&
+                    problem.code in setOf(401, 403)) {
+                    McpToolCatalog.loginRequired(profile)
+                } else {
+                    "⚠️ MCP-Toolliste konnte nicht live abgefragt werden.\n" +
+                        "Server: " + profile.title + "\n" +
+                        "Grund: " + (problem.message ?: "Unbekannter Netzwerkfehler").take(900) +
+                        "\nKeine Toolfunktionen erfunden oder ausgeführt."
+                }
+                messages[answerIndex].content = reason
+                setStatus("● MCP NICHT VERBUNDEN")
+            } finally {
+                chatAdapter.notifyItemChanged(answerIndex)
+                messagesView.scrollToPosition(answerIndex)
+                busy = false
+                renderChatState()
+            }
+        }
+    }
+
+    private fun sendMessage() {
+        if (busy) { toast("Pocket AI ist beschäftigt."); return }
         val text = messageInput.text.toString().trim()
         if (text.isEmpty()) return
-        val agentSession = mcpAgent.current()
-        // Only a user-enabled session gets the catalog of explicitly selected
-        // MCP tools. Authentication tokens never enter an LLM prompt.
-        val request = try {
-            if (agentSession == null) text else McpAgentBridge.prompt(text, agentSession.tools)
-        } catch (problem: Exception) {
-            showError("MCP-Planung nicht möglich", problem)
+        McpToolCatalog.requestedFilter(text)?.let {
+            showLiveMcpCatalog(text, it)
             return
         }
+        if (!::engine.isInitialized || activeModel == null) {
+            toast("Bitte zuerst ein Modell laden. Für MCP geht auch /mcp tools.")
+            return
+        }
+        val agentSession = mcpAgent.current()
+        if (text.length > 16_000) {
+            toast("Nachricht zu lang")
+            return
+        }
+        // The user-selected function schema is ALREADY bound to the actual
+        // Spark Jinja system block via resetConversationWithTools(). Do not
+        // duplicate it in untrusted user text as RC2 did.
+        val request = text
 
         messageInput.setText("")
         val answer = ChatMessage(false, "")
@@ -816,7 +1002,13 @@ class MainActivity : AppCompatActivity() {
                             append(" (Status ").append(exit.status).append(")")
                             append("\nRSS: ").append(exit.rss).append(" kB, PSS: ")
                             append(exit.pss).append(" kB")
-                            if (summary.isNotEmpty()) append("\nPhase: ").append(summary)
+                            if (summary.isNotEmpty()) {
+                                append("\nPhase: ").append(summary)
+                                if (exit.reason == ApplicationExitInfo.REASON_PACKAGE_UPDATED) {
+                                    append("\nHinweis: Die Phase ist der letzte gespeicherte " +
+                                        "Prozesszustand, nicht die Ursache des App-Updates.")
+                                }
+                            }
                             exit.description?.takeIf { it.isNotBlank() }?.let {
                                 append("\n").append(it.take(200))
                             }

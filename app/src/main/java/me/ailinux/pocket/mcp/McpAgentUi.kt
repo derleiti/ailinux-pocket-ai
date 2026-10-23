@@ -40,6 +40,10 @@ class McpAgentUi(
 
     fun current(): McpAgentSession? = session
 
+    /** Called after a native Jinja binding error; a stale selection must not
+     * be represented as having active tool access in the Android chat UI. */
+    fun clearSessionSilently() { session = null }
+
     fun showMenu(openManualTools: () -> Unit) {
         val options = if (session != null)
             arrayOf("KI + MCP neu verbinden", "MCP-Tools manuell", "KI + MCP ausschalten")
@@ -189,6 +193,10 @@ class McpAgentUi(
                 val tools = allowed.filter { it.name in selected }
                 if (tools.isEmpty()) {
                     toast("Bitte mindestens ein Tool markieren")
+                } else if (runCatching { McpAgentBridge.nativeToolsJson(tools) }.onFailure {
+                        error("MCP-Werkzeugliste kann nicht eingebunden werden", it)
+                    }.isFailure) {
+                    // Keep the old session; never enable an unbound tool list.
                 } else {
                     session = McpAgentSession(profile.id, profile.endpoint, profile.title, tools)
                     onActiveChanged(session)

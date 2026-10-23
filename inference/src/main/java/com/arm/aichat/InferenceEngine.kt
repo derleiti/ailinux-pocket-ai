@@ -23,7 +23,14 @@ interface InferenceEngine {
     /**
      * Sends a system prompt to the loaded model
      */
-    suspend fun setSystemPrompt(systemPrompt: String)
+    suspend fun setSystemPrompt(systemPrompt: String, toolsJson: String = "[]")
+
+    /**
+     * Reset the decoded chat prefix and bind user-selected MCP tools to the
+     * model's actual Jinja system template. This clears previous chat turns.
+     * Tools must be serialized OpenAI-compatible function descriptions.
+     */
+    suspend fun resetConversationWithTools(systemPrompt: String, toolsJson: String)
 
     /**
      * Configure optional GGUF reasoning before the initial system prompt.

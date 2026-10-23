@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 1.0.0-rc.2.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.3.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -395,3 +395,57 @@ ApplicationExitInfo.REASON_PACKAGE_UPDATED. RC2 now labels these
 events "App-Update (kein Crash)" and distinguishes historical SIGABRT
 tombstones from normal APK installations. Prior tombstones may still
 appear in Android's process history; they are not new RC2 crashes.
+
+
+## RC3 - Spark-X2.6 native MCP tools + truthful live catalogue
+
+RC2 presented MCP tool schemas as plain USER text, not via the model's
+actual tool mechanism. Spark-X2.6 could consequently reply with generic
+explanations, despite the MCP server advertising working tools. RC3 repairs
+the native integration:
+
+- Activating KI + MCP serializes up to five selected function schemas
+  as OpenAI-compatible JSON. The Android JNI bridge validates them using
+  llama.cpp common_json and common_chat_tools_parse_oaicompat, and supplies
+  them through common_chat_templates_inputs.tools. The ORIGINAL Spark-X2.6
+  GGUF Jinja template places them in its SYSTEM tools block.
+- Normal user requests are sent as plain text, not padded with duplicate
+  tool definitions. No OAuth, Bearer or API-key tokens enter the GGUF prompt.
+- Changing the tool selection resets only the local decoded conversation and
+  KV cache while keeping the loaded GGUF. A fresh system prefix with the
+  new tool set is built before the next message. Switching MCP off removes
+  the native tool section.
+- The 2048-token context limits model tool definitions. If a selected
+  schema does not fit, the app refuses it and asks for fewer tools instead.
+  Each real MCP tools/call still requires fresh explicit user confirmation.
+- Questions such as "Welche MCP Tools hat Discord?" or /mcp tools discord
+  invoke the authenticated MCP server's real, read-only tools/list RPC
+  directly. No LLM hallucination is used to answer an actual tool inventory.
+  This works even without loading a GGUF, as long as a MCP profile exists.
+- SETUP now offers separate AILinux TriForce and AILinux Discord MCP
+  presets. The latter uses OAuth 2.0 + PKCE, user scope discord:read
+  offline_access and Android localhost callback. The Discord bot token is
+  NOT a user Discord MCP OAuth grant; login and permission approval are
+  required separately.
+- Discord currently advertises three account-scoped read-only tools:
+  discord_connection_status, discord_authorized_guilds, discord_voice_status.
+  The separate nova join/leave voice controls are not exported by that
+  public read-only Discord MCP resource.
+- Android REASON_PACKAGE_UPDATED process diagnostics now clarify that
+  a previous phase=model_load_failed is a last-known process stage,
+  not a new crash caused by the APK update.
+
+### Verification
+
+- JVM tests: native JSON tool schema serialization, authenticated MCP
+  inventory display and safe error handling, OAuth and transport protocols.
+- Host C++ regression: original Spark-X2.6 GGUF Jinja template with native
+  common_json parsing and actual Jinja tool injection. Checks system-level
+  function names and parameter schemas, incremental multi-turn rendering,
+  thinking OFF, and removal of tools when deactivated.
+- Android ARM64 build, Lint, APK/JNI/ABI/signing verification before release.
+
+Correct template injection is necessary, but a small local 4B model may
+still occasionally choose no tool or produce malformed arguments.
+Specific Discord OAuth consent and actual Pixel/device inference must
+be tested on the phone; a real tool result is required to claim success.

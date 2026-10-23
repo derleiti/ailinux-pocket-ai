@@ -414,6 +414,9 @@ static std::vector<common_chat_msg> chat_msgs;
 // Direct-answer mode by default: GGUF templates such as Spark-X2.6 otherwise
 // inject high-effort thinking instructions and start generation with <think>.
 static bool g_enable_thinking = false;
+// MCP tools are bound to the actual GGUF/Jinja system template, not prepended
+// as instructions to an arbitrary user message. Changes require KV reset.
+static std::vector<common_chat_tool> g_chat_tools;
 static llama_pos system_prompt_position;
 static llama_pos current_position;
 
@@ -455,6 +458,9 @@ static std::string chat_render(const std::vector<common_chat_msg> &messages, boo
     inputs.messages = messages;
     inputs.use_jinja = true;
     inputs.enable_thinking = g_enable_thinking;
+    inputs.tools = g_chat_tools;
+    inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    inputs.parallel_tool_calls = false;
     inputs.add_generation_prompt = generation_prefix;
     return common_chat_templates_apply(g_chat_templates.get(), inputs).prompt.str();
 }
@@ -564,12 +570,35 @@ JNIEXPORT jint JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
         JNIEnv *env,
         jobject /*unused*/,
-        jstring jsystem_prompt
+        jstring jsystem_prompt,
+        jstring jtools_json
 ) {
     try {
     reset_load_diagnostics();
-    // Reset long-term & short-term states
+    // Parse the exact, validated, user-selected MCP function definitions.
+    // Nothing here carries credentials or authorizes actual tool execution.
+    const std::string raw_tools = java_string(env, jtools_json);
+    if (raw_tools.size() > 14000) {
+        throw std::invalid_argument("MCP function catalog too large");
+    }
+    const auto parsed_json = common_json::parse(raw_tools);
+    if (!parsed_json.is_array() || parsed_json.size() > 5) {
+        throw std::invalid_argument("MCP function catalog must be an array of <=5 tools");
+    }
+    const auto parsed_tools = common_chat_tools_parse_oaicompat(parsed_json);
+    for (const auto &tool : parsed_tools) {
+        if (tool.name.empty() || tool.name.size() > 128 ||
+                tool.description.size() > 500 || tool.parameters.size() > 8000) {
+            throw std::invalid_argument("Invalid MCP function definition limits");
+        }
+    }
+    // Reset long-term & short-term states BEFORE adding tools to the
+    // system block: Jinja prefixes MUST stay identical throughout the chat.
     reset_long_term_states();
+    reset_short_term_states();
+    g_chat_tools = parsed_tools;
+    LOGi("Pocket AI native MCP tool binding: %zu functions, thinking=%s",
+         g_chat_tools.size(), g_enable_thinking ? "on" : "off");
     reset_short_term_states();
 
     // Obtain system prompt from JEnv
@@ -819,6 +848,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_unload(JNIEnv * /*unused*/, job
     // Reset long-term & short-term states
     reset_long_term_states();
     reset_short_term_states();
+    g_chat_tools.clear();
 
     // This must be safe even after a partially failed model/context allocation.
     // The original bridge only cleaned up a fully ready model and leaked memory

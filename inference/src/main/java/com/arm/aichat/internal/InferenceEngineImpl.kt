@@ -97,7 +97,7 @@ internal class InferenceEngineImpl private constructor(
 
     private external fun setThinkingEnabledNative(enabled: Boolean)
 
-    private external fun processSystemPrompt(systemPrompt: String): Int
+    private external fun processSystemPrompt(systemPrompt: String, toolsJson: String): Int
 
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
 
@@ -232,38 +232,49 @@ internal class InferenceEngineImpl private constructor(
         Unit
     }
 
-    /**
-     * Process the plain text system prompt
-     *
-     * TODO-han.yin: return error code if system prompt not correct processed?
-     */
-    override suspend fun setSystemPrompt(prompt: String) =
-        withContext(llamaDispatcher) {
-            require(prompt.isNotBlank()) { "Cannot process empty system prompt!" }
-            check(_readyForSystemPrompt) { "System prompt must be set ** RIGHT AFTER ** model loaded!" }
-            check(_state.value is InferenceEngine.State.ModelReady) {
-                "Cannot process system prompt in ${_state.value.javaClass.simpleName}!"
-            }
+    /** Initial chat template and native KV-cache must use the SAME selected tools. */
+    override suspend fun setSystemPrompt(prompt: String, toolsJson: String) =
+        bindSystemPrompt(prompt, toolsJson, firstPrompt = true)
 
-            Log.i(TAG, "Sending system prompt...")
-            _readyForSystemPrompt = false
-            _state.value = InferenceEngine.State.ProcessingSystemPrompt
-            recordNativeStage("system_prompt")
-            processSystemPrompt(prompt).let { result ->
-                if (result != 0) {
-                    val nativeDetail = lastLoadError().trim().takeLast(3000)
-                        .ifEmpty { "Kein weiterer nativer Fehlertext vorhanden." }
-                    val error = IOException(
-                        "Chat-Template/System-Prompt fehlgeschlagen (Code $result):\n$nativeDetail"
-                    )
-                    _state.value = InferenceEngine.State.Error(error)
-                    throw error
-                }
-            }
-            Log.i(TAG, "System prompt processed! Awaiting user prompt...")
-            _state.value = InferenceEngine.State.ModelReady
-            recordNativeStage("prompt_ready")
+    override suspend fun resetConversationWithTools(prompt: String, toolsJson: String) =
+        bindSystemPrompt(prompt, toolsJson, firstPrompt = false)
+
+    private suspend fun bindSystemPrompt(
+        prompt: String,
+        toolsJson: String,
+        firstPrompt: Boolean
+    ) = withContext(llamaDispatcher) {
+        require(prompt.isNotBlank()) { "System-Prompt darf nicht leer sein" }
+        require(toolsJson.length <= 14_000) { "Zu viele MCP-Tooldefinitionen" }
+        if (firstPrompt) {
+            check(_readyForSystemPrompt) { "System-Prompt nur direkt nach Modellstart setzen" }
         }
+        check(_state.value is InferenceEngine.State.ModelReady) {
+            "Chatkontext kann bei " + _state.value.javaClass.simpleName + " nicht neu geladen werden"
+        }
+
+        _state.value = InferenceEngine.State.ProcessingSystemPrompt
+        recordNativeStage("system_prompt")
+        // Native reset clears chat_msgs and llama memory before binding tools.
+        // Never call this during generation or network dispatch.
+        val code = processSystemPrompt(prompt, toolsJson)
+        if (code != 0) {
+            val detail = lastLoadError().trim().takeLast(3000)
+                .ifBlank { "Keine weiteren nativen Fehlerdetails vorhanden." }
+            val error = IOException(
+                "GGUF-Template/MCP-System-Prompt fehlgeschlagen (Code $code):\n$detail"
+            )
+            _state.value = InferenceEngine.State.Error(error)
+            recordNativeStage("system_prompt_failed")
+            throw error
+        }
+        _readyForSystemPrompt = false
+        _cancelGeneration = false
+        _state.value = InferenceEngine.State.ModelReady
+        recordNativeStage("prompt_ready")
+        Log.i(TAG, "Chat system prefix initialized; native tool catalog length: " + toolsJson.length)
+        Unit
+    }
 
     /**
      * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]
