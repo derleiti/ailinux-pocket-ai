@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 0.1.0-alpha.9.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 0.1.0-alpha.10.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -212,3 +212,36 @@ The model selection and chat layout remain separate when navigating
 between tabs. Four JVM UI-content/presentation regression tests validate
 this separation. This is a UI-only improvement; no changes are made to
 native inference or existing installed GGUF files.
+
+
+## Spark-X2.6 direct-answer / optional reasoning mode (Alpha 10)
+
+The public Spark-X2.6 GGUF Jinja template defaults to enable_thinking=true
+and injects thinking_effort=high into its system block. The previous
+common_chat_format_single(..., use_jinja=true) did not expose
+enable_thinking and always used that default, wasting the configured
+response token budget on internal-style reasoning text.
+
+The vendored JNI bridge now calls the official
+common_chat_templates_apply(...) directly with an explicit
+inputs.enable_thinking flag. The default is FALSE: for Spark-X2.6,
+the assistant-generation prefix becomes <|Bot|></think> and the
+extra high-effort reasoning instructions disappear. This is a template-
+level fix, NOT a filter that hides generated tokens after they are spent.
+
+A Denkmodus switch under SETUP enables reasoning on demand. It is
+disabled on existing installations by default, and applied when a GGUF
+model is loaded (before processing its system prompt). Toggle, save
+settings, then reload the model or use Gespraech zuruecksetzen for the
+change to take effect. Incremental chat rendering checks that a
+template leaves previously encoded messages unchanged before appending
+the next turn; unsupported behavior raises a recoverable error instead
+of corrupting context silently.
+
+The exact Spark-X2.6 public GGUF Jinja template was regression-tested
+with an upstream-hosted common_chat_templates_apply harness in both
+thinking and non-thinking modes, including a system prompt, multiple
+turns, and incremental conversation prefixes. Native test source is
+in tests/native/chat_template_thinking_test.cpp. This release is
+locally compiled for Android ARM64, but user device confirmation of
+the newly disabled thinking mode is still needed.

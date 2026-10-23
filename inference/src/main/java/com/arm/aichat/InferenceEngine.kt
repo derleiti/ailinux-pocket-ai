@@ -26,6 +26,12 @@ interface InferenceEngine {
     suspend fun setSystemPrompt(systemPrompt: String)
 
     /**
+     * Configure optional GGUF reasoning before the initial system prompt.
+     * Reopening the model is required to change it during an active chat.
+     */
+    suspend fun setThinkingMode(enabled: Boolean)
+
+    /**
      * Sends a user prompt to the loaded model and returns a Flow of generated tokens.
      */
     fun sendUserPrompt(message: String, predictLength: Int = DEFAULT_PREDICT_LENGTH): Flow<String>

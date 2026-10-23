@@ -224,6 +224,24 @@
                     android:minLines="3" android:maxLines="6"
                     android:textSize="13sp" android:textColor="@color/ink"
                     android:background="@drawable/bg_panel"/>
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/thinkingModeSwitch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="24dp"
+                    android:minHeight="45dp"
+                    android:checked="false"
+                    android:text="Denkmodus aktivieren"
+                    android:textColor="@color/ink"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    app:thumbTint="@color/primary"/>
+                <TextView android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:text="Standard: AUS. Direkte Antworten ohne langes Nachdenken. Wirkt nach Modell-Neuladen."
+                    android:textSize="12sp"
+                    android:textColor="@color/muted"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="23dp" android:text="Maximale Antwortlänge"
                     android:textColor="@color/ink" android:textSize="15sp" android:textStyle="bold"/>

@@ -409,6 +409,9 @@ constexpr const char *ROLE_USER         = "user";
 constexpr const char *ROLE_ASSISTANT    = "assistant";
 
 static std::vector<common_chat_msg> chat_msgs;
+// Direct-answer mode by default: GGUF templates such as Spark-X2.6 otherwise
+// inject high-effort thinking instructions and start generation with <think>.
+static bool g_enable_thinking = false;
 static llama_pos system_prompt_position;
 static llama_pos current_position;
 
@@ -438,18 +441,47 @@ static void shift_context() {
     LOGi("%s: Context shifting done! Current position: %d", __func__, current_position);
 }
 
+static std::string chat_render(const std::vector<common_chat_msg> &messages, bool generation_prefix) {
+    // common_chat_format_single() cannot configure enable_thinking. Its default
+    // silently activates high-effort reasoning in templates like Spark-X2.6.
+    common_chat_templates_inputs inputs;
+    inputs.messages = messages;
+    inputs.use_jinja = true;
+    inputs.enable_thinking = g_enable_thinking;
+    inputs.add_generation_prompt = generation_prefix;
+    return common_chat_templates_apply(g_chat_templates.get(), inputs).prompt.str();
+}
+
 static std::string chat_add_and_format(const std::string &role, const std::string &content) {
     common_chat_msg new_msg;
     new_msg.role = role;
     new_msg.content = content;
-    // Legacy mode recognizes only selected hard-coded chat formats; modern
-    // GGUF files (Spark, Qwen, Gemma, etc.) can embed custom Jinja templates.
-    // The old false argument threw std::runtime_error and caused SIGABRT.
-    auto formatted = common_chat_format_single(
-            g_chat_templates.get(), chat_msgs, new_msg, role == ROLE_USER, /* use_jinja */ true);
-    chat_msgs.push_back(new_msg);
-    LOGi("%s: Formatted %s message (%zu characters)", __func__, role.c_str(), formatted.size());
+
+    const std::string rendered_past = chat_msgs.empty() ? "" : chat_render(chat_msgs, false);
+    auto updated_msgs = chat_msgs;
+    updated_msgs.push_back(new_msg);
+    const std::string rendered_updated = chat_render(updated_msgs, role == ROLE_USER);
+
+    // Incremental KV-cache decoding relies on the new chat template sharing
+    // exactly the same prefix as the already-decoded message history.
+    if (!rendered_past.empty() && rendered_updated.compare(0, rendered_past.size(), rendered_past) != 0) {
+        throw std::runtime_error("Chat template rewrote its previous messages. Start a new conversation.");
+    }
+    const std::string formatted = rendered_updated.substr(rendered_past.size());
+    chat_msgs.push_back(std::move(new_msg));
+    LOGi("%s: Formatted %s message (%zu chars, thinking=%s)",
+         __func__, role.c_str(), formatted.size(), g_enable_thinking ? "on" : "off");
     return formatted;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_setThinkingEnabledNative(
+        JNIEnv * /*env*/, jobject /*unused*/, jboolean enabled) {
+    // Called on the single-threaded llamaDispatcher before system prompt decode.
+    // Changing this mid-conversation requires rebuilding the prompt/KV cache.
+    g_enable_thinking = enabled == JNI_TRUE;
+    LOGi("GGUF chat thinking mode: %s", g_enable_thinking ? "enabled" : "disabled");
 }
 
 /**

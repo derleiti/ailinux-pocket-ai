@@ -20,6 +20,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -74,6 +75,7 @@ class MainActivity : AppCompatActivity() {
     private val cancelDownload by lazy { findViewById<MaterialButton>(R.id.cancelDownload) }
     private val tokenSpinner by lazy { findViewById<Spinner>(R.id.maxTokensSpinner) }
     private val systemPrompt by lazy { findViewById<EditText>(R.id.systemPromptInput) }
+    private val thinkingModeSwitch by lazy { findViewById<SwitchCompat>(R.id.thinkingModeSwitch) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -107,6 +109,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         systemPrompt.setText(prefs.getString("system_prompt", DEFAULT_SYSTEM_PROMPT))
+        thinkingModeSwitch.isChecked = prefs.getBoolean(PREF_ENABLE_THINKING, false)
         val choices = listOf("128 Tokens", "256 Tokens", "512 Tokens", "1024 Tokens")
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, choices)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
@@ -116,8 +119,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.saveSettingsButton).setOnClickListener {
             val count = listOf(128, 256, 512, 1024)[tokenSpinner.selectedItemPosition]
             prefs.edit().putString("system_prompt", systemPrompt.text.toString())
-                .putInt("max_tokens", count).apply()
-            toast("Gespeichert. Der System-Prompt gilt ab dem nächsten Modell-Laden.")
+                .putInt("max_tokens", count)
+                .putBoolean(PREF_ENABLE_THINKING, thinkingModeSwitch.isChecked)
+                .apply()
+            toast("Gespeichert. Denkmodus und System-Prompt gelten beim nächsten Modell-Laden.")
         }
         findViewById<MaterialButton>(R.id.clearChatButton).setOnClickListener {
             if (!busy) {
@@ -348,6 +353,10 @@ class MainActivity : AppCompatActivity() {
                             error
                         )
                     }
+                    // The mode must be set BEFORE the system prompt enters
+                    // the KV cache; changing it within an active chat corrupts
+                    // incremental Jinja template prefixes.
+                    engine.setThinkingMode(prefs.getBoolean(PREF_ENABLE_THINKING, false))
                     val instruction = prefs.getString("system_prompt", DEFAULT_SYSTEM_PROMPT).orEmpty()
                     if (instruction.isNotBlank()) engine.setSystemPrompt(instruction)
                 }
@@ -745,6 +754,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val PREF_ENABLE_THINKING = "enable_thinking"
         private const val PREF_LOADING_MODEL = "pocket_loading_model"
         private const val DEFAULT_SYSTEM_PROMPT =
             "Du bist Pocket AI, ein hilfreicher, direkter, datenschutzfreundlicher Offline-Assistent. Antworte in der Sprache des Benutzers."

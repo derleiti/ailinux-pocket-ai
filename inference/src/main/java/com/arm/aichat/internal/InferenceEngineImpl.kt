@@ -94,6 +94,8 @@ internal class InferenceEngineImpl private constructor(
 
     private external fun benchModel(pp: Int, tg: Int, pl: Int, nr: Int): String
 
+    private external fun setThinkingEnabledNative(enabled: Boolean)
+
     private external fun processSystemPrompt(systemPrompt: String): Int
 
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
@@ -213,6 +215,18 @@ internal class InferenceEngineImpl private constructor(
                 throw e
             }
         }
+
+    override suspend fun setThinkingMode(enabled: Boolean) = withContext(llamaDispatcher) {
+        check(_state.value is InferenceEngine.State.ModelReady) {
+            "Denkmodus kann nur bei geladenem und bereitem Modell konfiguriert werden."
+        }
+        check(_readyForSystemPrompt) {
+            "Denkmodus kann nur vor dem ersten System-Prompt eingestellt werden. Modell neu laden."
+        }
+        setThinkingEnabledNative(enabled)
+        Log.i(TAG, "GGUF thinking mode configured for new chat: $enabled")
+        Unit
+    }
 
     /**
      * Process the plain text system prompt
