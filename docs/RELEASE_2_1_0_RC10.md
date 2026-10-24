@@ -17,6 +17,9 @@ Type: debug-signature-compatible QA pre-release, NOT production Stable.
   attempted dispatch are UNCONFIRMED and NEVER automatically retried.
 - Classified errors: TENSOR_BACKEND, MODEL_KV, MEMORY, TIMEOUT,
   HTTP_AUTH, NETWORK, etc. No raw error messages in diagnostic files.
+  Dedicated MODEL_LOAD and native MODEL_RESET stages include measured durations.
+  Monotonically ordered event timestamps prevent out-of-order evidence even
+  when several asynchronous events happen in one millisecond.
 - Manual MCP tool invocations revalidate live auth, full JSON schema,
   tool annotations and arguments after consent, before one dispatch.
 - Android app-language selection (System default or manual); main UI

@@ -69,6 +69,14 @@ class PocketDiagnosticsTest {
             PocketDiagnostics.resultPhase(unsupported).second)
     }
 
+    @Test fun denseEventTimestampsPreserveCausalOrder() {
+        val one = PocketDiagnostics.nextTimestamp()
+        val two = PocketDiagnostics.nextTimestamp()
+        val three = PocketDiagnostics.nextTimestamp()
+        assertTrue(two > one)
+        assertTrue(three > two)
+    }
+
     @Test fun discoveryIsNotAConfirmedMcpServerReceipt() {
         val search = PocketDiagnostics.Event(1780000000L,"aabbccdd","ddccbbaa",
             PocketDiagnostics.Domain.MCP,PocketDiagnostics.Step.SEARCH,PocketDiagnostics.State.OK)

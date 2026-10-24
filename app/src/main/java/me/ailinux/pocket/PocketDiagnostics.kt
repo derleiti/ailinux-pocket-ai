@@ -16,6 +16,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Structured host-side event trace, NOT a log of raw MCP/model content.
@@ -140,6 +141,17 @@ internal object PocketDiagnostics {
     }.getOrNull()
 
     private val io = Dispatchers.IO.limitedParallelism(1)
+    // Persisted events may complete out of scheduling order. Each newly
+    // observed event gets a distinct monotonic timestamp, even when many
+    // events happen during the same millisecond (Android device clocks).
+    private val clock = AtomicLong(0L)
+    internal fun nextTimestamp(): Long {
+        while (true) {
+            val old = clock.get()
+            val next = maxOf(System.currentTimeMillis(), old + 1)
+            if (clock.compareAndSet(old, next)) return next
+        }
+    }
     private val scope = CoroutineScope(SupervisorJob() + io)
     private val lock = Any()
     private const val MAX_EVENTS = 240
@@ -163,6 +175,9 @@ internal object PocketDiagnostics {
             // First run.
         } catch (_: Exception) {
             // Corrupt private file must not crash inference or expose contents.
+        }
+        result.maxOfOrNull { it.time }?.let { latest ->
+            clock.getAndUpdate { maxOf(it, latest) }
         }
         cache = result
         return result
@@ -201,7 +216,7 @@ internal object PocketDiagnostics {
         check(android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
             "Never flush diagnostic files on Android UI thread"
         }
-        val event = Event(System.currentTimeMillis(), newEventId(),
+        val event = Event(nextTimestamp(), newEventId(),
             trace.takeIf { it.matches(Regex("[0-9a-f]{8}")) } ?: newTrace(),
             Domain.MCP, Step.DISPATCH, State.START,
             toolHash = fingerprint(tool))
@@ -219,7 +234,7 @@ internal object PocketDiagnostics {
         count: Int = -1, durationMs: Long = -1, code: ErrorCode = ErrorCode.NONE
     ): String {
         val id = newEventId()
-        val event = Event(System.currentTimeMillis(), id,
+        val event = Event(nextTimestamp(), id,
             trace.takeIf { it.matches(Regex("[0-9a-f]{8}")) } ?: newTrace(),
             domain, step, state, backend,
             if (tool.isNotBlank()) fingerprint(tool) else "",

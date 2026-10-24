@@ -927,6 +927,10 @@ class MainActivity : AppCompatActivity() {
         renderChatState()
         setModelLoading(true, file.name)
         setStatus("Prüfe GGUF-Architektur …")
+        diagnosticTrace = PocketDiagnostics.newTrace()
+        val modelLoadStarted = SystemClock.elapsedRealtime()
+        trace(PocketDiagnostics.Domain.GGUF, PocketDiagnostics.Step.MODEL_LOAD,
+            PocketDiagnostics.State.START)
         lifecycleScope.launch {
             var previousModelUnloaded = false
             try {
@@ -991,10 +995,15 @@ class MainActivity : AppCompatActivity() {
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
+                trace(PocketDiagnostics.Domain.GGUF, PocketDiagnostics.Step.MODEL_LOAD,
+                    PocketDiagnostics.State.OK,
+                    durationMs = SystemClock.elapsedRealtime() - modelLoadStarted)
                 setStatus("● BEREIT")
                 refreshLibrary()
                 showPage(0)
             } catch (error: Exception) {
+                failure(PocketDiagnostics.Domain.GGUF,
+                    PocketDiagnostics.Step.MODEL_LOAD, error)
                 // Preserve the previously loaded model if the preflight is rejected.
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT" else "Ladefehler")
@@ -1034,6 +1043,10 @@ class MainActivity : AppCompatActivity() {
         renderChatState()
         setModelLoading(true, file.name)
         setStatus("● LITERT · PRÜFE NPU / GPU / CPU …")
+        diagnosticTrace = PocketDiagnostics.newTrace()
+        val modelLoadStarted = SystemClock.elapsedRealtime()
+        trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD,
+            PocketDiagnostics.State.START)
         lifecycleScope.launch {
             var previousModelUnloaded = false
             try {
@@ -1088,15 +1101,20 @@ class MainActivity : AppCompatActivity() {
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
+                trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD,
+                    PocketDiagnostics.State.OK,
+                    durationMs = SystemClock.elapsedRealtime() - modelLoadStarted)
                 setStatus("● LITERT BEREIT · " + loaded.backendName)
                 refreshLibrary()
                 showPage(0)
             } catch (error: Exception) {
+                failure(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD, error)
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT"
                     else "LiteRT-LM konnte nicht gestartet werden")
                 showError("LiteRT-Modell/Backend fehlgeschlagen", error)
             } catch (error: LinkageError) {
+                failure(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD, error)
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT"
                     else "LiteRT-LM Bibliothek nicht verfügbar")
@@ -1367,6 +1385,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         busy = true
+        diagnosticTrace = PocketDiagnostics.newTrace()
+        trace(PocketDiagnostics.Domain.GGUF, PocketDiagnostics.Step.MODEL_RESET,
+            PocketDiagnostics.State.START)
         beginMcpBindingProgress()
         updateMcpBadge(active)
         renderChatState()
@@ -1385,6 +1406,9 @@ class MainActivity : AppCompatActivity() {
                 // The MCP badge becomes ACTIVE only after the complete
                 // synchronous native KV prefill returns ModelReady.
                 finishMcpBindingProgress(completed = true)
+                trace(PocketDiagnostics.Domain.GGUF, PocketDiagnostics.Step.MODEL_RESET,
+                    PocketDiagnostics.State.OK,
+                    durationMs = SystemClock.uptimeMillis() - mcpBindStartedAtMs)
                 updateMcpBadge(active)
                 setStatus("● BEREIT")
                 toast(
@@ -1394,6 +1418,8 @@ class MainActivity : AppCompatActivity() {
                         active.thinkingMode.uppercase() + " · Chatkontext neu gestartet"
                 )
             } catch (problem: Exception) {
+                failure(PocketDiagnostics.Domain.GGUF,
+                    PocketDiagnostics.Step.MODEL_RESET, problem)
                 mcpAgent.clearSessionSilently()
                 setStatus("MCP-Template-Fehler · Modell bitte neu laden")
                 showError("Native MCP-Funktionen konnten nicht eingebunden werden", problem)
