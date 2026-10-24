@@ -20,6 +20,75 @@ data class McpOAuthStart(val profile: McpProfile, val authorizationUrl: String, 
  * No implicit flow, embedded webview, app secret or bearer in a URL.
  */
 class McpOAuth(private val vault: McpTokenStore, private val http: McpHttp = McpHttp()) {
+    companion object {
+        const val DISCORD_MCP_ENDPOINT = "https://discord.ailinux.me/mcp"
+        const val DISCORD_MCP_ISSUER = "https://discord.ailinux.me"
+
+        fun isDiscordMcp(profile: McpProfile): Boolean =
+            profile.endpoint.trimEnd('/').equals(DISCORD_MCP_ENDPOINT, ignoreCase = true)
+
+        /** Drop only the stale Android public-client registration and tokens.
+         * NEVER remove Discord-account links or saved guild permissions. */
+        fun resetDiscordRegistration(original: McpProfile): McpProfile {
+            require(isDiscordMcp(original) && original.auth == McpAuth.OAUTH) {
+                "OAuth-Reparatur nur für den bekannten Discord-MCP-Endpunkt"
+            }
+            return original.copy(
+                oauthClientId = "",
+                oauthClientRegisteredAt = 0L,
+                oauthRedirect = McpRedirect.LOOPBACK,
+                oauthIssuer = DISCORD_MCP_ISSUER,
+                // Keep any scope selection the user explicitly configured.
+                // A repair must not silently increase privileges or discard a
+                // deliberate preference; the OAuth consent prompt re-approves it.
+                oauthScopes = McpSecurity.scope(original.oauthScopes)
+                    .ifBlank { "discord:read offline_access" },
+                oauthTokenEndpoint = "",
+                oauthAuthorizationEndpoint = "",
+                oauthRedirectRegistered = "",
+                oauthAccessToken = "",
+                oauthRefreshToken = "",
+                oauthExpiresAt = 0L,
+                oauthRefreshScopes = ""
+            )
+        }
+
+        fun needsFreshDiscordRegistration(profile: McpProfile, redirect: String): Boolean =
+            isDiscordMcp(profile) && profile.auth == McpAuth.OAUTH &&
+                (profile.oauthClientId.isBlank() ||
+                    (profile.oauthAccessToken.isBlank() &&
+                        (profile.oauthClientRegisteredAt <= 0L ||
+                         profile.oauthRedirectRegistered != redirect)))
+
+        fun randomBase64(length: Int): String = ByteArray(length).also {
+            SecureRandom().nextBytes(it)
+        }.let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
+
+        fun form(params: Map<String, String>): String = params.entries.joinToString("&") {
+            enc(it.key) + "=" + enc(it.value)
+        }
+
+        fun addQuery(url: String, params: Map<String, String>): String =
+            url + (if (url.contains('?')) "&" else "?") + form(params)
+
+        fun parseParams(query: String): Map<String, String> {
+            val out = linkedMapOf<String, String>()
+            if (query.isBlank()) return out
+            require(query.length <= 16000) { "OAuth-Callback zu lang" }
+            for (part in query.split("&")) {
+                val index = part.indexOf('=')
+                val k = dec(if (index < 0) part else part.substring(0, index))
+                val v = dec(if (index < 0) "" else part.substring(index + 1))
+                require(!out.containsKey(k)) { "Doppelter OAuth-Callback-Parameter" }
+                out[k] = v
+            }
+            return out
+        }
+
+        private fun enc(value: String) = URLEncoder.encode(value, StandardCharsets.UTF_8.name())
+        private fun dec(value: String) = URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+    }
+
     private data class Discovery(
         val issuer: String, val authorizationEndpoint: String, val tokenEndpoint: String,
         val registrationEndpoint: String?, val scopes: String
@@ -33,22 +102,66 @@ class McpOAuth(private val vault: McpTokenStore, private val http: McpHttp = Mcp
     fun begin(original: McpProfile): McpOAuthStart {
         require(original.auth == McpAuth.OAUTH) { "OAuth-Profil erforderlich" }
         val profile = McpSecurity.validate(original)
+        if (isDiscordMcp(profile) &&
+            profile.oauthIssuer.isNotBlank() &&
+            profile.oauthIssuer.trimEnd('/') != DISCORD_MCP_ISSUER
+        ) {
+            throw IOException(
+                "Discord OAuth verwendet einen fremden Authorization-Server. " +
+                "Unter SETUP → Discord → OAuth reparieren auswählen."
+            )
+        }
+        if (isDiscordMcp(profile) && profile.oauthRedirect != McpRedirect.LOOPBACK) {
+            throw IOException(
+                "Discord-MCP benötigt den Android-Loopback-Redirect. " +
+                "Unter SETUP → Discord → OAuth reparieren auswählen."
+            )
+        }
         val redirect = if (profile.oauthRedirect == McpRedirect.APP)
             McpSecurity.APP_REDIRECT else McpSecurity.LOOPBACK_REDIRECT
         val resource = McpSecurity.resource(profile.endpoint)
         val discovery = discover(profile, resource)
         var clientId = profile.oauthClientId.trim()
-        if (clientId.isEmpty()) {
-            val register = discovery.registrationEndpoint
-                ?: throw IOException("OAuth-Client-ID fehlt. Server bietet keine dynamische Clientregistrierung an.")
+        var registeredAt = profile.oauthClientRegisteredAt
+        // A server restart/redeployment can make a formerly stored client ID
+        // unknown. RC6 had no provenance field, so one new DCR registration
+        // is required for legacy Discord profiles without an active token.
+        // Other OAuth providers' manually configured client IDs are preserved.
+        if (clientId.isEmpty() || needsFreshDiscordRegistration(profile, redirect)) {
+            val register = discovery.registrationEndpoint ?: throw IOException(
+                "OAuth-Server bietet keine dynamische Clientregistrierung an. " +
+                    "Bitte die gültige Client-ID im Profil eintragen."
+            )
+            if (isDiscordMcp(profile) && !register.startsWith(DISCORD_MCP_ISSUER + "/")) {
+                throw IOException("Discord OAuth-Registrierung verweist auf fremden Server")
+            }
             val info = JSONObject().put("client_name", "AILinux Pocket AI")
                 .put("redirect_uris", org.json.JSONArray().put(redirect))
                 .put("token_endpoint_auth_method", "none")
                 .put("grant_types", org.json.JSONArray().put("authorization_code").put("refresh_token"))
                 .put("response_types", org.json.JSONArray().put("code"))
-            val response = http.call(register, "POST", info.toString())
-            clientId = JSONObject(response.body).optString("client_id")
-            require(clientId.isNotBlank() && clientId.length <= 500) { "Clientregistrierung lieferte keine gültige ID" }
+            val response = try {
+                http.call(register, "POST", info.toString())
+            } catch (denied: McpHttpFailure) {
+                if (denied.code == 429) throw IOException(
+                    "Discord OAuth registriert momentan zu viele Clients. " +
+                    "Bitte nicht wiederholt anmelden; später erneut versuchen.", denied)
+                throw denied
+            }
+            val body = JSONObject(response.body)
+            clientId = body.optString("client_id")
+            require(clientId.isNotBlank() && clientId.length <= 500) {
+                "Clientregistrierung lieferte keine gültige ID"
+            }
+            // RFC 7591 registration response must confirm the exact callback.
+            if (isDiscordMcp(profile)) {
+                val registered = body.optJSONArray("redirect_uris")
+                    ?: throw IOException("Discord OAuth bestätigte den Redirect nicht")
+                require((0 until registered.length()).any {
+                    registered.optString(it) == redirect
+                }) { "Discord OAuth registrierte eine andere Weiterleitungsadresse" }
+            }
+            registeredAt = System.currentTimeMillis()
         }
         val verifier = randomBase64(32)
         val challenge = Base64.getUrlEncoder().withoutPadding()
@@ -57,7 +170,8 @@ class McpOAuth(private val vault: McpTokenStore, private val http: McpHttp = Mcp
         val state = randomBase64(32)
         val scope = McpSecurity.scope(profile.oauthScopes).ifEmpty { discovery.scopes }
         val target = profile.copy(
-            oauthClientId = clientId, oauthScopes = scope,
+            oauthClientId = clientId, oauthClientRegisteredAt = registeredAt,
+            oauthScopes = scope,
             oauthIssuer = discovery.issuer,
             oauthAuthorizationEndpoint = discovery.authorizationEndpoint,
             oauthTokenEndpoint = discovery.tokenEndpoint,
@@ -262,33 +376,5 @@ class McpOAuth(private val vault: McpTokenStore, private val http: McpHttp = Mcp
         return Discovery(issuer, auth, token, registration, scopes)
     }
 
-    companion object {
-        fun randomBase64(length: Int): String = ByteArray(length).also {
-            SecureRandom().nextBytes(it)
-        }.let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
 
-        fun form(params: Map<String, String>): String = params.entries.joinToString("&") {
-            enc(it.key) + "=" + enc(it.value)
-        }
-
-        fun addQuery(url: String, params: Map<String, String>): String =
-            url + (if (url.contains('?')) "&" else "?") + form(params)
-
-        fun parseParams(query: String): Map<String, String> {
-            val out = linkedMapOf<String, String>()
-            if (query.isBlank()) return out
-            require(query.length <= 16000) { "OAuth-Callback zu lang" }
-            for (part in query.split("&")) {
-                val index = part.indexOf('=')
-                val k = dec(if (index < 0) part else part.substring(0, index))
-                val v = dec(if (index < 0) "" else part.substring(index + 1))
-                require(!out.containsKey(k)) { "Doppelter OAuth-Callback-Parameter" }
-                out[k] = v
-            }
-            return out
-        }
-
-        private fun enc(value: String) = URLEncoder.encode(value, StandardCharsets.UTF_8.name())
-        private fun dec(value: String) = URLDecoder.decode(value, StandardCharsets.UTF_8.name())
-    }
 }

@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 1.0.0-rc.6.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.7.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -598,3 +598,49 @@ Remaining external dependencies: an actual Pixel A/B tool-choice test,
 account-specific Discord server grants, production signing secrets and QA of
 the debug-to-production GGUF data migration. Android foreground downloads,
 GPU acceleration and other untested GGUF architectures remain future work.
+
+
+## RC7 - Discord OAuth client repair and remote-only MCP cleanup
+
+Observed Pixel screenshot: the Discord OAuth server displayed "Unknown OAuth
+client or redirect URI". Its production client registry contained no
+matching Pocket AI registration. Public dynamic registration accepted a new
+Android loopback callback (HTTP 201), and that registered client got a
+correct redirect to login. The server's OAuth error page has been improved
+to guide safe re-registration without reflecting unknown IDs.
+
+- Old Discord public-client IDs (from pre-RC7 profiles without provenance)
+  are automatically replaced by ONE new dynamic OAuth registration.
+- The public client registration timestamp persists in the encrypted Android
+  MCP profile to avoid repeated registrations and provider rate limits.
+- SETUP > Discord MCP > Discord OAuth reparieren resets ONLY the local
+  public-client details and old tokens, registers a fresh public client,
+  and opens the browser consent flow. Existing online guild and voice grants
+  remain unaffected. The owner chooses when to run this destructive token
+  reset; the UI asks for confirmation.
+- Android callback uses http://127.0.0.1:18467/oauth/callback and is checked
+  against the server's returned registered redirect before launching Chrome.
+  The AILinux issuer is pinned to https://discord.ailinux.me for this preset.
+- Explicitly chosen OAuth scopes are preserved, without silently increasing
+  permissions. Other OAuth providers still support manually chosen client IDs.
+- When the model-agent is off, the header now says AGENT AUS, not MCP AUS.
+  The actual OAuth connection state is shown separately in SETUP.
+
+**Pixel test**: Install RC7 OVER RC6 (same developer test signer), open
+SETUP > MCP-Verbindungen > Discord MCP > Discord OAuth reparieren, authorize
+the AILinux login/consent in Chrome, return via the local callback and run
+/mcp quick discord-status, approving the actual tool. Do not uninstall the
+app or delete your GGUF to repair login. On-device completion still needs
+a user-controlled Pixel QA run; backend and fake Android tests are not proof
+of a successful live browser callback.
+
+**Zombie-PC cleanup**: The legacy local Discord Voice MCP service was
+stopped and its user unit and two local Discord MCP source installations
+deleted from zombie-pc. TriForce stayed active, and the separate online
+https://discord.ailinux.me/mcp remained reachable. The source may still be
+recovered from the Git history if explicitly reinstalled.
+
+**Separate bot token issue**: Discord returned 401 for the protected bot
+worker token. Reinstalling the bot via Discord does not rotate its token
+on the Hetzner host. The worker's token must be securely provisioned on
+the server (never shared over chat) before actual bot actions resume.

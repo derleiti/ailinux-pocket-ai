@@ -156,6 +156,17 @@ class McpSettingsUi(
                 else button("Redirects") { showInfo(p) },
                 button("Löschen") { delete(p) }
             ))
+            if (McpOAuth.isDiscordMcp(p) && p.auth == McpAuth.OAUTH) {
+                card.addView(label(
+                    "Discord MCP wird ausschließlich online verbunden. " +
+                    "Wenn der Browser „Unknown OAuth client or redirect URI“ zeigt, " +
+                    "erneuert der Reparaturknopf die lokale öffentliche Client-ID. " +
+                    "Deine Discord-Serverfreigaben bleiben bestehen.", 11f
+                ))
+                card.addView(button("Discord OAuth reparieren") {
+                    repairDiscordOAuth(p)
+                })
+            }
         }
     }
 
@@ -331,6 +342,43 @@ class McpSettingsUi(
             ))
             render()
         } catch (e: Exception) { showError("Trennen fehlgeschlagen", e) }
+    }
+
+    /** User-confirmed recovery from an unknown or migrated OAuth client ID.
+     * Only the local public-client credentials are reset, NEVER server grants. */
+    private fun repairDiscordOAuth(profile: McpProfile) {
+        if (working) return
+        if (!McpOAuth.isDiscordMcp(profile) || profile.auth != McpAuth.OAUTH) {
+            showError("OAuth-Reparatur", IllegalArgumentException(
+                "Nur für https://discord.ailinux.me/mcp verfügbar"))
+            return
+        }
+        AlertDialog.Builder(activity)
+            .setTitle("Discord OAuth neu registrieren?")
+            .setMessage(
+                "Pocket AI ersetzt die alte lokale OAuth-Client-ID " +
+                "durch eine neu beim ONLINE-Server registrierte ID. " +
+                "Bisherige Pocket-Zugangstoken werden verworfen. " +
+                "Deine Discord-Kontoverknüpfung und Serverrechte bleiben " +
+                "unverändert.\n\nDanach öffnet sich die AILinux-Anmeldung."
+            )
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("OAuth reparieren") { _, _ ->
+                try {
+                    val fresh = vault.get(profile.id)
+                        ?: throw IllegalStateException("Discord-Profil wurde entfernt.")
+                    require(McpOAuth.isDiscordMcp(fresh) && fresh.auth == McpAuth.OAUTH) {
+                        "Discord-Profil wurde geändert; Reparatur abgebrochen."
+                    }
+                    val reset = McpOAuth.resetDiscordRegistration(fresh)
+                    vault.upsert(reset)
+                    render()
+                    authorize(reset)
+                } catch (problem: Exception) {
+                    showError("Discord OAuth-Reparatur", problem)
+                }
+            }
+            .show()
     }
 
     private fun inspect(p: McpProfile, showTools: Boolean) {

@@ -64,7 +64,7 @@ class McpHealthCheckTest {
     @Test fun theMcpAgentChipNoLongerConfusesInactiveWithDisconnected() {
         val layout = File("src/main/res/layout/activity_main.xml").readText()
         val activity = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
-        assertTrue(layout.contains("●  MCP AUS"))
+        assertTrue(layout.contains("●  AGENT AUS"))
         assertFalse(layout.contains("●  OFFLINE"))
         assertTrue(activity.contains("updateMcpBadge(null)"))
         assertTrue(activity.contains("MCP-Agentenmodus ausgeschaltet"))

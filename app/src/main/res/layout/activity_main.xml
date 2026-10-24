@@ -24,7 +24,7 @@
         </LinearLayout>
         <TextView android:id="@+id/onlineChip" android:layout_width="wrap_content"
             android:layout_height="wrap_content" android:padding="9dp"
-            android:text="●  MCP AUS" android:letterSpacing=".06" android:textSize="10sp"
+            android:text="●  AGENT AUS" android:letterSpacing=".06" android:textSize="10sp"
             android:textStyle="bold" android:textColor="@color/primary"
             android:background="@drawable/bg_panel"/>
     </LinearLayout>

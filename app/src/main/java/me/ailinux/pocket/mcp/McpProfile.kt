@@ -44,7 +44,10 @@ data class McpProfile(
     val oauthRefreshToken: String = "",
     val oauthExpiresAt: Long = 0L,
     val oauthRefreshScopes: String = "",
-    val oauthRedirectRegistered: String = ""
+    val oauthRedirectRegistered: String = "",
+    // Added in RC7: 0 means a legacy/preset client ID with unknown provenance.
+    // Needed to repair stale server registrations after a backend migration.
+    val oauthClientRegisteredAt: Long = 0L
 ) {
     fun publicSummary(): String = title + " · " + endpoint + " · " + auth.title
 
@@ -64,6 +67,7 @@ data class McpProfile(
         .put("oauthExpiresAt", oauthExpiresAt)
         .put("oauthRefreshScopes", oauthRefreshScopes)
         .put("oauthRedirectRegistered", oauthRedirectRegistered)
+        .put("oauthClientRegisteredAt", oauthClientRegisteredAt)
 
     companion object {
         fun fromJson(j: JSONObject) = McpProfile(
@@ -87,7 +91,8 @@ data class McpProfile(
             oauthRefreshToken = j.optString("oauthRefreshToken"),
             oauthExpiresAt = j.optLong("oauthExpiresAt"),
             oauthRefreshScopes = j.optString("oauthRefreshScopes"),
-            oauthRedirectRegistered = j.optString("oauthRedirectRegistered")
+            oauthRedirectRegistered = j.optString("oauthRedirectRegistered"),
+            oauthClientRegisteredAt = j.optLong("oauthClientRegisteredAt", 0L)
         )
 
         private inline fun <reified T : Enum<T>> enumOr(fallback: T, value: String): T =

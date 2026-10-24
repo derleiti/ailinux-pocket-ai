@@ -93,3 +93,21 @@ Foreground/WorkManager multi-gigabyte downloads that survive Android process
 termination are NOT implemented. More GGUF architectures, model-loading
 benchmarks and accelerated GPU inference remain experimental. Neither area
 should be advertised as completed just because the ARM64 CPU RC build passes.
+
+
+## RC7: Discord OAuth stale client recovery
+
+1. Install same-signer RC7 over RC6 (do not uninstall).
+2. SETUP > MCP-Verbindungen > Discord MCP > Discord OAuth reparieren.
+3. Confirm local OAuth reset; existing online server grants remain.
+4. Complete AILinux authentication and approve the intended MCP scopes.
+5. Chrome returns to the Android local loopback OAuth callback.
+6. In SETUP, confirm OAuth: Token gespeichert, and test a real approved
+   /mcp quick discord-status call.
+7. The banner AGENT AUS only concerns native local GGUF tool planning;
+   it does NOT report OAuth login state.
+8. Discord bot token HTTP 401 is an independent server-side issue.
+
+Do not expose OAuth authorization codes, tokens or secret credentials in
+chat or logs. Pixel browser callback completion has not yet been verified
+by the host-side automated tests.

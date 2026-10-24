@@ -502,7 +502,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateMcpBadge(active: McpAgentSession?) {
         val chip = findViewById<TextView>(R.id.onlineChip)
         val button = findViewById<MaterialButton>(R.id.chatMcpButton)
-        chip.text = if (active == null) "●  MCP AUS" else
+        chip.text = if (active == null) "●  AGENT AUS" else
             "●  MCP " + active.thinkingMode.uppercase()
         chip.contentDescription = if (active == null) {
             "MCP-Agentenmodus ausgeschaltet. Direkte MCP-Abfragen sind weiterhin möglich."
