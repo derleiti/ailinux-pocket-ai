@@ -88,7 +88,7 @@ object McpOnDemandDiscovery {
             if (field !in setOf("url","uri","target_url")) return null
             val prop = schema.optJSONObject("properties")?.optJSONObject(field) ?: return null
             if (prop.optString("type") != "string") return null
-            val url = webUrl.find(request)?.value?.trimEnd('.',',',';') ?: return null
+            val url = webUrl.find(request)?.value?.trimEnd('.', ',', ';', ')', ']', '}') ?: return null
             args.put(field,url)
         }
         val detail = run.details(id)
