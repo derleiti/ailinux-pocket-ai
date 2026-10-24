@@ -17,7 +17,7 @@ object McpToolCatalog {
     private val tools = Regex("\\b(?:tools?|werkzeuge?|funktionen?|befehle?)\\b",
         RegexOption.IGNORE_CASE)
     private val listing = Regex(
-        "\\b(?:welche|welcher|liste|list|anzeigen|zeig|zeige|zeigen|auflisten|verfügbar|vorhanden|gibt|stehen|hast|übersicht|show|available|what|which)\\b",
+        "\\b(?:welche|welcher|liste|list|anzeigen|zeig|zeige|zeigen|auflisten|verfügbar|vorhanden|gibt|stehen|hast|übersicht|show|available|what|which|check|prüf\\w*|pruef\\w*|teste?|kontrollier\\w*|inspect|verify)\\b",
         RegexOption.IGNORE_CASE
     )
 

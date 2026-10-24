@@ -24,7 +24,11 @@ class McpToolCatalogTest {
             "Wie viele MCP Tools gibt es?" to "",
             "/mcp tools" to "",
             "/mcp tools discord" to "discord",
-            "show available Discord MCP tools" to "discord"
+            "show available Discord MCP tools" to "discord",
+            "mcp tool check" to "",
+            "check mcp tools" to "",
+            "prüfe MCP Tools" to "",
+            "teste Discord MCP Tools" to "discord"
         )
         for ((message, expected) in cases) {
             assertEquals(message, expected, McpToolCatalog.requestedFilter(message))

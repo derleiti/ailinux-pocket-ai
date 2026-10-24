@@ -28,7 +28,9 @@ data class McpAgentSession(
     val serverName: String,
     val tools: List<McpTool>,
     // Native Spark GGUF template thinking mode; default LOW for MCP planning.
-    val thinkingMode: String = "low"
+    val thinkingMode: String = "low",
+    val progressiveSources: List<McpProgressiveBridge.Source> = emptyList(),
+    val progressiveCreatedAtMs: Long = System.currentTimeMillis()
 )
 
 class McpAgentUi(
@@ -52,24 +54,31 @@ class McpAgentUi(
         openQuickHelp: () -> Unit
     ) {
         val options = if (session != null)
-            arrayOf("KI + MCP neu verbinden", "MCP-Tools manuell",
-                "MCP Health-Check (echte Serverprüfung)",
+            arrayOf("KI + MCP manuell neu verbinden",
+                "AUTO-BRIDGE · Tools automatisch finden (RC11)",
+                "MCP-Tools manuell", "MCP Health-Check (echte Serverprüfung)",
                 "MCP Schnellbefehle (ohne Spark)", "KI + MCP ausschalten")
-        else arrayOf("KI + MCP aktivieren", "MCP-Tools manuell",
-            "MCP Health-Check (echte Serverprüfung)",
+        else arrayOf("KI + MCP manuell aktivieren",
+            "AUTO-BRIDGE · Tools automatisch finden (RC11)",
+            "MCP-Tools manuell", "MCP Health-Check (echte Serverprüfung)",
             "MCP Schnellbefehle (ohne Spark)")
-        val name = session?.let { "\nAktiv: " + it.serverName + " · " + it.tools.size + " Tools" }
-            ?: "\nDein Modell arbeitet aktuell ohne automatisches MCP-Planning."
+        val name = session?.let {
+            "\nAktiv: " + it.serverName + " · " +
+                if (it.progressiveSources.isNotEmpty())
+                    "Auto-Discovery über " + it.progressiveSources.size + " Server"
+                else it.tools.size.toString() + " ausgewählte Tools"
+        } ?: "\nDein Modell arbeitet aktuell ohne automatisches MCP-Planning."
         AlertDialog.Builder(activity)
             .setTitle("Pocket AI · MCP-Bridge")
             .setMessage("Das Modell darf ein Tool vorschlagen. Jeder Aufruf muss von dir bestätigt werden." + name)
             .setItems(options) { _, index ->
                 when (index) {
                     0 -> chooseServer()
-                    1 -> openManualTools()
-                    2 -> openHealthCheck()
-                    3 -> openQuickHelp()
-                    4 -> {
+                    1 -> chooseAutoServers()
+                    2 -> openManualTools()
+                    3 -> openHealthCheck()
+                    4 -> openQuickHelp()
+                    5 -> {
                         session = null
                         onActiveChanged(null)
                         toast("KI + MCP ausgeschaltet")
@@ -77,6 +86,105 @@ class McpAgentUi(
                 }
             }
             .setNegativeButton("Schließen", null).show()
+    }
+
+    /**
+     * Explicit opt-in to one or several credential-scoped tool catalogues.
+     * No intermediary cloud MCP server is needed; the phone uses the saved
+     * OAuth credentials for each original server.
+     */
+    private fun chooseAutoServers() {
+        if (selecting) { toast("MCP-Verbindung läuft bereits"); return }
+        val profiles = runCatching { vault.list() }.getOrElse {
+            error("MCP-Tresor", it); return
+        }
+        if (profiles.isEmpty()) {
+            AlertDialog.Builder(activity)
+                .setTitle("Kein MCP-Profil")
+                .setMessage("Unter SETUP zuerst TriForce oder Discord MCP hinzufügen und anmelden.")
+                .setPositiveButton("OK", null).show()
+            return
+        }
+        val checked = BooleanArray(profiles.size) { index ->
+            val p = profiles[index]
+            p.auth != McpAuth.OAUTH ||
+                p.oauthAccessToken.isNotBlank() || p.oauthRefreshToken.isNotBlank()
+        }
+        AlertDialog.Builder(activity)
+            .setTitle("Pocket AI · MCP AUTO-BRIDGE RC11")
+            .setMessage(
+                "Wähle bis zu 4 Server. Die App prüft deren echte tools/list " +
+                "und gibt Spark nur drei lokale Such-/Detail-/Aufruf-Werkzeuge. " +
+                "Alle echten MCP-Aktionen brauchen deine einmalige Freigabe. " +
+                "OAuth-Zugangsdaten bleiben ausschließlich im Android-Tresor."
+            )
+            .setMultiChoiceItems(
+                profiles.map { it.title + " · " + it.endpoint }.toTypedArray(),
+                checked
+            ) { _, which, value -> checked[which] = value }
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Online-Werkzeuge verbinden") { _, _ ->
+                val chosen = profiles.filterIndexed { index, _ -> checked[index] }
+                if (chosen.isEmpty() || chosen.size > McpProgressiveBridge.MAX_SERVERS) {
+                    error("Auto-Bridge", IllegalArgumentException(
+                        "Bitte mindestens einen und höchstens vier Server auswählen."))
+                    return@setPositiveButton
+                }
+                selecting = true
+                activity.lifecycleScope.launch {
+                    try {
+                        val sources = withContext(Dispatchers.IO) {
+                            chosen.mapIndexed { index, old ->
+                                val fresh = vault.get(old.id)
+                                    ?: error("MCP-Profil wurde entfernt")
+                                require(fresh.endpoint == old.endpoint &&
+                                    fresh.auth == old.auth &&
+                                    fresh.oauthClientId == old.oauthClientId) {
+                                    "MCP-Profil während der Serverauswahl geändert."
+                                }
+                                require(fresh.auth != McpAuth.OAUTH ||
+                                    fresh.oauthAccessToken.isNotBlank() ||
+                                    fresh.oauthRefreshToken.isNotBlank()) {
+                                    "OAuth-Anmeldung fehlt für " + fresh.title
+                                }
+                                val authorized = oauth.refreshIfNeeded(fresh)
+                                val live = McpConnection.inspect(authorized)
+                                McpProgressiveBridge.Source(
+                                    id = "s" + (index + 1),
+                                    profileId = fresh.id,
+                                    endpoint = fresh.endpoint,
+                                    title = fresh.title,
+                                    tools = live.tools.distinctBy { it.name }.take(250),
+                                    auth = fresh.auth,
+                                    publicOauthClientId = fresh.oauthClientId
+                                )
+                            }
+                        }
+                        val runtime = McpProgressiveBridge.Run(sources)
+                        require(runtime.totalTools > 0) {
+                            "Keine geeigneten, aktuell zugelassenen MCP-Werkzeuge gefunden."
+                        }
+                        val meta = McpProgressiveBridge.functions()
+                        McpAgentBridge.nativeToolsJson(meta)
+                        session = McpAgentSession(
+                            profileId = sources.first().profileId,
+                            endpoint = sources.first().endpoint,
+                            serverName = "Auto-Bridge · " + sources.size + " Server",
+                            tools = meta,
+                            thinkingMode = "low",
+                            progressiveSources = sources
+                        )
+                        onActiveChanged(session)
+                        toast("AUTO-Bridge: " + runtime.totalTools +
+                            " Tools entdeckt; 3 Meta-Werkzeuge an Spark gebunden.")
+                    } catch (problem: Exception) {
+                        error("Auto-Bridge konnte Server nicht prüfen", problem)
+                    } finally {
+                        selecting = false
+                    }
+                }
+            }
+            .show()
     }
 
     private fun chooseServer() {
@@ -247,6 +355,83 @@ class McpAgentUi(
 
     private fun dp(value: Int): Int =
         (value * activity.resources.displayMetrics.density + 0.5f).toInt()
+
+    /**
+     * Consent shows the actual tool, endpoint and exact arguments, not the
+     * synthetic mcp_call_tool name. Never remember approvals.
+     */
+    suspend fun requestAutoApproval(
+        active: McpAgentSession, plan: McpProgressiveBridge.RemoteCall
+    ): Boolean = withContext(Dispatchers.Main) {
+        suspendCancellableCoroutine { continuation ->
+            val source = active.progressiveSources.singleOrNull {
+                it.id == plan.source.id && it.profileId == plan.source.profileId &&
+                    it.endpoint == plan.source.endpoint
+            }
+            if (session != active || source == null ||
+                activity.isFinishing || activity.isDestroyed) {
+                continuation.resume(false)
+                return@suspendCancellableCoroutine
+            }
+            val dialog = AlertDialog.Builder(activity)
+                .setTitle("Echten MCP-Aufruf einmal freigeben?")
+                .setMessage(
+                    "Server: " + source.title +
+                    "\nEndpunkt: " + source.endpoint +
+                    "\nWerkzeug: " + plan.tool.name +
+                    "\nParameter: " + plan.arguments.toString(2).take(3200) +
+                    "\n\nDieses Werkzeug kann Serverdaten ändern. " +
+                    "Pocket AI führt höchstens einen externen Aufruf aus " +
+                    "und prüft vorher noch einmal das Live-Schema."
+                )
+                .setNegativeButton("Ablehnen") { _, _ ->
+                    if (continuation.isActive) continuation.resume(false)
+                }
+                .setPositiveButton("Einmal ausführen") { _, _ ->
+                    if (continuation.isActive) continuation.resume(true)
+                }
+                .setOnCancelListener {
+                    if (continuation.isActive) continuation.resume(false)
+                }
+                .create()
+            continuation.invokeOnCancellation { dialog.dismiss() }
+            dialog.show()
+        }
+    }
+
+    /**
+     * Single dispatch after consent: live tools/list and auth are rechecked.
+     * No automatic retries on failure or ambiguous network results.
+     */
+    suspend fun executeAuto(
+        active: McpAgentSession, plan: McpProgressiveBridge.RemoteCall
+    ): JSONObject = withContext(Dispatchers.IO) {
+        check(session == active) { "Auto-Bridge nicht mehr aktiv" }
+        val source = active.progressiveSources.singleOrNull {
+            it.id == plan.source.id && it.profileId == plan.source.profileId &&
+                it.endpoint == plan.source.endpoint
+        } ?: throw IllegalStateException("Unbekannter Auto-Bridge-Server")
+        val fresh = vault.get(source.profileId)
+            ?: error("MCP-Profil wurde entfernt")
+        check(fresh.endpoint == source.endpoint &&
+            fresh.auth == source.auth &&
+            fresh.oauthClientId == source.publicOauthClientId) {
+            "MCP-Server/Anmeldung hat sich nach Freigabe geändert"
+        }
+        val authorized = oauth.refreshIfNeeded(fresh)
+        val current = McpConnection.inspect(authorized).tools
+            .singleOrNull { it.name == plan.tool.name }
+            ?: error("MCP-Werkzeug existiert nicht mehr")
+        check(current.description == plan.tool.description &&
+            McpToolSchema.equivalent(current.schema, plan.tool.schema)) {
+            "MCP-Werkzeugdefinition geändert. Auto-Bridge bitte neu verbinden."
+        }
+        McpToolSchema.validate(current.schema, plan.arguments)?.let {
+            throw IllegalArgumentException("Aktuelle MCP-Argumentprüfung: " + it)
+        }
+        // No second try, downgrade or automatic fallback after dispatch.
+        McpConnection.callTool(authorized, current, plan.arguments)
+    }
 
     /** The user must see and approve the exact server, tool and arguments. */
     suspend fun requestApproval(active: McpAgentSession, proposal: McpAgentBridge.Decision.Proposed): Boolean =

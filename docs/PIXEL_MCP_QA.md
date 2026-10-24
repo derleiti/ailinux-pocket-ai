@@ -159,3 +159,30 @@ cases (examples, hypothetical statements and honest lack-of-access replies).
   gemma4.context_length must be reported without modifying model files.
 - Android process exit code 10 appears as a user-requested stop, not a
   native crash.
+
+
+## RC11 - Progressive MCP model toolbridge
+
+1. Update RC10 to RC11 in place (same debug signer); do NOT uninstall.
+2. Load Spark-X2.6 and choose CHAT -> MCP -> AUTO-BRIDGE.
+3. Select up to four profiles, including both TriForce and Discord when
+   already signed in. Confirm that header reads MCP AUTO LOW.
+4. Ask Brumo to find Discord MCP tools; expect a real local search result
+   grounded in the selected authorized MCP tools/list inventories.
+5. Ask for a Discord connection status via the actual tool. The model
+   should search, request tool details, then propose a real call.
+6. The approval dialog MUST show the REAL selected Discord endpoint,
+   tool name and JSON arguments, not merely the synthetic mcp_call_tool.
+7. Reject once: no real call, and the native context must recover.
+8. Approve a read-only status tool once: verify the original MCP receipt
+   before the separately labeled native model summary.
+9. Revoke grants, change schemas, force timeout, or test malformed JSON.
+   No silent retry, hidden extra calls, made-up results or authorizations.
+10. When the agent is OFF, enter "mcp tool check" to verify direct
+    deterministic tools/list bypasses GGUF generation.
+11. Check outdated catalogue after 10 minutes, duplicate names from
+    TriForce/Discord, unknown tools, input_required and server isError.
+12. Test normal chat after interruption: no leftover native tool tag.
+
+Real device, Chrome OAuth and live model multi-step QA are still required:
+JVM and host simulation cannot confirm those on-device interactions.

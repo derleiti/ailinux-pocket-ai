@@ -140,6 +140,79 @@ int main(int argc, char ** argv) {
             "Spark LOW thinking tool response rewrote the prior transcript");
     require(lowTool.find("<tool_response>") != std::string::npos,
             "Spark LOW thinking missing native tool response");
+    // RC11 progressive discovery: the phone binds exactly THREE local
+    // meta-functions. A full search -> details -> one remote call sequence
+    // must preserve every prior decoded Jinja/KV prefix in Thinking LOW.
+    const auto metaDefs = common_json::parse(R"([
+        {"type":"function","function":{
+            "name":"mcp_search_tools",
+            "description":"Search actual MCP tools/list",
+            "parameters":{"type":"object","properties":{
+                "query":{"type":"string"}},"required":["query"]}
+        }},
+        {"type":"function","function":{
+            "name":"mcp_get_tool_details",
+            "description":"Read previously discovered schema",
+            "parameters":{"type":"object","properties":{
+                "tool_id":{"type":"string"}},"required":["tool_id"]}
+        }},
+        {"type":"function","function":{
+            "name":"mcp_call_tool",
+            "description":"Propose one user-approved actual MCP call",
+            "parameters":{"type":"object","properties":{
+                "tool_id":{"type":"string"},
+                "arguments_json":{"type":"string"}},"required":["tool_id","arguments_json"]}
+        }}
+    ])");
+    const auto metaTools = common_chat_tools_parse_oaicompat(metaDefs);
+    require(metaTools.size() == 3, "Spark failed to bind exactly three RC11 meta-functions");
+    const auto boundMeta = render(templ.get(), {system}, metaTools, false, "low");
+    require(boundMeta.find("mcp_search_tools") != std::string::npos &&
+            boundMeta.find("mcp_get_tool_details") != std::string::npos &&
+            boundMeta.find("mcp_call_tool") != std::string::npos,
+            "Missing progressive discovery tools in Spark Jinja");
+    require(boundMeta.find("discord_connection_status") == std::string::npos,
+            "Actual remote tool catalogue was incorrectly dumped into GGUF");
+    std::vector<common_chat_msg> progressive{system, user};
+    for (const auto & entry : {
+        std::pair<std::string, std::string>{
+            "<tool_call>mcp_search_tools<arg_key>query</arg_key><arg_value>Discord status</arg_value></tool_call>",
+            R"({"isError":false,"content":[{"type":"text","text":"s2/discord_connection_status"}]})"
+        },
+        std::pair<std::string, std::string>{
+            "<tool_call>mcp_get_tool_details<arg_key>tool_id</arg_key><arg_value>s2/discord_connection_status</arg_value></tool_call>",
+            R"({"isError":false,"content":[{"type":"text","text":"inputSchema: {}"}]})"
+        },
+        std::pair<std::string, std::string>{
+            "<tool_call>mcp_call_tool<arg_key>tool_id</arg_key><arg_value>s2/discord_connection_status</arg_value><arg_key>arguments_json</arg_key><arg_value>{}</arg_value></tool_call>",
+            R"({"isError":false,"content":[{"type":"text","text":"linked true"}]})"
+        }
+    }) {
+        common_chat_msg nativeMetaCall;
+        nativeMetaCall.role = "assistant";
+        nativeMetaCall.content = entry.first;
+        nativeMetaCall.reasoning_content = "Read and validate authentic MCP catalogue data.";
+        progressive.push_back(nativeMetaCall);
+        const auto prefix = render(templ.get(), progressive, metaTools, false, "low");
+
+        common_chat_msg nativeMetaResult;
+        nativeMetaResult.role = "tool";
+        nativeMetaResult.content = entry.second;
+        progressive.push_back(nativeMetaResult);
+        const auto continuation = render(templ.get(), progressive, metaTools, true, "low");
+        require(continuation.compare(0, prefix.size(), prefix) == 0,
+                "Progressive tool-response step rewrote native Jinja KV prefix");
+        require(continuation.find("<tool_response>") != std::string::npos,
+                "Progressive local tool result lost native TOOL role");
+    }
+    const auto beforeSummary = render(templ.get(), progressive, metaTools, false, "low");
+    common_chat_msg progressiveFinal;
+    progressiveFinal.role = "assistant";
+    progressiveFinal.content = "Discord meldet verknuepft.";
+    progressive.push_back(progressiveFinal);
+    const auto withSummary = render(templ.get(), progressive, metaTools, false, "low");
+    require(withSummary.compare(0, beforeSummary.size(), beforeSummary) == 0,
+            "Final progressive summary damaged native Jinja KV prefix");
     const auto highSystem = render(templ.get(), {system}, tools, false, "high");
     require(highSystem.find("thinking_effort=high") != std::string::npos,
             "Spark HIGH mode was not set correctly");
@@ -150,4 +223,5 @@ int main(int argc, char ** argv) {
     std::cout << "PASS thinking off; repeated Jinja prompt prefix stable\n";
     std::cout << "PASS tools disappear when native tool binding is disabled\n";
     std::cout << "PASS real MCP result rendered as native TOOL role with stable Jinja KV prefix\n";
+    std::cout << "PASS RC11 progressive search/details/call with native LOW Jinja KV prefix\n";
 }

@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 1.0.0-rc.10.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.11.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -682,3 +682,44 @@ New fail-closed direct route:
 RC8 still requires on-device QA for the original Pixel browser OAuth
 callback; the tests and desktop host cannot claim otherwise. The separate
 remote Discord MCP OAuth fix from RC7 is unaffected.
+
+
+## RC11 - Progressive Tool Discovery
+
+Pocket AI RC11 adds a model-controlled MCP Auto-Bridge on top of RC10's
+native Spark-X2.6 assistant / tool / assistant Jinja support.
+
+- Load a GGUF model, then open CHAT -> MCP -> AUTO-BRIDGE.
+- Select up to four existing authenticated online MCP server profiles
+  (TriForce / Discord), using the encrypted Android profile vault.
+- The bridge retrieves each selected profile's actual account-specific
+  MCP tools/list response. Nothing is uploaded to a new MCP server.
+- Spark sees just THREE local functions:
+  mcp_search_tools(query, limit?),
+  mcp_get_tool_details(tool_id),
+  mcp_call_tool(tool_id, arguments_json).
+- Namespaced tool IDs distinguish same-name tools on different servers.
+  Search results and schemas are bounded, local and session-scoped.
+- The actual remote call requires search and details first, a clear
+  user confirmation with endpoint/name/arguments, live re-discovery and
+  revalidation of the exact current schema, then at most ONE tools/call.
+- The real server receipt is shown BEFORE native role=tool model feedback.
+  On denial, cancellation, timeout or incomplete tool calls the local
+  llama.cpp tool turn is reset instead of falsely claiming success.
+- The catalogue expires after ten minutes. Auth and scope remain per
+  original server profile, not per-model or globally cached credentials.
+- Direct natural commands such as "mcp tool check" and "check mcp tools"
+  now use real tools/list when the MCP agent is OFF.
+- Existing manual MCP tool selection and direct quick commands continue.
+
+This is model -> server-tool integration, NOT a remote inference endpoint
+or new background service on the Pixel.
+
+References:
+https://modelcontextprotocol.io/specification/2026-07-28/server/tools
+https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/docs/2026-07-28/develop/clients/client-best-practices.mdx
+https://github.com/ggml-org/llama.cpp/blob/master/docs/function-calling.md
+
+No Pixel Android debug device is connected in the build environment.
+Automated host/JVM tests cannot prove model latency or real on-device
+multi-step native tool calling or OAuth consent; see the QA guide.

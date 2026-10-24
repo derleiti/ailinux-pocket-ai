@@ -20,6 +20,8 @@ import me.ailinux.pocket.mcp.McpHealthCheck
 import me.ailinux.pocket.mcp.McpLogCheck
 import me.ailinux.pocket.mcp.McpQuickActions
 import me.ailinux.pocket.mcp.McpToolFeedback
+import me.ailinux.pocket.mcp.McpProgressiveBridge
+import me.ailinux.pocket.mcp.McpTool
 import me.ailinux.pocket.mcp.McpVault
 import me.ailinux.pocket.mcp.McpProfile
 import me.ailinux.pocket.mcp.McpAuth
@@ -51,6 +53,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import org.json.JSONObject
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -537,6 +540,22 @@ class MainActivity : AppCompatActivity() {
             "ein echtes Werkzeugresultat ihren Erfolg bestätigt. " +
             "Eine reine Modellantwort beweist niemals Discord- oder Serverzugriff."
         if (active == null) return root
+        if (active.progressiveSources.isNotEmpty()) {
+            return root + "\n" +
+                "Du hast genau DREI lokale Meta-Werkzeuge: " +
+                "mcp_search_tools, mcp_get_tool_details und mcp_call_tool. " +
+                "Wenn Nutzer nach tatsächlichen MCP-Tools, Serverstatus, Discord, " +
+                "Suche oder anderen aktuellen externen Informationen fragen, " +
+                "rufe ZUERST mcp_search_tools mit einem passenden Suchwort auf. " +
+                "Nutze danach mcp_get_tool_details mit einem echten tool_id-Treffer. " +
+                "Erst dann darfst du mcp_call_tool mit der exakten tool_id und " +
+                "arguments_json als JSON-Objekt-STRING vorschlagen, z.B. {}. " +
+                "Suche und Details führen KEINE externen Aktionen aus. " +
+                "Jeder reale Aufruf braucht eine separate Nutzerbestätigung. " +
+                "Es ist höchstens EIN echter Aufruf pro Anfrage erlaubt. " +
+                "Antworte nach der Toolantwort auf Basis der echten Daten. " +
+                "Behaupte niemals einen Servererfolg ohne Werkzeugbeleg."
+        }
         // Spark's Jinja template supplies the REAL function declarations in
         // its SYSTEM block. This text is policy only, not the tool catalogue.
         return root + "\n" +
@@ -569,7 +588,9 @@ class MainActivity : AppCompatActivity() {
         val chip = findViewById<TextView>(R.id.onlineChip)
         val button = findViewById<MaterialButton>(R.id.chatMcpButton)
         chip.text = if (active == null) "●  AGENT AUS" else
-            "●  MCP " + active.thinkingMode.uppercase()
+            if (active.progressiveSources.isNotEmpty())
+                "●  MCP AUTO " + active.thinkingMode.uppercase()
+            else "●  MCP " + active.thinkingMode.uppercase()
         chip.contentDescription = if (active == null) {
             "MCP-Agentenmodus ausgeschaltet. Direkte MCP-Abfragen sind weiterhin möglich."
         } else {
@@ -1050,6 +1071,219 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * RC11 native progressive MCP orchestration: three local, bounded
+     * model-visible meta-functions and at most ONE real server tools/call.
+     *
+     * All terminal data and failures are shown as separate evidence.
+     * The native llama.cpp tool-role is continued only from a genuine
+     * assistant <tool_call>. JSON fallback cannot spoof a native turn.
+     */
+    private suspend fun runProgressiveToolbridge(
+        active: McpAgentSession,
+        firstModelOutput: String,
+        request: String,
+        answer: ChatMessage,
+        answerIndex: Int
+    ): Boolean {
+        val runtime = McpProgressiveBridge.Run(
+            active.progressiveSources, active.progressiveCreatedAtMs
+        )
+        var modelOutput = firstModelOutput
+        var serverResult: JSONObject? = null
+        var hadSearch = false
+        var hadRealCall = false
+
+        fun showEvidence(message: String) {
+            messages.add(ChatMessage(false, message))
+            chatAdapter.notifyItemInserted(messages.lastIndex)
+            messagesView.scrollToPosition(messages.lastIndex)
+        }
+
+        suspend fun deliver(tool: McpTool, result: JSONObject): String {
+            val payload = McpToolFeedback.nativePayload(tool, result)
+            val continuation = StringBuilder()
+            setStatus("● AUTO-BRIDGE · NATIVES TOOLERGEBNIS …")
+            withContext(Dispatchers.Default) {
+                engine.sendToolResult(tool.name, payload, 256).collect {
+                    continuation.append(it)
+                }
+            }
+            return continuation.toString()
+        }
+
+        for (step in 0 until McpProgressiveBridge.MAX_STEPS) {
+            check(mcpAgent.current() == active) {
+                "MCP-Agent wurde während der Auto-Bridge-Sitzung deaktiviert."
+            }
+            when (val decision = McpAgentBridge.parse(
+                modelOutput, active.tools,
+                thinkingEnabled = active.thinkingMode != "off"
+            )) {
+                is McpAgentBridge.Decision.Invalid -> {
+                    answer.content = "⚠️ Auto-Bridge: Kein gültiger Toolaufruf. " +
+                        decision.reason + "\nKeine ungeprüfte MCP-Aktion ausgeführt."
+                    chatAdapter.notifyItemChanged(answerIndex)
+                    return false
+                }
+                is McpAgentBridge.Decision.Answer -> {
+                    val response = decision.text.ifBlank { "Keine Modellantwort erzeugt." }
+                    val unverifiedLogs = McpLogCheck.modelOnlyAuditClaim(request, response)
+                    val unverifiedHealth = McpHealthCheck.modelOnlyClaim(response)
+                    val misleadingError = serverResult?.let {
+                        McpToolFeedback.misleadingSummary(it, response)
+                    } == true
+                    if (unverifiedLogs || unverifiedHealth || misleadingError) {
+                        showEvidence(
+                            "⚠️ Modellbehauptung nicht durch einen entsprechenden " +
+                            "MCP-Aufruf bestätigt. Die tatsächlichen " +
+                            "Serverdaten stehen oben.")
+                    } else {
+                        showEvidence(
+                            if (hadRealCall)
+                                "ⓘ Modellzusammenfassung des echten MCP-Ergebnisses:\n" + response
+                            else if (hadSearch)
+                                "ⓘ Modellantwort nach lokaler MCP-Werkzeugsuche " +
+                                "(keine Serveraktion ausgeführt):\n" + response
+                            else "ⓘ Nur Modellantwort; keine MCP-Werkzeuge benutzt:\n" + response
+                        )
+                    }
+                    answer.content = when {
+                        hadRealCall -> "🔧 Auto-Bridge: Echter Serveraufruf abgeschlossen; " +
+                            "Originalergebnis separat angezeigt."
+                        hadSearch -> "🔎 Auto-Bridge: Werkzeugkatalog aus " +
+                            "authentifizierter tools/list geprüft (keine Aktion)."
+                        else -> "ⓘ Das Modell hat keinen MCP-Aufruf angefordert."
+                    }
+                    chatAdapter.notifyItemChanged(answerIndex)
+                    return true
+                }
+                is McpAgentBridge.Decision.Proposed -> {
+                    // JSON fallback can propose an actual tool manually, but
+                    // NEVER insert a forged native tool result into its KV.
+                    if (!decision.nativeToolCall ||
+                        !McpProgressiveBridge.isMetaTool(decision.tool.name)) {
+                        answer.content = "⚠️ Auto-Bridge: Kein nativer, freigegebener " +
+                            "Meta-Toolaufruf. Keine Aktion ausgeführt."
+                        chatAdapter.notifyItemChanged(answerIndex)
+                        return false
+                    }
+                    if (hadRealCall) {
+                        showEvidence(McpToolFeedback.noMoreCalls())
+                        return false
+                    }
+
+                    val meta = decision.tool.name
+                    val args = decision.args
+                    val outcome: JSONObject
+                    if (meta == McpProgressiveBridge.SEARCH) {
+                        outcome = try {
+                            runtime.search(
+                                args.getString("query"),
+                                args.optInt("limit", McpProgressiveBridge.MAX_RESULTS)
+                            )
+                        } catch (issue: Exception) {
+                            McpProgressiveBridge.localFailure(issue.message.orEmpty())
+                        }
+                        if (!outcome.optBoolean("isError", false)) {
+                            hadSearch = true
+                        }
+                        showEvidence(
+                            "🔎 Lokale Suche in echten MCP-Toolslisten " +
+                            "(keine externe Aktion):\n" +
+                            outcome.optJSONArray("content")
+                                ?.optJSONObject(0)?.optString("text")?.take(1250).orEmpty()
+                        )
+                    } else if (meta == McpProgressiveBridge.DETAILS) {
+                        outcome = try {
+                            runtime.details(args.getString("tool_id"))
+                        } catch (issue: Exception) {
+                            McpProgressiveBridge.localFailure(issue.message.orEmpty())
+                        }
+                        showEvidence(
+                            "📋 MCP-Tooldetails aus dem geprüften Katalog " +
+                            "(nicht ausgeführt):\n" +
+                            outcome.optJSONArray("content")
+                                ?.optJSONObject(0)?.optString("text")?.take(1250).orEmpty()
+                        )
+                    } else {
+                        // Last meta tool = exact real server dispatch, gated
+                        // through explicit consent and live schema recheck.
+                        val plan = try {
+                            runtime.prepareCall(
+                                args.getString("tool_id"),
+                                args.getString("arguments_json")
+                            )
+                        } catch (issue: Exception) {
+                            val localError = McpProgressiveBridge.localFailure(
+                                issue.message.orEmpty()
+                            )
+                            showEvidence(
+                                "⚠️ Kein externer MCP-Aufruf: " +
+                                issue.message.orEmpty().take(260)
+                            )
+                            modelOutput = deliver(decision.tool, localError)
+                            continue
+                        }
+                        answer.content = "🔐 Auto-Bridge schlägt vor: " +
+                            plan.source.title + " → " + plan.tool.name +
+                            "\nEchter MCP-Aufruf noch NICHT ausgeführt."
+                        chatAdapter.notifyItemChanged(answerIndex)
+                        setStatus("● AUTO-BRIDGE · FREIGABE …")
+                        val approved = mcpAgent.requestAutoApproval(active, plan)
+                        if (!approved) {
+                            showEvidence(
+                                "⛔ Echter MCP-Aufruf abgelehnt. Keine Serveraktion ausgeführt."
+                            )
+                            return false
+                        }
+                        // Mark before any potentially side-effecting request,
+                        // so a timeout can never trigger a retry in this run.
+                        runtime.markDispatched(plan)
+                        setStatus("● AUTO-BRIDGE · EIN MCP-AUFRUF …")
+                        mcpDispatchInFlight = true
+                        try {
+                            outcome = withContext(Dispatchers.IO) {
+                                mcpAgent.executeAuto(active, plan)
+                            }
+                        } catch (issue: Exception) {
+                            showEvidence(
+                                "⚠️ MCP-Aufruf fehlgeschlagen / Ergebnis unbekannt: " +
+                                (issue.message ?: "Netzwerk-/Serverfehler").take(700) +
+                                "\nKEIN automatischer Wiederholungsversuch."
+                            )
+                            return false
+                        } finally {
+                            mcpDispatchInFlight = false
+                        }
+                        hadRealCall = true
+                        serverResult = outcome
+                        showEvidence(
+                            "🔧 ECHTE MCP-SERVERANTWORT · " +
+                            plan.source.title + " / " + plan.tool.name + "\n" +
+                            McpAgentBridge.receipt(plan.tool, outcome)
+                        )
+                        val terminal = McpToolFeedback.terminalMessage(outcome)
+                        if (terminal != null) {
+                            showEvidence(terminal)
+                            return false
+                        }
+                    }
+                    // Local meta tool results and the single remote result
+                    // both become real native Jinja tool-role messages.
+                    modelOutput = deliver(decision.tool, outcome)
+                    if (step == McpProgressiveBridge.MAX_STEPS - 1) {
+                        showEvidence(
+                            "⚠️ Maximale Anzahl Bridge-Schritte erreicht; " +
+                            "keine weitere MCP-Aktion erlaubt.")
+                        return false
+                    }
+                }
+            }
+        }
+        return false
+    }
+
     private fun sendMessage() {
         if (busy) { toast("Pocket AI ist beschäftigt."); return }
         val text = messageInput.text.toString().trim()
@@ -1065,8 +1299,11 @@ class MainActivity : AppCompatActivity() {
             return
         }
         McpToolCatalog.requestedFilter(text)?.let {
-            showLiveMcpCatalog(text, it)
-            return
+            val autoActive = mcpAgent.current()?.progressiveSources?.isNotEmpty() == true
+            if (!autoActive || text.startsWith("/mcp", ignoreCase = true)) {
+                showLiveMcpCatalog(text, it)
+                return
+            }
         }
         when (val direct = McpQuickActions.requestedAction(text)) {
             is McpQuickActions.Selection.Request -> {
@@ -1132,7 +1369,17 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 if (agentSession != null) {
-                    when (val proposal = McpAgentBridge.parse(
+                    if (agentSession.progressiveSources.isNotEmpty()) {
+                        // Any incomplete native assistant tool call must be
+                        // cleared in the outer finally block.
+                        pendingNativeToolTurn = agentSession
+                        if (runProgressiveToolbridge(
+                                agentSession, fullReply.toString(), request,
+                                answer, index
+                            )) {
+                            pendingNativeToolTurn = null
+                        }
+                    } else when (val proposal = McpAgentBridge.parse(
                         fullReply.toString(), agentSession.tools,
                         thinkingEnabled = agentSession.thinkingMode != "off"
                     )) {
