@@ -32,6 +32,7 @@ import me.ailinux.pocket.mcp.McpProfile
 import me.ailinux.pocket.mcp.McpAuth
 import me.ailinux.pocket.mcp.McpOAuth
 import me.ailinux.pocket.mcp.McpExecutionUncertain
+import me.ailinux.pocket.mcp.McpDispatchState
 import me.ailinux.pocket.mcp.McpConnection
 import me.ailinux.pocket.mcp.McpHttpFailure
 import android.view.View
@@ -1836,6 +1837,7 @@ class MainActivity : AppCompatActivity() {
                         setStatus("● MCP LESEABFRAGE …")
                         mcpDispatchInFlight = true
                         val started = SystemClock.elapsedRealtime()
+                        val dispatchState = McpDispatchState()
                         try {
                             val result = withContext(Dispatchers.IO) {
                                 val latest = McpVault(applicationContext).get(profile.id)
@@ -1848,6 +1850,7 @@ class MainActivity : AppCompatActivity() {
                                     PocketDiagnostics.State.OK, tool = proposal.tool.name)
                                 PocketDiagnostics.markDispatch(applicationContext,
                                     diagnosticTrace, proposal.tool.name)
+                                dispatchState.markAttempted()
                                 try {
                                     McpConnection.callTool(authorized, proposal.tool, proposal.args)
                                 } catch (error: Exception) {
@@ -1865,9 +1868,9 @@ class MainActivity : AppCompatActivity() {
                         } catch (problem: Exception) {
                             val id = failure(PocketDiagnostics.Domain.MCP,
                                 PocketDiagnostics.Step.REMOTE_ERROR, problem,
-                                uncertain = problem is McpExecutionUncertain)
+                                uncertain = dispatchState.unconfirmed(problem))
                             messages[answerIndex].content =
-                                (if (problem is McpExecutionUncertain)
+                                (if (dispatchState.unconfirmed(problem))
                                     "⚠️ MCP-Ergebnis unbekannt (Anfrage möglicherweise ausgeführt).\n"
                                 else "⚠️ MCP-Aufruf vor dem Senden abgebrochen.\n") +
                                 "Werkzeug: " + proposal.tool.name + "\n" +
@@ -2100,16 +2103,17 @@ class MainActivity : AppCompatActivity() {
                         runtime.markDispatched(plan)
                         setStatus("● AUTO-BRIDGE · EIN MCP-AUFRUF …")
                         mcpDispatchInFlight = true
+                        val dispatchState = McpDispatchState()
                         try {
                             outcome = withContext(Dispatchers.IO) {
-                                mcpAgent.executeAuto(active, plan)
+                                mcpAgent.executeAuto(active, plan, dispatchState)
                             }
                         } catch (issue: Exception) {
                             val eventId = failure(PocketDiagnostics.Domain.MCP,
                                 PocketDiagnostics.Step.REMOTE_ERROR, issue,
-                                uncertain = issue is McpExecutionUncertain)
+                                uncertain = dispatchState.unconfirmed(issue))
                             showEvidence(
-                                (if (issue is McpExecutionUncertain)
+                                (if (dispatchState.unconfirmed(issue))
                                     "⚠️ MCP-Ergebnis unbekannt: " else
                                     "⚠️ MCP-Aufruf vor dem Senden abgebrochen: ") +
                                 getString(R.string.diagnostics_error,
@@ -2337,16 +2341,19 @@ class MainActivity : AppCompatActivity() {
                                 chatAdapter.notifyItemChanged(index)
                                 setStatus("● MCP TOOL …")
                                 mcpDispatchInFlight = true
+                                val dispatchState = McpDispatchState()
                                 val toolResult = try {
-                                    mcpAgent.execute(agentSession, proposal)
+                                    mcpAgent.execute(agentSession, proposal, dispatchState)
                                 } catch (problem: Exception) {
                                     val id = failure(PocketDiagnostics.Domain.MCP,
                                         PocketDiagnostics.Step.REMOTE_ERROR, problem,
-                                        uncertain = problem is McpExecutionUncertain)
-                                    answer.content = "⚠️ MCP-Aufruf fehlgeschlagen/Erfolg unbekannt: " +
+                                        uncertain = dispatchState.unconfirmed(problem))
+                                    answer.content = (if (dispatchState.unconfirmed(problem))
+                                        "⚠️ MCP-Ergebnis unbekannt, Aufruf möglicherweise ausgeführt: "
+                                        else "⚠️ MCP-Aufruf vor dem Senden abgebrochen: ") +
                                         getString(R.string.diagnostics_error,
                                             PocketDiagnostics.publicError(problem), id) +
-                                        "\nDer Server könnte den Auftrag bereits erhalten haben. Kein automatischer Retry."
+                                        "\nKein automatischer Retry."
                                     chatAdapter.notifyItemChanged(index)
                                     null
                                 } finally {
@@ -2520,9 +2527,10 @@ class MainActivity : AppCompatActivity() {
         // Mark before dispatch; unknown execution is never retried.
         run.markDispatched(plan)
         mcpDispatchInFlight = true
+        val dispatchState = McpDispatchState()
         try {
             val result = withContext(Dispatchers.IO) {
-                mcpAgent.executeAuto(active, plan)
+                mcpAgent.executeAuto(active, plan, dispatchState)
             }
             answer.content = "🔧 ECHTE MCP-SERVERANTWORT (App-gestützt):\n" +
                 McpAgentBridge.receipt(plan.tool, result) +
@@ -2530,8 +2538,8 @@ class MainActivity : AppCompatActivity() {
         } catch (error: Exception) {
             val eventId = failure(PocketDiagnostics.Domain.MCP,
                 PocketDiagnostics.Step.REMOTE_ERROR, error,
-                uncertain = error is McpExecutionUncertain)
-            answer.content = (if (error is McpExecutionUncertain)
+                uncertain = dispatchState.unconfirmed(error))
+            answer.content = (if (dispatchState.unconfirmed(error))
                 "⚠️ MCP-Ausführung unklar: " else
                 "⚠️ MCP-Aufruf vor dem Senden abgebrochen: ") +
                 getString(R.string.diagnostics_error,
@@ -2683,13 +2691,18 @@ class MainActivity : AppCompatActivity() {
                         // because remote side effects may already exist.
                         run.markDispatched(plan)
                         mcpDispatchInFlight = true
+                        val dispatchState = McpDispatchState()
                         val result = try {
-                            withContext(Dispatchers.IO) { mcpAgent.executeAuto(active, plan) }
+                            withContext(Dispatchers.IO) {
+                                mcpAgent.executeAuto(active, plan, dispatchState)
+                            }
                         } catch (e: Exception) {
                             val id = failure(PocketDiagnostics.Domain.MCP,
                                 PocketDiagnostics.Step.REMOTE_ERROR, e,
-                                uncertain = e is McpExecutionUncertain)
-                            evidence("⚠️ MCP-Ergebnis unbekannt: " +
+                                uncertain = dispatchState.unconfirmed(e))
+                            evidence((if (dispatchState.unconfirmed(e))
+                                "⚠️ MCP-Ergebnis unbekannt: " else
+                                "⚠️ MCP-Aufruf vor dem Senden abgebrochen: ") +
                                 getString(R.string.diagnostics_error,
                                     PocketDiagnostics.publicError(e), id) +
                                 "\nKein automatischer Wiederholungsversuch.")
@@ -2715,13 +2728,18 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
                 mcpDispatchInFlight = true
+                val dispatchState = McpDispatchState()
                 outcome = try {
-                    withContext(Dispatchers.IO) { mcpAgent.execute(active, proposal) }
+                    withContext(Dispatchers.IO) {
+                        mcpAgent.execute(active, proposal, dispatchState)
+                    }
                 } catch (e: Exception) {
                     val id = failure(PocketDiagnostics.Domain.MCP,
                         PocketDiagnostics.Step.REMOTE_ERROR, e,
-                        uncertain = e is McpExecutionUncertain)
-                    evidence("⚠️ MCP-Ergebnis unbekannt; kein Retry: " +
+                        uncertain = dispatchState.unconfirmed(e))
+                    evidence((if (dispatchState.unconfirmed(e))
+                        "⚠️ MCP-Ergebnis unbekannt; kein Retry: " else
+                        "⚠️ MCP-Aufruf vor dem Senden abgebrochen: ") +
                         getString(R.string.diagnostics_error,
                             PocketDiagnostics.publicError(e), id))
                     setAnswer("⚠️ MCP-Aufrufstatus nicht bestätigt.")
@@ -3415,10 +3433,13 @@ class MainActivity : AppCompatActivity() {
                 title.contains("GGUF", true) -> PocketDiagnostics.Domain.GGUF
             else -> PocketDiagnostics.Domain.SYSTEM
         }
-        val id = failure(domain, PocketDiagnostics.Step.DIAGNOSTIC, error)
-        // Only the host-constructed process report may contain diagnostic text;
-        // arbitrary exception messages can leak signed URLs or auth headers.
-        val details = if (title == "Android-Prozessdiagnose")
+        // This path also renders a successful, host-constructed process report;
+        // opening it must not fabricate SYSTEM/DIAGNOSTIC FAIL events.
+        val isReport = title == "Android-Prozessdiagnose"
+        val id = if (isReport) "" else
+            failure(domain, PocketDiagnostics.Step.DIAGNOSTIC, error)
+        // Arbitrary exception messages can contain signed URLs and auth headers.
+        val details = if (isReport)
             error.message.orEmpty().take(15000)
         else getString(R.string.diagnostics_error, PocketDiagnostics.publicError(error), id)
         AlertDialog.Builder(this).setTitle(title)

@@ -61,3 +61,20 @@ Background inference (different from RC9 background downloads),
 full internationalization/RTL, scalable model-catalog paging, and
 Pixel 10 Pro Tensor G5 / authenticated MCP end-to-end QA.
 None of those are claimed completed by this release candidate.
+
+## PR #23 CodeRabbit review corrections
+
+- Android minSdk is 33 (Android 13); AppCompat autoStoreLocales for
+  pre-Android-13 is not applicable to any supported install.
+- One per-call atomic McpDispatchState is now shared from the actual IO
+  dispatch path with the GUI caller. Coroutine cancellation AFTER dispatch
+  is conservatively UNCONFIRMED; preflight cancellation stays non-dispatched.
+  No automatic retry for side-effecting calls.
+- Reading Android process diagnostics no longer manufactures a FAIL event.
+- Approval accept/deny/cancel now records a decision for native GGUF/LiteRT
+  and direct read-only paths.
+- Manual MCP error dialog warns about unknown post-dispatch server effects.
+- Accessibility status text no longer has an overriding static description.
+- Offline/privacy notice explicitly includes optional networked MCP calls.
+- Added dedicated review regression tests including cancellation-before/
+  -after-dispatch; updated older source-level tests for the new call signature.

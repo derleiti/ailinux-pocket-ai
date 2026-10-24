@@ -728,8 +728,13 @@ class McpSettingsUi(
 
     private fun showError(title: String, error: Exception) {
         if (activity.isFinishing || activity.isDestroyed) return
+        val executionWarning = if (error is McpExecutionUncertain)
+            "⚠️ Ergebnis unbekannt. Das Werkzeug wurde möglicherweise schon " +
+                "auf dem Server ausgeführt. NICHT automatisch erneut aufrufen.\n\n"
+            else ""
         AlertDialog.Builder(activity).setTitle(title)
-            .setMessage("Fehlerkategorie: " + PocketDiagnostics.publicError(error) +
+            .setMessage(executionWarning +
+                "Fehlerkategorie: " + PocketDiagnostics.publicError(error) +
                 "\nWeitere Hinweise unter SETUP → MCP/Modell-Diagnose.")
             .setPositiveButton("OK", null).show()
     }

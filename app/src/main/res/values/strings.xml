@@ -56,7 +56,7 @@
     <string name="mcp_add_server">+ MCP-Server hinzufügen</string>
     <string name="mcp_approval_info">Tools werden nur nach deiner ausdrücklichen Bestätigung ausgeführt. OAuth-Anmeldung erfolgt im externen Browser.</string>
     <string name="update_data_warning">Wichtig: Normale App-Updates erhalten Modelle und Anmeldungen. Das Löschen der App-Daten oder eine Deinstallation entfernt dagegen die privaten GGUF-Dateien und den verschlüsselten MCP-Tresor.</string>
-    <string name="offline_info">Die KI läuft direkt auf deinem Gerät mit llama.cpp. Nur Modell-Downloads und Repository-Abfragen benötigen Internet.</string>
+    <string name="offline_info">Die KI-Ausführung bleibt lokal. Modell-Downloads, Repository-Abfragen sowie verbundene MCP-Server und freigegebene Werkzeuge benötigen bei Bedarf Internet.</string>
     <string name="nav_chat">✦  CHAT</string>
     <string name="nav_models">▤  MODELLE</string>
     <string name="nav_setup">⚙  SETUP</string>

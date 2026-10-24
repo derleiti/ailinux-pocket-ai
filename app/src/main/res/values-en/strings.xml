@@ -55,7 +55,7 @@
     <string name="mcp_add_server">+ Add MCP server</string>
     <string name="mcp_approval_info">Tools run only after your explicit approval. OAuth sign-in opens in an external browser.</string>
     <string name="update_data_warning">Important: Regular app updates preserve models and sign-ins. Clearing app data or uninstalling removes private GGUF files and the encrypted MCP vault.</string>
-    <string name="offline_info">AI runs locally on your device with llama.cpp. Only model downloads and repository searches need internet access.</string>
+    <string name="offline_info">AI inference runs locally. Model downloads, repository lookups, connected MCP servers, and approved tool calls may require internet access.</string>
     <string name="nav_chat">✦  CHAT</string>
     <string name="nav_models">▤  MODELS</string>
     <string name="nav_setup">⚙  SETTINGS</string>

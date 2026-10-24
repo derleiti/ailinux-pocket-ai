@@ -520,7 +520,8 @@ class McpAgentUi(
      * No automatic retries on failure or ambiguous network results.
      */
     suspend fun executeAuto(
-        active: McpAgentSession, plan: McpProgressiveBridge.RemoteCall
+        active: McpAgentSession, plan: McpProgressiveBridge.RemoteCall,
+        dispatchState: McpDispatchState = McpDispatchState()
     ): JSONObject = withContext(Dispatchers.IO) {
         diag(PocketDiagnostics.Step.AUTH_CHECK,
             PocketDiagnostics.State.START, tool = plan.tool.name)
@@ -566,6 +567,7 @@ class McpAgentUi(
         val started = SystemClock.elapsedRealtime()
         PocketDiagnostics.markDispatch(activity.applicationContext,
             diagTrace(), current.name)
+        dispatchState.markAttempted()
         try {
             val result = McpConnection.callTool(authorized, current, plan.arguments)
             val phase = PocketDiagnostics.resultPhase(result)
@@ -599,13 +601,25 @@ class McpAgentUi(
                         "\n\nArgumente:\n" + proposal.args.toString() +
                         "\n\nDas Tool kann Dateien, Voice-Channels oder Serverdaten verändern.")
                     .setNegativeButton("Ablehnen") { _, _ ->
-                        if (continuation.isActive) continuation.resume(false)
+                        if (continuation.isActive) {
+                            diag(PocketDiagnostics.Step.APPROVAL_DENY,
+                                PocketDiagnostics.State.REJECTED, tool = proposal.tool.name)
+                            continuation.resume(false)
+                        }
                     }
                     .setPositiveButton("Einmal ausführen") { _, _ ->
-                        if (continuation.isActive) continuation.resume(true)
+                        if (continuation.isActive) {
+                            diag(PocketDiagnostics.Step.APPROVAL_ACCEPT,
+                                PocketDiagnostics.State.OK, tool = proposal.tool.name)
+                            continuation.resume(true)
+                        }
                     }
                     .setOnCancelListener {
-                        if (continuation.isActive) continuation.resume(false)
+                        if (continuation.isActive) {
+                            diag(PocketDiagnostics.Step.APPROVAL_DENY,
+                                PocketDiagnostics.State.REJECTED, tool = proposal.tool.name)
+                            continuation.resume(false)
+                        }
                     }
                     .create()
                 continuation.invokeOnCancellation { dialog.dismiss() }
@@ -651,7 +665,11 @@ class McpAgentUi(
                     if (continuation.isActive) continuation.resume(true)
                 }
                 .setOnCancelListener {
-                    if (continuation.isActive) continuation.resume(false)
+                    if (continuation.isActive) {
+                        diag(PocketDiagnostics.Step.APPROVAL_DENY,
+                            PocketDiagnostics.State.REJECTED, tool = proposal.tool.name)
+                        continuation.resume(false)
+                    }
                 }
                 .create()
             continuation.invokeOnCancellation { dialog.dismiss() }
@@ -661,7 +679,8 @@ class McpAgentUi(
 
     suspend fun execute(
         active: McpAgentSession,
-        proposal: McpAgentBridge.Decision.Proposed
+        proposal: McpAgentBridge.Decision.Proposed,
+        dispatchState: McpDispatchState = McpDispatchState()
     ): JSONObject = withContext(Dispatchers.IO) {
         diag(PocketDiagnostics.Step.AUTH_CHECK,
             PocketDiagnostics.State.START, tool = proposal.tool.name)
@@ -700,6 +719,7 @@ class McpAgentUi(
         val started = SystemClock.elapsedRealtime()
         PocketDiagnostics.markDispatch(activity.applicationContext,
             diagTrace(), current.name)
+        dispatchState.markAttempted()
         try {
             val result = McpConnection.callTool(authorized, current, proposal.args)
             val phase = PocketDiagnostics.resultPhase(result)
