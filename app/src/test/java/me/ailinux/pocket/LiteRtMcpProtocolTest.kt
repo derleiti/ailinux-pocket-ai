@@ -57,6 +57,19 @@ class LiteRtMcpProtocolTest {
         assertTrue(source.contains("Content.ToolResponse"))
     }
 
+    @Test fun secondToolProposalAfterRealReceiptIsStoppedWithoutSecondDispatch() {
+        val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+            .substringAfter("private suspend fun runLiteRtToolbridge(")
+            .substringBefore("private fun sendLiteRtMessage(")
+        val afterCalls = source.substringAfter("if (turn.calls.isEmpty())")
+        val guard = afterCalls.indexOf("if (hadRealCall)")
+        val validator = afterCalls.indexOf("LiteRtMcpProtocol.validate(")
+        assertTrue("Guard must precede model tool parsing", guard >= 0 && guard < validator)
+        assertTrue(afterCalls.contains("Weiterer Modell-Toolvorschlag"))
+        assertTrue(afterCalls.contains("maximal ein externer Aufruf"))
+        assertTrue(source.contains("outcome.toString().take(12_000)"))
+    }
+
     @Test fun remoteDispatchRequiresApprovalAndOneRunGate() {
         val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
             .substringAfter("private suspend fun runLiteRtToolbridge(")
