@@ -269,9 +269,20 @@ internal class LiteRtRuntime private constructor(
                             }
                         }
                     }
+                    val likelyCompiledMismatch = errors.any {
+                        it.startsWith(RuntimeHardware.Attempt.GOOGLE_TENSOR.name + ": ") &&
+                            it.contains("No KV cache inputs found", ignoreCase = true)
+                    }
+                    val explanation = if (likelyCompiledMismatch)
+                        "Das Modell enthält offenbar keine für GPU/CPU verwendbaren KV-Cache-Eingänge. " +
+                            "Das ist kein RAM-Beweis: NPU-Kompilierung, Modellpaket und " +
+                            "Tensor-G5-Dispatcher müssen zusammenpassen. " +
+                            "Bitte exakt für Google Tensor G5 exportierte LiteRT-Datei und " +
+                            "vollständig abgeschlossenen Download prüfen. "
+                    else "Ein chipgebundenes NPU-Modell muss nicht GPU/CPU-kompatibel sein. "
                     throw IOException(
                         "LiteRT-LM konnte kein kompatibles Backend initialisieren. " +
-                            "Ein chipgebundenes NPU-Modell muss nicht GPU/CPU-kompatibel sein. " +
+                            explanation +
                             errors.joinToString("; ").take(700)
                     )
                 }

@@ -47,7 +47,13 @@ object McpProgressiveBridge {
         val instructions: String = ""
     )
 
-    data class RemoteCall(val source: Source, val tool: McpTool, val arguments: JSONObject) {
+    data class RemoteCall(
+        val source: Source,
+        val tool: McpTool,
+        val arguments: JSONObject,
+        /** True only for a host-inferred fallback, not a native model tool call. */
+        val hostFallback: Boolean = false
+    ) {
         val toolId: String get() = source.id + "/" + tool.name
     }
 
@@ -228,6 +234,8 @@ object McpProgressiveBridge {
                 .put("tool_id", id)
                 .put("description", clean(current.tool.description, 145))
                 .put("inputSchema", current.tool.schema)
+                .put("readOnlyHint", current.tool.declaresReadOnly)
+                .put("risk_hint_is_not_authorization", true)
                 .put("next_step", "mcp_call_tool(tool_id, arguments_json als JSON-Text). " +
                     "Die App fragt vor dem Aufruf um Freigabe."))
         }
