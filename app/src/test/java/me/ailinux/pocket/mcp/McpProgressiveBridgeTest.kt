@@ -281,7 +281,7 @@ class McpProgressiveBridgeTest {
         assertTrue(main.contains("runProgressiveToolbridge("))
         assertTrue(main.contains("mcpAgent.requestAutoApproval(active, plan)"))
         assertTrue(main.contains("runtime.markDispatched(plan)"))
-        assertTrue(main.contains("mcpAgent.executeAuto(active, plan)"))
+        assertTrue(main.contains("mcpAgent.executeAuto(active, plan, dispatchState)"))
         assertTrue(main.contains("engine.sendToolResult(tool.name, payload, 256)"))
         assertTrue(main.contains("resetUnresolvedNativeToolTurn"))
         assertTrue(main.contains("check(mcpAgent.current() == active)"))

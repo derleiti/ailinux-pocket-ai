@@ -115,7 +115,7 @@ class McpOnDemandDiscoveryTest {
             .substringBefore("private suspend fun runLiteRtToolbridge(")
         assertTrue(bridge.contains("requestAutoApproval(active, plan)"))
         assertTrue(bridge.contains("run.markDispatched(plan)"))
-        assertTrue(bridge.contains("mcpAgent.executeAuto(active, plan)"))
+        assertTrue(bridge.contains("mcpAgent.executeAuto(active, plan, dispatchState)"))
         assertTrue(bridge.contains("Kein automatischer Wiederholungsversuch"))
     }
 }

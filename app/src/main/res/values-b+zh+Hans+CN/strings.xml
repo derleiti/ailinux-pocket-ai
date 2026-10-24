@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  聊天</string>
+    <string name="nav_models">▤  模型</string>
+    <string name="nav_setup">⚙  设置</string>
+    <string name="chat_heading">对话</string>
+    <string name="history_title">聊天记录</string>
+    <string name="new_chat">+ 新建聊天</string>
+    <string name="search_chats">搜索聊天</string>
+    <string name="archived_chats">已归档的聊天</string>
+    <string name="library_title">模型库</string>
+    <string name="settings_title">设置</string>
+    <string name="language_heading">应用语言</string>
+    <string name="language_dialog_title">选择语言</string>
+    <string name="language_system_default">系统语言</string>
+    <string name="language_preview_suffix">预览</string>
+    <string name="language_button">语言：%1$s</string>
+</resources>

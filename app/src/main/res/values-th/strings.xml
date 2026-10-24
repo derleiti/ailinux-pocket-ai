@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  แชต</string>
+    <string name="nav_models">▤  โมเดล</string>
+    <string name="nav_setup">⚙  การตั้งค่า</string>
+    <string name="chat_heading">การสนทนา</string>
+    <string name="history_title">ประวัติแชต</string>
+    <string name="new_chat">+ แชตใหม่</string>
+    <string name="search_chats">ค้นหาแชต</string>
+    <string name="archived_chats">แชตที่เก็บถาวร</string>
+    <string name="library_title">คลังโมเดล</string>
+    <string name="settings_title">การตั้งค่า</string>
+    <string name="language_heading">ภาษาแอป</string>
+    <string name="language_dialog_title">เลือกภาษา</string>
+    <string name="language_system_default">ภาษาของระบบ</string>
+    <string name="language_preview_suffix">ตัวอย่าง</string>
+    <string name="language_button">ภาษา: %1$s</string>
+</resources>

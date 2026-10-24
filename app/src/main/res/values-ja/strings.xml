@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  チャット</string>
+    <string name="nav_models">▤  モデル</string>
+    <string name="nav_setup">⚙  設定</string>
+    <string name="chat_heading">会話</string>
+    <string name="history_title">チャット履歴</string>
+    <string name="new_chat">+ 新しいチャット</string>
+    <string name="search_chats">チャットを検索</string>
+    <string name="archived_chats">アーカイブ済みチャット</string>
+    <string name="library_title">モデルライブラリ</string>
+    <string name="settings_title">設定</string>
+    <string name="language_heading">アプリの言語</string>
+    <string name="language_dialog_title">言語を選択</string>
+    <string name="language_system_default">システムの言語</string>
+    <string name="language_preview_suffix">プレビュー</string>
+    <string name="language_button">言語：%1$s</string>
+</resources>

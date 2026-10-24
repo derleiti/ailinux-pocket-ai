@@ -13,7 +13,9 @@ class ThinkingModeIntegrationTest {
         val xml = File("src/main/res/layout/activity_main.xml").readText()
         val toggle = xml.substringAfter("android:id=\"@+id/thinkingModeSwitch\"")
             .substringBefore("/>")
-        assertTrue(xml.contains("Denkmodus aktivieren"))
+        assertTrue(xml.contains("android:text=\"@string/thinking_enable\""))
+        assertTrue(File("src/main/res/values/strings.xml").readText()
+            .contains("Denkmodus aktivieren"))
         assertTrue(toggle.contains("android:checked=\"false\""))
         assertTrue(toggle.contains("android:layout_width=\"match_parent\""))
     }

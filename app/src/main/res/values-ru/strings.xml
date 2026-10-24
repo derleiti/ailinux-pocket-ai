@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  ЧАТ</string>
+    <string name="nav_models">▤  МОДЕЛИ</string>
+    <string name="nav_setup">⚙  НАСТРОЙКИ</string>
+    <string name="chat_heading">ДИАЛОГ</string>
+    <string name="history_title">ИСТОРИЯ ЧАТОВ</string>
+    <string name="new_chat">+ Новый чат</string>
+    <string name="search_chats">Поиск чатов</string>
+    <string name="archived_chats">Архивные чаты</string>
+    <string name="library_title">Библиотека моделей</string>
+    <string name="settings_title">Настройки</string>
+    <string name="language_heading">ЯЗЫК ПРИЛОЖЕНИЯ</string>
+    <string name="language_dialog_title">Выбрать язык</string>
+    <string name="language_system_default">Язык системы</string>
+    <string name="language_preview_suffix">Предпросмотр</string>
+    <string name="language_button">Язык: %1$s</string>
+</resources>

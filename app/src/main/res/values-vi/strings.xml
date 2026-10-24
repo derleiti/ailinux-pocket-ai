@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  TRÒ CHUYỆN</string>
+    <string name="nav_models">▤  MÔ HÌNH</string>
+    <string name="nav_setup">⚙  CÀI ĐẶT</string>
+    <string name="chat_heading">CUỘC TRÒ CHUYỆN</string>
+    <string name="history_title">LỊCH SỬ TRÒ CHUYỆN</string>
+    <string name="new_chat">+ Trò chuyện mới</string>
+    <string name="search_chats">Tìm cuộc trò chuyện</string>
+    <string name="archived_chats">Cuộc trò chuyện đã lưu trữ</string>
+    <string name="library_title">Thư viện mô hình</string>
+    <string name="settings_title">Cài đặt</string>
+    <string name="language_heading">NGÔN NGỮ ỨNG DỤNG</string>
+    <string name="language_dialog_title">Chọn ngôn ngữ</string>
+    <string name="language_system_default">Ngôn ngữ hệ thống</string>
+    <string name="language_preview_suffix">Bản xem trước</string>
+    <string name="language_button">Ngôn ngữ: %1$s</string>
+</resources>

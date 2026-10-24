@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Next candidate: 2.1.0-RC9 (versionCode 34).** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**QA candidate: 2.1.0-RC10 (versionCode 35).** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -21,7 +21,7 @@ Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
 ## Privacy and permissions
 
-Only Android INTERNET permission is requested for remote repository metadata and model downloads. Inference is local. This app does not upload conversations to an AI provider. Chats remain in activity memory (not persisted); local models are in private app storage.
+The app requests INTERNET for optional MCP, repository metadata and model downloads, and Android's permitted job/notification foreground capabilities for explicitly started transfers. Inference is local. Conversations are persisted in a private Room database; model files remain in private app storage. Explicit MCP requests transmit only the arguments approved by the user. A bounded, local, structured diagnostic timeline contains phases and classified error codes, never prompts, tool arguments, responses or credentials.
 
 ## Requirements
 

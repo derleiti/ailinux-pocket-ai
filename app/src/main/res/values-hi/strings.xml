@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  चैट</string>
+    <string name="nav_models">▤  मॉडल</string>
+    <string name="nav_setup">⚙  सेटिंग</string>
+    <string name="chat_heading">बातचीत</string>
+    <string name="history_title">चैट इतिहास</string>
+    <string name="new_chat">+ नई चैट</string>
+    <string name="search_chats">चैट खोजें</string>
+    <string name="archived_chats">संग्रहीत चैट</string>
+    <string name="library_title">मॉडल लाइब्रेरी</string>
+    <string name="settings_title">सेटिंग</string>
+    <string name="language_heading">ऐप की भाषा</string>
+    <string name="language_dialog_title">भाषा चुनें</string>
+    <string name="language_system_default">सिस्टम की भाषा</string>
+    <string name="language_preview_suffix">पूर्वावलोकन</string>
+    <string name="language_button">भाषा: %1$s</string>
+</resources>

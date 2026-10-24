@@ -54,6 +54,10 @@ object McpHealthCheck {
             val name = it.groupValues[1].lowercase(Locale.ROOT)
             return if (name == "all") "" else if (name == "ailinux") "triforce" else name
         }
+        // Exact slash commands are owned by their respective routers.
+        // /mcp quick triforce-status MUST reach tools/call, not
+        // this diagnostics-only tools/list handler. Observed on Android.
+        if (text.startsWith("/mcp ", ignoreCase = true)) return null
         val normalized = text.lowercase(Locale.ROOT)
         if (normalized.startsWith("was ist ein ") ||
             normalized.startsWith("was ist eine ") ||

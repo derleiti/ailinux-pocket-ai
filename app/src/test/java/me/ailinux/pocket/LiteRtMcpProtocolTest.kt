@@ -78,8 +78,8 @@ class LiteRtMcpProtocolTest {
         assertTrue(source.contains("requestAutoApproval(active, plan)"))
         assertTrue(source.contains("requestApproval(active, proposal)"))
         assertTrue(source.contains("run.markDispatched(plan)"))
-        assertTrue(source.contains("mcpAgent.executeAuto(active, plan)"))
-        assertTrue(source.contains("mcpAgent.execute(active, proposal)"))
+        assertTrue(source.contains("mcpAgent.executeAuto(active, plan, dispatchState)"))
+        assertTrue(source.contains("mcpAgent.execute(active, proposal, dispatchState)"))
         assertTrue(source.contains("Kein automatischer Wiederholungsversuch"))
         assertFalse(source.contains("Runtime.getRuntime()"))
     }

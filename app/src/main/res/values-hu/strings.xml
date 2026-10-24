@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  CSEVEGÉS</string>
+    <string name="nav_models">▤  MODELLEK</string>
+    <string name="nav_setup">⚙  BEÁLLÍTÁSOK</string>
+    <string name="chat_heading">BESZÉLGETÉS</string>
+    <string name="history_title">CSEVEGÉSI ELŐZMÉNYEK</string>
+    <string name="new_chat">+ Új csevegés</string>
+    <string name="search_chats">Csevegések keresése</string>
+    <string name="archived_chats">Archivált csevegések</string>
+    <string name="library_title">Modellkönyvtár</string>
+    <string name="settings_title">Beállítások</string>
+    <string name="language_heading">ALKALMAZÁS NYELVE</string>
+    <string name="language_dialog_title">Nyelv kiválasztása</string>
+    <string name="language_system_default">Rendszernyelv</string>
+    <string name="language_preview_suffix">Előnézet</string>
+    <string name="language_button">Nyelv: %1$s</string>
+</resources>

@@ -1,5 +1,7 @@
 package me.ailinux.pocket.mcp
 
+import android.os.SystemClock
+import me.ailinux.pocket.PocketDiagnostics
 import android.graphics.Typeface
 import android.widget.CheckBox
 import android.widget.Toast
@@ -44,6 +46,14 @@ class McpAgentUi(
 ) {
     private val vault = McpVault(activity.applicationContext)
     private val oauth = McpOAuth(vault)
+    private var diagTrace: () -> String = { PocketDiagnostics.newTrace() }
+    fun bindDiagnosticsTrace(provider: () -> String) { diagTrace = provider }
+    private fun diag(step: PocketDiagnostics.Step,
+        state: PocketDiagnostics.State = PocketDiagnostics.State.INFO,
+        tool: String = "", count: Int = -1, durationMs: Long = -1): String =
+        PocketDiagnostics.log(activity.applicationContext, diagTrace(),
+            PocketDiagnostics.Domain.MCP, step, state,
+            tool = tool, count = count, durationMs = durationMs)
     @Volatile private var session: McpAgentSession? = null
     private var selecting = false
 
@@ -196,6 +206,9 @@ class McpAgentUi(
                 }
                 selecting = true
                 activity.lifecycleScope.launch {
+                    diag(PocketDiagnostics.Step.DISCOVERY_START,
+                        PocketDiagnostics.State.START, count = chosen.size)
+                    val started = SystemClock.elapsedRealtime()
                     try {
                         val sources = withContext(Dispatchers.IO) {
                             chosen.mapIndexed { index, old ->
@@ -233,6 +246,9 @@ class McpAgentUi(
                         require(runtime.totalTools > 0) {
                             "Keine geeigneten, aktuell zugelassenen MCP-Werkzeuge gefunden."
                         }
+                        diag(PocketDiagnostics.Step.DISCOVERY_DONE,
+                            PocketDiagnostics.State.OK, count = runtime.totalTools,
+                            durationMs = SystemClock.elapsedRealtime() - started)
                         val meta = McpProgressiveBridge.functions()
                         McpAgentBridge.nativeToolsJson(meta)
                         session = McpAgentSession(
@@ -248,6 +264,9 @@ class McpAgentUi(
                         toast("AUTO-Bridge: " + runtime.totalTools +
                             " Tools entdeckt; 3 Meta-Werkzeuge an Spark gebunden.")
                     } catch (problem: Exception) {
+                        PocketDiagnostics.failure(activity.applicationContext,
+                            diagTrace(), PocketDiagnostics.Domain.MCP,
+                            PocketDiagnostics.Step.DISCOVERY_DONE, problem)
                         error("Auto-Bridge konnte Server nicht prüfen", problem)
                     } finally {
                         selecting = false
@@ -452,6 +471,8 @@ class McpAgentUi(
     suspend fun requestAutoApproval(
         active: McpAgentSession, plan: McpProgressiveBridge.RemoteCall
     ): Boolean = withContext(Dispatchers.Main) {
+        diag(PocketDiagnostics.Step.APPROVAL_REQUEST,
+            PocketDiagnostics.State.START, tool = plan.tool.name)
         suspendCancellableCoroutine { continuation ->
             val source = active.progressiveSources.singleOrNull {
                 it.id == plan.source.id && it.profileId == plan.source.profileId &&
@@ -474,12 +495,18 @@ class McpAgentUi(
                     "und prüft vorher noch einmal das Live-Schema."
                 )
                 .setNegativeButton("Ablehnen") { _, _ ->
+                    diag(PocketDiagnostics.Step.APPROVAL_DENY,
+                        PocketDiagnostics.State.REJECTED, tool = plan.tool.name)
                     if (continuation.isActive) continuation.resume(false)
                 }
                 .setPositiveButton("Einmal ausführen") { _, _ ->
+                    diag(PocketDiagnostics.Step.APPROVAL_ACCEPT,
+                        PocketDiagnostics.State.OK, tool = plan.tool.name)
                     if (continuation.isActive) continuation.resume(true)
                 }
                 .setOnCancelListener {
+                    diag(PocketDiagnostics.Step.APPROVAL_DENY,
+                        PocketDiagnostics.State.REJECTED, tool = plan.tool.name)
                     if (continuation.isActive) continuation.resume(false)
                 }
                 .create()
@@ -493,8 +520,11 @@ class McpAgentUi(
      * No automatic retries on failure or ambiguous network results.
      */
     suspend fun executeAuto(
-        active: McpAgentSession, plan: McpProgressiveBridge.RemoteCall
+        active: McpAgentSession, plan: McpProgressiveBridge.RemoteCall,
+        dispatchState: McpDispatchState = McpDispatchState()
     ): JSONObject = withContext(Dispatchers.IO) {
+        diag(PocketDiagnostics.Step.AUTH_CHECK,
+            PocketDiagnostics.State.START, tool = plan.tool.name)
         check(session == active) { "Auto-Bridge nicht mehr aktiv" }
         val source = active.progressiveSources.singleOrNull {
             it.id == plan.source.id && it.profileId == plan.source.profileId &&
@@ -508,6 +538,8 @@ class McpAgentUi(
             "MCP-Server/Anmeldung hat sich nach Freigabe geändert"
         }
         val authorized = oauth.refreshIfNeeded(fresh)
+        diag(PocketDiagnostics.Step.AUTH_CHECK,
+            PocketDiagnostics.State.OK, tool = plan.tool.name)
         val current = McpConnection.inspect(authorized).tools
             .singleOrNull { it.name == plan.tool.name }
             ?: error("MCP-Werkzeug existiert nicht mehr")
@@ -529,13 +561,33 @@ class McpAgentUi(
         McpToolSchema.validate(current.schema, plan.arguments)?.let {
             throw IllegalArgumentException("Aktuelle MCP-Argumentprüfung: " + it)
         }
-        // No second try, downgrade or automatic fallback after dispatch.
-        McpConnection.callTool(authorized, current, plan.arguments)
+        diag(PocketDiagnostics.Step.SCHEMA_CHECK,
+            PocketDiagnostics.State.OK, tool = current.name)
+        // No second try or automatic fallback; a timeout is not success.
+        val started = SystemClock.elapsedRealtime()
+        PocketDiagnostics.markDispatch(activity.applicationContext,
+            diagTrace(), current.name)
+        dispatchState.markAttempted()
+        try {
+            val result = McpConnection.callTool(authorized, current, plan.arguments)
+            val phase = PocketDiagnostics.resultPhase(result)
+            diag(phase.first, phase.second, tool = current.name,
+                durationMs = SystemClock.elapsedRealtime() - started)
+            result
+        } catch (error: Exception) {
+            PocketDiagnostics.failure(activity.applicationContext, diagTrace(),
+                PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.REMOTE_ERROR,
+                error, uncertain = true)
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            throw McpExecutionUncertain(error)
+        }
     }
 
     /** The user must see and approve the exact server, tool and arguments. */
     suspend fun requestApproval(active: McpAgentSession, proposal: McpAgentBridge.Decision.Proposed): Boolean =
         withContext(Dispatchers.Main) {
+            diag(PocketDiagnostics.Step.APPROVAL_REQUEST,
+                PocketDiagnostics.State.START, tool = proposal.tool.name)
             suspendCancellableCoroutine { continuation ->
                 if (session != active || activity.isFinishing || activity.isDestroyed) {
                     continuation.resume(false)
@@ -549,13 +601,25 @@ class McpAgentUi(
                         "\n\nArgumente:\n" + proposal.args.toString() +
                         "\n\nDas Tool kann Dateien, Voice-Channels oder Serverdaten verändern.")
                     .setNegativeButton("Ablehnen") { _, _ ->
-                        if (continuation.isActive) continuation.resume(false)
+                        if (continuation.isActive) {
+                            diag(PocketDiagnostics.Step.APPROVAL_DENY,
+                                PocketDiagnostics.State.REJECTED, tool = proposal.tool.name)
+                            continuation.resume(false)
+                        }
                     }
                     .setPositiveButton("Einmal ausführen") { _, _ ->
-                        if (continuation.isActive) continuation.resume(true)
+                        if (continuation.isActive) {
+                            diag(PocketDiagnostics.Step.APPROVAL_ACCEPT,
+                                PocketDiagnostics.State.OK, tool = proposal.tool.name)
+                            continuation.resume(true)
+                        }
                     }
                     .setOnCancelListener {
-                        if (continuation.isActive) continuation.resume(false)
+                        if (continuation.isActive) {
+                            diag(PocketDiagnostics.Step.APPROVAL_DENY,
+                                PocketDiagnostics.State.REJECTED, tool = proposal.tool.name)
+                            continuation.resume(false)
+                        }
                     }
                     .create()
                 continuation.invokeOnCancellation { dialog.dismiss() }
@@ -572,6 +636,8 @@ class McpAgentUi(
         profile: McpProfile,
         proposal: McpAgentBridge.Decision.Proposed
     ): Boolean = withContext(Dispatchers.Main) {
+        diag(PocketDiagnostics.Step.APPROVAL_REQUEST,
+            PocketDiagnostics.State.START, tool = proposal.tool.name)
         suspendCancellableCoroutine { continuation ->
             if (activity.isFinishing || activity.isDestroyed) {
                 continuation.resume(false)
@@ -589,13 +655,21 @@ class McpAgentUi(
                     "Server und dein Konto. Ohne diese Freigabe erfolgt kein Aufruf."
                 )
                 .setNegativeButton("Ablehnen") { _, _ ->
+                    diag(PocketDiagnostics.Step.APPROVAL_DENY,
+                        PocketDiagnostics.State.REJECTED, tool = proposal.tool.name)
                     if (continuation.isActive) continuation.resume(false)
                 }
                 .setPositiveButton("Einmal lesen") { _, _ ->
+                    diag(PocketDiagnostics.Step.APPROVAL_ACCEPT,
+                        PocketDiagnostics.State.OK, tool = proposal.tool.name)
                     if (continuation.isActive) continuation.resume(true)
                 }
                 .setOnCancelListener {
-                    if (continuation.isActive) continuation.resume(false)
+                    if (continuation.isActive) {
+                        diag(PocketDiagnostics.Step.APPROVAL_DENY,
+                            PocketDiagnostics.State.REJECTED, tool = proposal.tool.name)
+                        continuation.resume(false)
+                    }
                 }
                 .create()
             continuation.invokeOnCancellation { dialog.dismiss() }
@@ -605,8 +679,11 @@ class McpAgentUi(
 
     suspend fun execute(
         active: McpAgentSession,
-        proposal: McpAgentBridge.Decision.Proposed
+        proposal: McpAgentBridge.Decision.Proposed,
+        dispatchState: McpDispatchState = McpDispatchState()
     ): JSONObject = withContext(Dispatchers.IO) {
+        diag(PocketDiagnostics.Step.AUTH_CHECK,
+            PocketDiagnostics.State.START, tool = proposal.tool.name)
         check(session == active) { "MCP-Modus wurde gewechselt" }
         require(active.tools.any { it.name == proposal.tool.name }) { "Tool nicht freigegeben" }
         val profile = vault.get(active.profileId)
@@ -615,6 +692,8 @@ class McpAgentUi(
             "MCP-Serveradresse hat sich geändert. Bitte neu verbinden."
         }
         val authorized = oauth.refreshIfNeeded(profile)
+        diag(PocketDiagnostics.Step.AUTH_CHECK,
+            PocketDiagnostics.State.OK, tool = proposal.tool.name)
         // Re-discover live tools/list AFTER consent. A tool may disappear,
         // become restricted or change its schema after initial selection.
         // Do not send a possibly mutating tools/call with a stale signature.
@@ -635,13 +714,32 @@ class McpAgentUi(
         }
         // Exactly one dispatch. An HTTP error may occur after side effects;
         // NEVER retry through another transport automatically.
-        McpConnection.callTool(authorized, current, proposal.args)
+        diag(PocketDiagnostics.Step.SCHEMA_CHECK,
+            PocketDiagnostics.State.OK, tool = current.name)
+        val started = SystemClock.elapsedRealtime()
+        PocketDiagnostics.markDispatch(activity.applicationContext,
+            diagTrace(), current.name)
+        dispatchState.markAttempted()
+        try {
+            val result = McpConnection.callTool(authorized, current, proposal.args)
+            val phase = PocketDiagnostics.resultPhase(result)
+            diag(phase.first, phase.second, tool = current.name,
+                durationMs = SystemClock.elapsedRealtime() - started)
+            result
+        } catch (error: Exception) {
+            PocketDiagnostics.failure(activity.applicationContext, diagTrace(),
+                PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.REMOTE_ERROR,
+                error, uncertain = true)
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            throw McpExecutionUncertain(error)
+        }
     }
 
     private fun error(title: String, problem: Throwable) {
         if (activity.isFinishing || activity.isDestroyed) return
         AlertDialog.Builder(activity).setTitle(title)
-            .setMessage(problem.message?.take(1500) ?: "Unbekannter Fehler")
+            .setMessage("Diagnosecode: " + PocketDiagnostics.publicError(problem) +
+                "\nDetails unter SETUP → MCP/Modell-Diagnose.")
             .setPositiveButton("OK", null).show()
     }
 

@@ -25,7 +25,7 @@
         </LinearLayout>
         <TextView android:id="@+id/onlineChip" android:layout_width="wrap_content"
             android:layout_height="wrap_content" android:padding="9dp"
-            android:text="●  AGENT AUS" android:letterSpacing=".06" android:textSize="10sp"
+            android:text="@string/agent_off" android:letterSpacing=".06" android:textSize="10sp"
             android:textStyle="bold" android:textColor="@color/primary"
             android:background="@drawable/bg_panel"/>
     </LinearLayout>
@@ -51,14 +51,14 @@
                     android:orientation="vertical">
                     <TextView android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="GESPRÄCH" android:letterSpacing=".16"
+                        android:text="@string/chat_heading" android:letterSpacing=".16"
                         android:textStyle="bold" android:textSize="10sp"
                         android:textColor="@color/muted"/>
                     <TextView android:id="@+id/chatModelName"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="5dp"
-                        android:text="Kein Modell geladen"
+                        android:text="@string/no_model_loaded"
                         android:textColor="@color/ink" android:textSize="13sp"
                         android:textStyle="bold" android:maxLines="1"
                         android:ellipsize="middle"/>
@@ -67,9 +67,18 @@
                     android:id="@+id/chatHistoryButton"
                     android:layout_width="wrap_content" android:layout_height="40dp"
                     android:layout_marginStart="4dp"
-                    android:text="☰" android:contentDescription="Chatverlauf öffnen"
+                    android:text="☰" android:contentDescription="@string/history_open"
                     android:textAllCaps="false" android:textSize="18sp"
                     android:minWidth="44dp" android:textColor="@color/ink"
+                    app:backgroundTint="@color/surface_raised"
+                    app:cornerRadius="12dp"/>
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/chatDebugButton"
+                    android:layout_width="48dp" android:layout_height="40dp"
+                    android:layout_marginStart="6dp"
+                    android:text="⌁" android:textAllCaps="false"
+                    android:contentDescription="@string/diagnostics_chat_button"
+                    android:textColor="@color/ink" android:textSize="18sp"
                     app:backgroundTint="@color/surface_raised"
                     app:cornerRadius="12dp"/>
                 <com.google.android.material.button.MaterialButton
@@ -95,7 +104,7 @@
                     android:layout_height="wrap_content"
                     android:minHeight="19dp"
                     android:gravity="start"
-                    android:text="Warte auf Modell"
+                    android:text="@string/waiting_model"
                     android:textColor="@color/muted" android:textSize="11sp"
                     android:ellipsize="end" android:maxLines="1"/>
                 <ProgressBar android:id="@+id/mcpBindProgress"
@@ -121,12 +130,12 @@
                     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
                         android:text="✦" android:textSize="42sp" android:textColor="@color/secondary"/>
                     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp" android:text="Deine Ideen. Dein Gerät."
+                        android:layout_marginTop="8dp" android:text="@string/empty_chat_title"
                         android:textStyle="bold" android:textSize="17sp" android:textColor="@color/ink"/>
                     <TextView android:id="@+id/emptyHint"
                         android:layout_width="wrap_content" android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
-                        android:text="Unter MODELLE ein GGUF auswählen und laden."
+                        android:text="@string/empty_chat_info"
                         android:gravity="center" android:textSize="12sp"
                         android:textColor="@color/muted"/>
                 </LinearLayout>
@@ -142,7 +151,7 @@
                     android:paddingStart="11dp" android:paddingEnd="8dp"
                     android:paddingTop="9dp" android:paddingBottom="9dp"
                     android:background="@android:color/transparent"
-                    android:hint="Frag deine lokale KI..."
+                    android:hint="@string/input_chat_hint"
                     android:inputType="textCapSentences|textMultiLine"
                     android:maxLines="4" android:minHeight="45dp"
                     android:textColor="@color/ink" android:textColorHint="@color/muted"
@@ -164,7 +173,7 @@
             android:background="@color/background">
             <TextView android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="CHATVERLAUF"
+                android:text="@string/history_title"
                 android:textColor="@color/primary"
                 android:textStyle="bold"
                 android:textSize="15sp"/>
@@ -173,7 +182,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
                 android:layout_marginTop="12dp"
-                android:text="+ Neuer Chat"
+                android:text="@string/new_chat"
                 android:textAllCaps="false"
                 app:backgroundTint="@color/primary"
                 android:textColor="@color/background"/>
@@ -182,7 +191,7 @@
                 android:layout_height="52dp"
                 android:layout_marginTop="11dp"
                 android:padding="12dp"
-                android:hint="Chats durchsuchen"
+                android:hint="@string/search_chats"
                 android:inputType="text"
                 android:singleLine="true"
                 android:textColor="@color/ink"
@@ -192,7 +201,7 @@
                 android:id="@+id/showArchivedChatsButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Archivierte Chats"
+                android:text="@string/archived_chats"
                 android:textAllCaps="false"
                 android:textColor="@color/ink"
                 app:backgroundTint="@color/surface_raised"/>
@@ -214,29 +223,29 @@
                 android:orientation="vertical" android:paddingStart="19dp"
                 android:paddingEnd="19dp" android:paddingTop="22dp" android:paddingBottom="22dp">
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:text="Deine Modellbibliothek" android:textColor="@color/ink"
+                    android:text="@string/library_title" android:textColor="@color/ink"
                     android:textStyle="bold" android:textSize="26sp"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="6dp"
-                    android:text="GGUF-Modelle lokal speichern, wechseln und offline ausführen."
+                    android:text="@string/library_info"
                     android:textColor="@color/muted" android:textSize="13sp"/>
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:orientation="vertical" android:padding="17dp"
                     android:layout_marginTop="19dp" android:background="@drawable/bg_hero">
                     <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                        android:text="MODELL IMPORTIEREN" android:letterSpacing=".15"
+                        android:text="@string/import_models_header" android:letterSpacing=".15"
                         android:textSize="11sp" android:textStyle="bold" android:textColor="@color/primary"/>
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/importButton" android:layout_width="match_parent"
                         android:layout_height="49dp" android:layout_marginTop="10dp"
-                        android:text="↗   GGUF-Datei auswählen" android:textAllCaps="false"
+                        android:text="@string/import_model_file" android:textAllCaps="false"
                         android:textColor="@color/background" app:backgroundTint="@color/primary"
                         app:cornerRadius="13dp"/>
                     <com.google.android.material.button.MaterialButton
                     android:id="@+id/hfSearchButton"
                     android:layout_width="match_parent" android:layout_height="48dp"
                     android:layout_marginTop="12dp"
-                    android:text="Hugging Face · Modelle suchen"
+                    android:text="@string/hf_models_search"
                     android:textAllCaps="false"
                     android:textColor="@color/ink"
                     app:backgroundTint="@color/surface_raised"
@@ -244,19 +253,19 @@
                 <com.google.android.material.button.MaterialButton
                         android:id="@+id/browseButton" android:layout_width="match_parent"
                         android:layout_height="49dp" android:layout_marginTop="5dp"
-                        android:text="⌕   GitHub / Hugging Face durchsuchen" android:textAllCaps="false"
+                        android:text="@string/browse_models" android:textAllCaps="false"
                         android:textColor="@color/ink" app:backgroundTint="@color/surface_raised"
                         app:cornerRadius="13dp"/>
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/quickStartButton" android:layout_width="match_parent"
                         android:layout_height="49dp" android:layout_marginTop="5dp"
-                        android:text="✦   Kleine Modelle entdecken" android:textAllCaps="false"
+                        android:text="@string/discover_models" android:textAllCaps="false"
                         android:textColor="@color/ink" app:backgroundTint="@color/surface_raised"
                         app:cornerRadius="13dp"/>
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/urlButton" android:layout_width="match_parent"
                         android:layout_height="49dp" android:layout_marginTop="5dp"
-                        android:text="↓   Direkten GGUF-Link laden" android:textAllCaps="false"
+                        android:text="@string/model_direct_url" android:textAllCaps="false"
                         android:textColor="@color/ink" app:backgroundTint="@color/surface_raised"
                         app:cornerRadius="13dp"/>
                     <TextView android:id="@+id/downloadStatus" android:layout_width="match_parent"
@@ -270,7 +279,7 @@
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/cancelDownload" android:layout_width="match_parent"
                         android:layout_height="42dp" android:visibility="gone"
-                        android:text="Download abbrechen" android:textAllCaps="false"
+                        android:text="@string/cancel_download" android:textAllCaps="false"
                         android:textColor="@color/warn" app:backgroundTint="@color/surface_raised"
                         app:cornerRadius="12dp"/>
                 </LinearLayout>
@@ -285,18 +294,18 @@
                         android:layout_width="0dp" android:layout_weight="1"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="14dp"
-                        android:text="Initialisiere GGUF-Modell. Das kann etwas dauern …"
+                        android:text="@string/model_initializing"
                         android:textColor="@color/ink" android:textSize="12sp"/>
                 </LinearLayout>
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:gravity="center_vertical" android:layout_marginTop="27dp">
                     <TextView android:layout_width="0dp" android:layout_height="wrap_content"
-                        android:layout_weight="1" android:text="INSTALLIERTE MODELLE"
+                        android:layout_weight="1" android:text="@string/installed_models_header"
                         android:letterSpacing=".13" android:textStyle="bold"
                         android:textSize="11sp" android:textColor="@color/muted"/>
                     <TextView android:id="@+id/storageLabel" android:layout_width="wrap_content"
                         android:layout_height="wrap_content" android:textColor="@color/muted"
-                        android:textSize="11sp" android:text="0 Modelle"/>
+                        android:textSize="11sp" android:text="@string/zero_models"/>
                 </LinearLayout>
                 <LinearLayout android:id="@+id/modelsContainer"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -309,14 +318,30 @@
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:orientation="vertical" android:padding="22dp">
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:text="Feineinstellungen" android:textColor="@color/ink"
+                    android:text="@string/settings_title" android:textColor="@color/ink"
                     android:textStyle="bold" android:textSize="26sp"/>
+                <TextView android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:layout_marginTop="15dp"
+                    android:text="@string/language_heading" android:letterSpacing=".12"
+                    android:textColor="@color/primary" android:textStyle="bold"
+                    android:textSize="12sp"/>
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/appLanguageButton"
+                    android:layout_width="match_parent" android:layout_height="48dp"
+                    android:layout_marginTop="8dp" android:text="@string/language_system_default"
+                    android:textAllCaps="false" android:textColor="@color/ink"
+                    app:backgroundTint="@color/surface_raised"
+                    app:cornerRadius="14dp"/>
+                <TextView android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:layout_marginTop="6dp"
+                    android:text="@string/language_beta_notice"
+                    android:textSize="11sp" android:textColor="@color/muted"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp" android:text="LOKALE INFERENZ"
+                    android:layout_marginTop="19dp" android:text="@string/local_inference_header"
                     android:letterSpacing=".15" android:textColor="@color/primary"
                     android:textStyle="bold" android:textSize="11sp"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="25dp" android:text="System-Prompt"
+                    android:layout_marginTop="25dp" android:text="@string/system_prompt_label"
                     android:textColor="@color/ink" android:textSize="15sp" android:textStyle="bold"/>
                 <EditText android:id="@+id/systemPromptInput"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -332,7 +357,7 @@
                     android:layout_marginTop="24dp"
                     android:minHeight="45dp"
                     android:checked="false"
-                    android:text="Denkmodus aktivieren"
+                    android:text="@string/thinking_enable"
                     android:textColor="@color/ink"
                     android:textSize="15sp"
                     android:textStyle="bold"
@@ -340,18 +365,18 @@
                 <TextView android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="5dp"
-                    android:text="Standard: AUS. Thinking wirkt nach Modell-Neuladen und beeinflusst nur die lokale Modellausgabe. Es aktiviert weder MCP-Zugriff noch Werkzeuge. Für Toolaufrufe: CHAT → MCP → KI + MCP aktivieren; jede Ausführung einzeln bestätigen."
+                    android:text="@string/thinking_explanation"
                     android:textSize="12sp"
                     android:textColor="@color/muted"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="23dp" android:text="Maximale Antwortlänge"
+                    android:layout_marginTop="23dp" android:text="@string/max_tokens_label"
                     android:textColor="@color/ink" android:textSize="15sp" android:textStyle="bold"/>
                 <Spinner android:id="@+id/maxTokensSpinner"
                     android:layout_width="match_parent" android:layout_height="55dp"
                     android:layout_marginTop="10dp"
                     android:background="@drawable/bg_panel"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="25dp" android:text="SAMPLING · ANTWORTVERHALTEN"
+                    android:layout_marginTop="25dp" android:text="@string/sampling_label"
                     android:letterSpacing=".12" android:textStyle="bold"
                     android:textColor="@color/primary" android:textSize="12sp"/>
                 <Spinner android:id="@+id/samplingPresetSpinner"
@@ -363,7 +388,7 @@
                 <EditText android:id="@+id/temperatureInput" android:layout_width="match_parent"
                     android:layout_height="48dp" android:layout_marginTop="5dp"
                     android:inputType="numberDecimal" android:singleLine="true"
-                    android:hint="0.00 bis 2.00 · Kreativität" android:padding="12dp"
+                    android:hint="@string/temperature_hint" android:padding="12dp"
                     android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="13dp" android:text="Top-K" android:textStyle="bold"
@@ -371,7 +396,7 @@
                 <EditText android:id="@+id/topKInput" android:layout_width="match_parent"
                     android:layout_height="48dp" android:layout_marginTop="5dp"
                     android:inputType="numberDecimal" android:singleLine="true"
-                    android:hint="1 bis 200 · Kandidatenauswahl" android:padding="12dp"
+                    android:hint="@string/topk_hint" android:padding="12dp"
                     android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="13dp" android:text="Top-P" android:textStyle="bold"
@@ -379,7 +404,7 @@
                 <EditText android:id="@+id/topPInput" android:layout_width="match_parent"
                     android:layout_height="48dp" android:layout_marginTop="5dp"
                     android:inputType="numberDecimal" android:singleLine="true"
-                    android:hint="0.05 bis 1.00 · Wahrscheinlichkeitsmasse" android:padding="12dp"
+                    android:hint="@string/topp_hint" android:padding="12dp"
                     android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="13dp" android:text="Min-P" android:textStyle="bold"
@@ -387,7 +412,7 @@
                 <EditText android:id="@+id/minPInput" android:layout_width="match_parent"
                     android:layout_height="48dp" android:layout_marginTop="5dp"
                     android:inputType="numberDecimal" android:singleLine="true"
-                    android:hint="0.00 bis 0.50 · Mindestwahrscheinlichkeit" android:padding="12dp"
+                    android:hint="@string/minp_hint" android:padding="12dp"
                     android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="13dp" android:text="Repeat Penalty" android:textStyle="bold"
@@ -395,7 +420,7 @@
                 <EditText android:id="@+id/repeatPenaltyInput" android:layout_width="match_parent"
                     android:layout_height="48dp" android:layout_marginTop="5dp"
                     android:inputType="numberDecimal" android:singleLine="true"
-                    android:hint="1.00 bis 2.00 · Wiederholungen bremsen" android:padding="12dp"
+                    android:hint="@string/penalty_hint" android:padding="12dp"
                     android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="13dp" android:text="Repeat Last N" android:textStyle="bold"
@@ -403,29 +428,38 @@
                 <EditText android:id="@+id/repeatLastNInput" android:layout_width="match_parent"
                     android:layout_height="48dp" android:layout_marginTop="5dp"
                     android:inputType="numberDecimal" android:singleLine="true"
-                    android:hint="0 bis 512 · Verlauf in Tokens" android:padding="12dp"
+                    android:hint="@string/lastn_hint" android:padding="12dp"
                     android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/saveSettingsButton" android:layout_width="match_parent"
                     android:layout_height="48dp" android:layout_marginTop="18dp"
-                    android:text="Einstellungen speichern" android:textAllCaps="false"
+                    android:text="@string/save_settings" android:textAllCaps="false"
                     android:textColor="@color/background" app:backgroundTint="@color/primary"
                     app:cornerRadius="14dp"/>
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/clearChatButton" android:layout_width="match_parent"
                     android:layout_height="48dp" android:layout_marginTop="24dp"
-                    android:text="Gespräch zurücksetzen" android:textAllCaps="false"
+                    android:text="@string/reset_chat" android:textAllCaps="false"
                     android:textColor="@color/ink" app:backgroundTint="@color/surface_raised"
                     app:cornerRadius="14dp"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="15dp"
-                    android:text="GGUF: CPU · LiteRT-LM: TPU/GPU/CPU mit Fallback"
+                    android:text="@string/backend_info"
                     android:textColor="@color/muted" android:textSize="12sp"/>
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/hardwareProbeButton"
                     android:layout_width="match_parent" android:layout_height="48dp"
                     android:layout_marginTop="12dp"
-                    android:text="KI-Hardware / NPU / GPU prüfen"
+                    android:text="@string/hardware_test"
+                    android:textAllCaps="false"
+                    android:textColor="@color/ink"
+                    app:backgroundTint="@color/surface_raised"
+                    app:cornerRadius="14dp"/>
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/pocketDiagnosticsButton"
+                    android:layout_width="match_parent" android:layout_height="48dp"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/diagnostics_button"
                     android:textAllCaps="false"
                     android:textColor="@color/ink"
                     app:backgroundTint="@color/surface_raised"
@@ -434,26 +468,26 @@
                     android:id="@+id/crashDiagnosticsButton"
                     android:layout_width="match_parent" android:layout_height="48dp"
                     android:layout_marginTop="15dp"
-                    android:text="Letzte App-Abstürze prüfen" android:textAllCaps="false"
+                    android:text="@string/crash_diagnostics" android:textAllCaps="false"
                     android:textColor="@color/ink" app:backgroundTint="@color/surface_raised"
                     app:cornerRadius="14dp"/>
                 <TextView android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="35dp"
-                    android:text="MCP VERBINDUNGEN" android:letterSpacing=".15"
+                    android:text="@string/mcp_connections_header" android:letterSpacing=".15"
                     android:textColor="@color/primary"
                     android:textStyle="bold" android:textSize="11sp"/>
                 <TextView android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="7dp"
-                    android:text="Streamable HTTP: Ohne Auth, Bearer, API-Key, Basic und OAuth mit PKCE. Zugangsdaten werden mit Android Keystore verschlüsselt."
+                    android:text="@string/mcp_auth_info"
                     android:textColor="@color/muted" android:textSize="12sp"/>
                 <!-- RC12: MCP model-agent settings must be reachable from SETUP,
                      not hidden exclusively in CHAT -> MCP. -->
                 <TextView android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="19dp"
-                    android:text="MCP MODELL-AGENT · AUTO-BRIDGE"
+                    android:text="@string/mcp_agent_header"
                     android:textColor="@color/primary"
                     android:letterSpacing=".12" android:textStyle="bold"
                     android:textSize="12sp"/>
@@ -461,20 +495,20 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:text="MCP-Agent AUS · Werkzeug-Discovery noch nicht aktiviert"
+                    android:text="@string/mcp_agent_disabled"
                     android:textColor="@color/ink" android:textSize="13sp"
-                    android:contentDescription="Aktueller MCP-Modell-Agentenstatus"/>
+                    />
                 <TextView android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="5dp"
-                    android:text="MCP-Server hier anmelden, darunter den Modell-Agenten konfigurieren. AUTO-BRIDGE lässt das lokale GGUF echte Tools suchen. Für Ausführungen ist immer deine Freigabe nötig. Auch ohne geladenes Modell kannst du den Agenten vormerken und die Live-Toolliste ansehen."
+                    android:text="@string/mcp_agent_info"
                     android:textColor="@color/muted" android:textSize="12sp"/>
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/mcpAgentSettingsButton"
                     android:layout_width="match_parent"
                     android:layout_height="50dp"
                     android:layout_marginTop="12dp"
-                    android:text="KI + MCP / AUTO-BRIDGE konfigurieren"
+                    android:text="@string/mcp_agent_button"
                     android:textAllCaps="false"
                     android:textColor="@color/background"
                     app:backgroundTint="@color/primary"
@@ -484,7 +518,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="48dp"
                     android:layout_marginTop="10dp"
-                    android:text="MCP-Tools live prüfen (ohne Modell)"
+                    android:text="@string/mcp_live_tools"
                     android:textAllCaps="false"
                     android:textColor="@color/ink"
                     app:backgroundTint="@color/surface_raised"
@@ -494,7 +528,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="48dp"
                     android:layout_marginTop="10dp"
-                    android:text="MCP Server-Instructions anzeigen"
+                    android:text="@string/mcp_server_help"
                     android:textAllCaps="false"
                     android:textColor="@color/ink"
                     app:backgroundTint="@color/surface_raised"
@@ -502,14 +536,14 @@
                 <TextView android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="6dp"
-                    android:text="Die festen MCP-Discovery-Regeln gelten automatisch. Optionale Serverhinweise lassen sich ansehen und beim Verbinden der AUTO-BRIDGE bewusst aktivieren; sie geben niemals zusätzliche Rechte."
+                    android:text="@string/mcp_discovery_info"
                     android:textColor="@color/muted" android:textSize="11sp"/>
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/addMcpServerButton"
                     android:layout_width="match_parent"
                     android:layout_height="48dp"
                     android:layout_marginTop="14dp"
-                    android:text="+ MCP-Server hinzufügen"
+                    android:text="@string/mcp_add_server"
                     android:textAllCaps="false"
                     android:textColor="@color/background"
                     app:backgroundTint="@color/primary"
@@ -522,12 +556,12 @@
                 <TextView android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="5dp"
-                    android:text="Tools werden nur nach deiner ausdrücklichen Bestätigung ausgeführt. OAuth-Anmeldung erfolgt im externen Browser."
+                    android:text="@string/mcp_approval_info"
                     android:textColor="@color/muted" android:textSize="11sp"/>
                 <TextView android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="17dp"
-                    android:text="Wichtig: Normale App-Updates erhalten Modelle und Anmeldungen. Das Löschen der App-Daten oder eine Deinstallation entfernt dagegen die privaten GGUF-Dateien und den verschlüsselten MCP-Tresor."
+                    android:text="@string/update_data_warning"
                     android:textColor="@color/muted" android:textSize="11sp"/>
                 <TextView android:id="@+id/appVersion"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -536,7 +570,7 @@
                     android:textColor="@color/muted" android:textSize="12sp"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="9dp"
-                    android:text="Die KI läuft direkt auf deinem Gerät mit llama.cpp. Nur Modell-Downloads und Repository-Abfragen benötigen Internet."
+                    android:text="@string/offline_info"
                     android:textColor="@color/muted" android:textSize="12sp"/>
             </LinearLayout>
         </ScrollView>
@@ -548,15 +582,15 @@
         android:background="@color/surface" android:gravity="center">
         <TextView android:id="@+id/navChat" android:layout_width="0dp"
             android:layout_height="match_parent" android:layout_weight="1"
-            android:gravity="center" android:text="✦  CHAT" android:letterSpacing=".08"
+            android:gravity="center" android:text="@string/nav_chat" android:letterSpacing=".08"
             android:textSize="12sp" android:textStyle="bold" android:textColor="@color/primary"/>
         <TextView android:id="@+id/navModels" android:layout_width="0dp"
             android:layout_height="match_parent" android:layout_weight="1"
-            android:gravity="center" android:text="▤  MODELLE" android:letterSpacing=".08"
+            android:gravity="center" android:text="@string/nav_models" android:letterSpacing=".08"
             android:textSize="12sp" android:textStyle="bold" android:textColor="@color/muted"/>
         <TextView android:id="@+id/navSettings" android:layout_width="0dp"
             android:layout_height="match_parent" android:layout_weight="1"
-            android:gravity="center" android:text="⚙  SETUP" android:letterSpacing=".08"
+            android:gravity="center" android:text="@string/nav_setup" android:letterSpacing=".08"
             android:textSize="12sp" android:textStyle="bold" android:textColor="@color/muted"/>
     </LinearLayout>
 </LinearLayout>

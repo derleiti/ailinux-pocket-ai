@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  CHAT</string>
+    <string name="nav_models">▤  MODELLEN</string>
+    <string name="nav_setup">⚙  INSTELLINGEN</string>
+    <string name="chat_heading">GESPREK</string>
+    <string name="history_title">CHATGESCHIEDENIS</string>
+    <string name="new_chat">+ Nieuwe chat</string>
+    <string name="search_chats">Chats zoeken</string>
+    <string name="archived_chats">Gearchiveerde chats</string>
+    <string name="library_title">Modelbibliotheek</string>
+    <string name="settings_title">Instellingen</string>
+    <string name="language_heading">APP-TAAL</string>
+    <string name="language_dialog_title">App-taal kiezen</string>
+    <string name="language_system_default">Systeemtaal</string>
+    <string name="language_preview_suffix">Voorbeeld</string>
+    <string name="language_button">Taal: %1$s</string>
+</resources>

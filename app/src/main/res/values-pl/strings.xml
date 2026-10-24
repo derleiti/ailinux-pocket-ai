@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  CZAT</string>
+    <string name="nav_models">▤  MODELE</string>
+    <string name="nav_setup">⚙  USTAWIENIA</string>
+    <string name="chat_heading">ROZMOWA</string>
+    <string name="history_title">HISTORIA CZATÓW</string>
+    <string name="new_chat">+ Nowy czat</string>
+    <string name="search_chats">Szukaj czatów</string>
+    <string name="archived_chats">Zarchiwizowane czaty</string>
+    <string name="library_title">Biblioteka modeli</string>
+    <string name="settings_title">Ustawienia</string>
+    <string name="language_heading">JĘZYK APLIKACJI</string>
+    <string name="language_dialog_title">Wybierz język</string>
+    <string name="language_system_default">Język systemowy</string>
+    <string name="language_preview_suffix">Podgląd</string>
+    <string name="language_button">Język: %1$s</string>
+</resources>
