@@ -104,6 +104,9 @@ internal class InferenceEngineImpl private constructor(
 
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
 
+    private external fun configureSamplingNative(temperature: Float, topK: Int,
+        topP: Float, minP: Float, repeatPenalty: Float, repeatLastN: Int)
+
     private external fun generateNextToken(): String?
 
     /** Idempotently close a native assistant turn if generation was stopped. */
@@ -236,6 +239,21 @@ internal class InferenceEngineImpl private constructor(
         require(mode in setOf("off", "low", "high")) { "Ungültiger Thinking-Modus" }
         setReasoningModeNative(mode)
         Log.i(TAG, "GGUF reasoning mode for new chat: $mode")
+        Unit
+    }
+
+    override suspend fun setSampling(temperature: Float, topK: Int, topP: Float,
+        minP: Float, repeatPenalty: Float, repeatLastN: Int) = withContext(llamaDispatcher) {
+        check(_state.value is InferenceEngine.State.ModelReady) {
+            "Sampling kann nur bei bereitem Modell geändert werden."
+        }
+        require(temperature.isFinite() && temperature in 0f..2f)
+        require(topK in 1..200)
+        require(topP.isFinite() && topP in 0.05f..1f)
+        require(minP.isFinite() && minP in 0f..0.5f)
+        require(repeatPenalty.isFinite() && repeatPenalty in 1f..2f)
+        require(repeatLastN in 0..512)
+        configureSamplingNative(temperature, topK, topP, minP, repeatPenalty, repeatLastN)
         Unit
     }
 

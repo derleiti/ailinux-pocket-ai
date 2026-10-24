@@ -38,7 +38,13 @@ constexpr int   OVERFLOW_HEADROOM       = 4;
 constexpr int   SYSTEM_PROMPT_RESERVE   = 512;  // Leave room for an actual chat turn
 constexpr int   USER_PREFILL_RESERVE    = 32;   // Leave room for first response logits
 constexpr int   BATCH_SIZE              = 128;
-constexpr float DEFAULT_SAMPLER_TEMP    = 0.3f;
+constexpr float DEFAULT_SAMPLER_TEMP    = 0.7f;
+static float g_temperature = DEFAULT_SAMPLER_TEMP;
+static int g_top_k = 40;
+static float g_top_p = 0.9f;
+static float g_min_p = 0.05f;
+static float g_repeat_penalty = 1.15f;
+static int g_repeat_last_n = 128;
 
 static llama_model                      * g_model;
 static llama_context                    * g_context;
@@ -245,6 +251,12 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
 static common_sampler *new_sampler(float temp) {
     common_params_sampling sparams;
     sparams.temp = temp;
+    sparams.top_k = g_top_k;
+    sparams.top_p = g_top_p;
+    sparams.min_p = g_min_p;
+    sparams.penalty_repeat = g_repeat_penalty;
+    sparams.penalty_last_n = g_repeat_last_n;
+    sparams.n_prev = std::max(64, g_repeat_last_n);
     return common_sampler_init(g_model, sparams);
 }
 
@@ -263,7 +275,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobje
          g_effective_context_size, BATCH_SIZE, N_THREADS_MAX);
     g_batch = common_batch(context);
     g_chat_templates = common_chat_templates_init(g_model, "");
-    g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
+    g_sampler = new_sampler(g_temperature);
     return 0;
     } catch (const std::exception &e) {
         g_capture_load_log.store(false, std::memory_order_release);
@@ -273,6 +285,71 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobje
         g_capture_load_log.store(false, std::memory_order_release);
         set_native_error("context_prepare", "Unknown native C++ exception");
         return 4;
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_configureSamplingNative(
+        JNIEnv *env, jobject, jfloat temperature, jint top_k, jfloat top_p,
+        jfloat min_p, jfloat repeat_penalty, jint repeat_last_n) {
+    if (!g_model || !g_context || !g_sampler ||
+        !std::isfinite(temperature) || temperature < 0.f || temperature > 2.f ||
+        top_k < 1 || top_k > 200 ||
+        !std::isfinite(top_p) || top_p < 0.05f || top_p > 1.f ||
+        !std::isfinite(min_p) || min_p < 0.f || min_p > 0.5f ||
+        !std::isfinite(repeat_penalty) || repeat_penalty < 1.f || repeat_penalty > 2.f ||
+        repeat_last_n < 0 || repeat_last_n > 512) {
+        throw_java_native_error(env, "sampling", "Invalid sampling settings or model not loaded");
+        return;
+    }
+    // Preserve the native repetition history when settings are unchanged.
+    if (temperature == g_temperature && top_k == g_top_k && top_p == g_top_p &&
+        min_p == g_min_p && repeat_penalty == g_repeat_penalty &&
+        repeat_last_n == g_repeat_last_n) {
+        return;
+    }
+    try {
+        // Prepare replacement first. Keep the old sampler if initialization fails.
+        const auto old_temp = g_temperature;
+        const auto old_k = g_top_k;
+        const auto old_p = g_top_p;
+        const auto old_min = g_min_p;
+        const auto old_repeat = g_repeat_penalty;
+        const auto old_last = g_repeat_last_n;
+        g_temperature = temperature;
+        g_top_k = top_k;
+        g_top_p = top_p;
+        g_min_p = min_p;
+        g_repeat_penalty = repeat_penalty;
+        g_repeat_last_n = repeat_last_n;
+        common_sampler *replacement = nullptr;
+        try {
+            replacement = new_sampler(g_temperature);
+        } catch (...) {
+            g_temperature = old_temp;
+            g_top_k = old_k;
+            g_top_p = old_p;
+            g_min_p = old_min;
+            g_repeat_penalty = old_repeat;
+            g_repeat_last_n = old_last;
+            throw;
+        }
+        if (!replacement) {
+            g_temperature = old_temp;
+            g_top_k = old_k;
+            g_top_p = old_p;
+            g_min_p = old_min;
+            g_repeat_penalty = old_repeat;
+            g_repeat_last_n = old_last;
+            throw std::runtime_error("Could not allocate replacement sampler");
+        }
+        common_sampler_free(g_sampler);
+        g_sampler = replacement;
+    } catch (const std::exception &error) {
+        throw_java_native_error(env, "sampling", error.what());
+    } catch (...) {
+        throw_java_native_error(env, "sampling", "Unknown native sampler error");
     }
 }
 

@@ -32,6 +32,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.Spinner
+import android.widget.AdapterView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -107,6 +108,27 @@ class MainActivity : AppCompatActivity() {
     private val systemPrompt by lazy { findViewById<EditText>(R.id.systemPromptInput) }
     private val thinkingModeSwitch by lazy { findViewById<SwitchCompat>(R.id.thinkingModeSwitch) }
 
+    private val samplingFields by lazy { listOf(
+        R.id.temperatureInput, R.id.topKInput, R.id.topPInput,
+        R.id.minPInput, R.id.repeatPenaltyInput, R.id.repeatLastNInput
+    ) }
+
+    private fun samplingValues() = samplingFields.map {
+        findViewById<EditText>(it).text.toString().trim().replace(',', '.')
+    }
+
+    private fun showSampling(values: List<String>) {
+        samplingFields.zip(values).forEach { (id, value) ->
+            findViewById<EditText>(id).setText(value)
+        }
+    }
+
+    private suspend fun applySampling() {
+        val settings = SamplingSettings.fromPrefs(prefs)
+        engine.setSampling(settings.temperature, settings.topK, settings.topP,
+            settings.minP, settings.repeatPenalty, settings.repeatLastN)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -176,13 +198,33 @@ class MainActivity : AppCompatActivity() {
         tokenSpinner.adapter = adapter
         val selected = listOf(128, 256, 512, 1024).indexOf(prefs.getInt("max_tokens", 512))
         tokenSpinner.setSelection(selected.coerceAtLeast(0))
+        showSampling(SamplingSettings.fromPrefs(prefs).asStrings())
+        val samplingPreset = findViewById<Spinner>(R.id.samplingPresetSpinner)
+        val samplingNames = listOf("Standard · ausgewogen", "Präzise", "Kreativ", "Eigene Werte")
+        samplingPreset.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item,
+            samplingNames).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        samplingPreset.setSelection(3)
+        samplingPreset.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?,
+                view: View?, position: Int, id: Long) {
+                if (position < 3) showSampling(SamplingSettings.presets[position].asStrings())
+            }
+        }
         findViewById<MaterialButton>(R.id.saveSettingsButton).setOnClickListener {
             val count = listOf(128, 256, 512, 1024)[tokenSpinner.selectedItemPosition]
+            val sampling = try {
+                SamplingSettings.parse(samplingValues())
+            } catch (invalid: IllegalArgumentException) {
+                toast(invalid.message ?: "Sampling-Werte ungültig")
+                return@setOnClickListener
+            }
+            sampling.save(prefs)
             prefs.edit().putString("system_prompt", systemPrompt.text.toString())
                 .putInt("max_tokens", count)
                 .putBoolean(PREF_ENABLE_THINKING, thinkingModeSwitch.isChecked)
                 .apply()
-            toast("Gespeichert. Thinking wirkt nach Modell-Neuladen; MCP-Agent separat aktivieren.")
+            toast("Sampling ab nächster Antwort · Thinking nach Modell-Neuladen; MCP-Agent separat aktivieren.")
         }
         findViewById<MaterialButton>(R.id.clearChatButton).setOnClickListener {
             if (!busy) {
@@ -460,6 +502,7 @@ class MainActivity : AppCompatActivity() {
                         McpAgentBridge.nativeToolsJson(it.tools)
                     } ?: "[]"
                     engine.setSystemPrompt(groundedSystemPrompt(activeMcp), nativeTools)
+                    applySampling()
                 }
                 activeModel = file
                 messages.clear()
@@ -1045,6 +1088,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 val fullReply = StringBuilder()
                 withContext(Dispatchers.Default) {
+                    applySampling()
                     engine.sendUserPrompt(request, prefs.getInt("max_tokens", 512)).collect { token ->
                         if (agentSession != null) {
                             // Withhold unverified model tool syntax from the chat.
