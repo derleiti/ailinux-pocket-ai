@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
+    id("com.google.devtools.ksp") version "2.3.12"
 }
 // Production signing is opt-in. The private keystore comes from a protected
 // local environment or protected GitHub Environment secrets, never source.
@@ -23,8 +24,8 @@ android {
         applicationId = "me.ailinux.pocket"
         minSdk = 33
         targetSdk = 35
-        versionCode = 33
-        versionName = "2.1.0-RC8"
+        versionCode = 34
+        versionName = "2.1.0-RC9"
         ndk { abiFilters += "arm64-v8a" }
     }
     signingConfigs {
@@ -66,10 +67,18 @@ android {
         )
     }
 }
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     implementation(libs.bundles.androidx)
     implementation(libs.material)
     implementation("androidx.recyclerview:recyclerview:1.4.0")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
+    implementation("androidx.drawerlayout:drawerlayout:1.2.0")
+    implementation("androidx.room3:room3-runtime:3.0.3")
+    ksp("androidx.room3:room3-compiler:3.0.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation(project(":inference"))
     // Tested against the official Google Tensor G5 TPU sample dependency set.
