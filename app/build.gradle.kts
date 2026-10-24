@@ -23,8 +23,8 @@ android {
         applicationId = "me.ailinux.pocket"
         minSdk = 33
         targetSdk = 35
-        versionCode = 24
-        versionName = "1.0.0-rc.14"
+        versionCode = 25
+        versionName = "0.2.0-rc.1"
         ndk { abiFilters += "arm64-v8a" }
     }
     signingConfigs {
@@ -58,6 +58,12 @@ android {
         // Modern Android installs uncompressed JNI libs directly from the APK
         // by default. Without physical extraction, zero CPU backends are found.
         jniLibs.useLegacyPackaging = true
+        // Google's LiteRT-LM TPU sample ships these duplicate vendor libs.
+        jniLibs.pickFirsts += setOf(
+            "**/libLiteRt.so",
+            "**/libLiteRtDispatch_GoogleTensor.so",
+            "**/libLiteRtClGlAccelerator.so"
+        )
     }
 }
 dependencies {
@@ -66,6 +72,9 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.4.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation(project(":inference"))
+    // Tested against the official Google Tensor G5 TPU sample dependency set.
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.12.0")
+    implementation("com.google.ai.edge.litert:litert:2.3.0")
     testImplementation(libs.junit)
     // Real org.json is necessary in local JVM protocol integration tests;
     // the Android test stub otherwise throws "Method not mocked".

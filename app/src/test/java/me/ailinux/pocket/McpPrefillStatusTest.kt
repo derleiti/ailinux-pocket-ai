@@ -42,6 +42,15 @@ class McpPrefillStatusTest {
             .contains("abgeschlossen"))
     }
 
+    @Test fun diagnosticsIdentifyAndroidCpuKillWithoutBlamingLastSavedPhase() {
+        val main = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        assertTrue(main.contains("ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE"))
+        assertTrue(main.contains("übermäßige Ressourcennutzung"))
+        val status = McpPrefillStatus.report(McpPrefillStatus.State(256, 710), 74_000L, false)
+        assertTrue(status.contains("Prefill-Messung"))
+        assertFalse(status.contains("Kein Hinweis auf Netzwerktests oder einen Android-Crash"))
+    }
+
     @Test fun invalidNativeCountsDoNotBecomeFakeProgress() {
         val impossible = McpPrefillStatus.unpack(pack(999L, 500L))
         assertEquals(0, impossible.total)

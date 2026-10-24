@@ -50,6 +50,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.arm.aichat.AiChat
 import com.arm.aichat.InferenceEngine
+import com.arm.aichat.IncompleteThinkingTurnException
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import kotlinx.coroutines.CancellationException
@@ -81,6 +82,8 @@ class MainActivity : AppCompatActivity() {
     private val messages = mutableListOf<ChatMessage>()
     private val chatAdapter = ChatAdapter(messages)
     private var activeModel: File? = null
+    /** Alternative LiteRT-LM runtime, only for .litertlm models. */
+    private var liteRtRuntime: LiteRtRuntime? = null
     private var generationJob: Job? = null
     private var busy = false
     private var transferBusy = false
@@ -169,7 +172,14 @@ class MainActivity : AppCompatActivity() {
             displayMcpToolResult(result)
         }
         mcpAgent = McpAgentUi(this) { active ->
-            if (activeModel != null) rebindNativeMcpTools(active)
+            if (activeModel?.name?.endsWith(".litertlm", true) == true) {
+                // Never claim native MCP tool calling for the LiteRT-LM path.
+                if (active != null) {
+                    mcpAgent.clearSessionSilently()
+                    toast("KI + MCP-Agent benötigt derzeit GGUF. MCP-Schnellbefehle bleiben verfügbar.")
+                }
+                updateMcpBadge(null)
+            } else if (activeModel != null) rebindNativeMcpTools(active)
             else updateMcpBadge(active)
         }
         // No agent session does not mean the device, its saved MCP profiles,
@@ -204,6 +214,7 @@ class MainActivity : AppCompatActivity() {
             if (!transferBusy) modelPicker.launch(arrayOf("*/*"))
         }
         findViewById<MaterialButton>(R.id.browseButton).setOnClickListener { browseRepository() }
+        findViewById<MaterialButton>(R.id.hfSearchButton).setOnClickListener { searchHuggingFace() }
         findViewById<MaterialButton>(R.id.quickStartButton).setOnClickListener { quickStart() }
         findViewById<MaterialButton>(R.id.urlButton).setOnClickListener { promptDirectUrl() }
         cancelDownload.setOnClickListener { cancelTransfer.set(true) }
@@ -261,16 +272,21 @@ class MainActivity : AppCompatActivity() {
             toast("Sampling ab nächster Antwort · Thinking nach Modell-Neuladen; MCP-Agent separat aktivieren.")
         }
         findViewById<MaterialButton>(R.id.clearChatButton).setOnClickListener {
-            if (!busy) {
-                activeModel?.let { loadModel(it) } ?: run {
-                    messages.clear()
-                    chatAdapter.notifyDataSetChanged()
-                    findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
-                }
-            }
+            resetLocalConversation()
         }
         findViewById<MaterialButton>(R.id.crashDiagnosticsButton).setOnClickListener {
             showProcessExitInfo()
+        }
+        findViewById<MaterialButton>(R.id.hardwareProbeButton).setOnClickListener {
+            val live = liteRtRuntime?.backendName
+            val report = RuntimeHardware.diagnostics(this) +
+                (if (live != null) "\n\nAktiv initialisiertes LiteRT-Backend: " + live
+                 else "\n\nAktuelles LiteRT-Backend: nicht gestartet.")
+            AlertDialog.Builder(this)
+                .setTitle("Android KI-Hardware / LiteRT-LM")
+                .setMessage(report)
+                .setPositiveButton("OK", null)
+                .show()
         }
 
         // This preference is written synchronously before native load and only
@@ -375,7 +391,7 @@ class MainActivity : AppCompatActivity() {
             files.size.toString() + " Modelle • " +
             ModelStore.displaySize(files.sumOf { it.length() })
         if (files.isEmpty()) {
-            modelsContainer.addView(simpleLabel("Hier ist noch Platz für dein erstes GGUF-Modell."))
+            modelsContainer.addView(simpleLabel("Hier ist noch Platz für dein erstes Offline-Modell."))
         }
         files.forEach { file ->
             val card = MaterialCardView(this).apply {
@@ -421,7 +437,7 @@ class MainActivity : AppCompatActivity() {
             remove.setOnClickListener {
                 AlertDialog.Builder(this)
                     .setTitle("Modell löschen?")
-                    .setMessage(file.name + "\nDie lokale GGUF-Datei wird entfernt.")
+                    .setMessage(file.name + "\nDie lokale Modelldatei wird entfernt.")
                     .setNegativeButton("Abbrechen", null)
                     .setPositiveButton("Löschen") { _, _ ->
                         try { store.delete(file); refreshLibrary() }
@@ -478,6 +494,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadModel(file: File, acknowledgedLargeModel: Boolean = false) {
         if (busy) return
+        if (file.name.endsWith(".litertlm", true)) {
+            loadLiteRtModel(file, acknowledgedLargeModel)
+            return
+        }
         if (!::engine.isInitialized) { toast("Engine initialisiert noch."); return }
         val memory = ActivityManager.MemoryInfo().also {
             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
@@ -507,6 +527,11 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.IO) {
                     check(prefs.edit().putString(PREF_LOADING_MODEL, file.name).commit()) {
                         "Prozessdiagnose-Marker konnte nicht gespeichert werden."
+                    }
+                    liteRtRuntime?.let {
+                        previousModelUnloaded = true
+                        it.close()
+                        liteRtRuntime = null
                     }
                     when (engine.state.value) {
                         is InferenceEngine.State.ModelReady,
@@ -568,10 +593,80 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Separate LiteRT-LM binary model path: try NPU, then GPU, then CPU. */
+    private fun loadLiteRtModel(file: File, acknowledgedLargeModel: Boolean = false) {
+        if (busy || transferBusy) return
+        val memory = ActivityManager.MemoryInfo().also {
+            (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
+        }
+        if (!acknowledgedLargeModel &&
+            ModelLoadSafety.requiresConfirmation(file.length(), memory.availMem)) {
+            AlertDialog.Builder(this)
+                .setTitle("Hoher RAM-Bedarf")
+                .setMessage(ModelLoadSafety.explain(file.length(), memory.availMem))
+                .setNegativeButton("Abbrechen", null)
+                .setPositiveButton("Trotzdem laden") { _, _ ->
+                    loadLiteRtModel(file, acknowledgedLargeModel = true)
+                }.show()
+            return
+        }
+        busy = true
+        renderChatState()
+        setModelLoading(true, file.name)
+        setStatus("● LITERT · PRÜFE NPU / GPU / CPU …")
+        lifecycleScope.launch {
+            try {
+                val loaded = withContext(Dispatchers.IO) {
+                    ModelStore.validate(file)
+                    check(prefs.edit().putString(PREF_LOADING_MODEL, file.name).commit()) {
+                        "Prozessdiagnose-Marker konnte nicht gespeichert werden."
+                    }
+                    // Never hold two multi-GB models in memory simultaneously.
+                    if (::engine.isInitialized && (engine.state.value is InferenceEngine.State.ModelReady ||
+                            engine.state.value is InferenceEngine.State.Error)) {
+                        engine.cleanUp()
+                    }
+                    liteRtRuntime?.close()
+                    liteRtRuntime = null
+                    val prompt = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
+                    LiteRtRuntime.load(applicationContext, file, prompt)
+                }
+                liteRtRuntime = loaded
+                activeModel = file
+                // GGUF Jinja tools cannot be injected into a different engine.
+                mcpAgent.clearSessionSilently()
+                updateMcpBadge(null)
+                messages.clear()
+                chatAdapter.notifyDataSetChanged()
+                findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
+                setStatus("● LITERT BEREIT · " + loaded.backendName)
+                refreshLibrary()
+                showPage(0)
+            } catch (error: Exception) {
+                activeModel = null
+                setStatus("LiteRT-LM konnte nicht gestartet werden")
+                showError("LiteRT-Modell/Backend fehlgeschlagen", error)
+            } catch (error: LinkageError) {
+                activeModel = null
+                setStatus("LiteRT-LM Bibliothek nicht verfügbar")
+                showError("LiteRT-LM Bibliothek konnte nicht geladen werden", error)
+            } finally {
+                prefs.edit().remove(PREF_LOADING_MODEL).apply()
+                setModelLoading(false)
+                busy = false
+                renderChatState()
+            }
+        }
+    }
+
     /** Both CHAT and SETUP open the SAME model bridge configuration.
      * A model does not need to be loaded yet: the optional agent session
      * can be prepared and bound when the GGUF is next loaded. */
     private fun showMcpAgentMenu() {
+        if (activeModel?.name?.endsWith(".litertlm", true) == true) {
+            toast("LiteRT-LM: Modell-MCP noch nicht freigegeben. MCP-Schnellbefehle sind separat verfügbar.")
+            return
+        }
         if (busy) {
             toast("MCP-Modus erst nach der aktuellen Aktion wechseln.")
             return
@@ -581,6 +676,48 @@ class MainActivity : AppCompatActivity() {
             openHealthCheck = { showLiveMcpHealth("/mcp health", "") },
             openQuickHelp = { showQuickActionPicker() }
         )
+    }
+
+    /** Reset only user/assistant history; NEVER reload model or rerun MCP tools. */
+    private fun resetLocalConversation() {
+        if (busy || mcpDispatchInFlight || mcpBindingInProgress ||
+                generationJob?.isActive == true) {
+            toast("Bitte laufende Modell- oder MCP-Aktion zuerst beenden.")
+            return
+        }
+        if (activeModel == null) {
+            messages.clear()
+            chatAdapter.notifyDataSetChanged()
+            findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
+            setStatus("● CHAT GELEERT")
+            return
+        }
+        busy = true
+        renderChatState()
+        setStatus("● CHAT WIRD ZURÜCKGESETZT · MODELL BLEIBT GELADEN")
+        lifecycleScope.launch {
+            try {
+                if (activeModel?.name?.endsWith(".litertlm", true) == true) {
+                    val runtime = liteRtRuntime ?: error("LiteRT-Modell nicht bereit")
+                    runtime.clearConversation()
+                    setStatus("● LITERT BEREIT · " + runtime.backendName)
+                } else {
+                    check(::engine.isInitialized) { "GGUF-Modell nicht bereit" }
+                    engine.clearConversationKeepingSystem()
+                    setStatus("● BEREIT · MCP-SYSTEMKONTEXT ERHALTEN")
+                }
+                messages.clear()
+                chatAdapter.notifyDataSetChanged()
+                findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
+                toast("Chat zurückgesetzt · Modell nicht neu geladen")
+            } catch (problem: Exception) {
+                setStatus("Chat-Reset fehlgeschlagen · Modell bleibt unverändert")
+                showError("Schneller Konversationsreset nicht möglich", problem)
+            } finally {
+                busy = false
+                renderChatState()
+            }
+        }
     }
 
     private fun groundedSystemPrompt(active: McpAgentSession?): String {
@@ -1438,6 +1575,14 @@ class MainActivity : AppCompatActivity() {
             toast("Bitte zuerst ein Modell laden. Für MCP geht auch /mcp tools.")
             return
         }
+        if (activeModel?.name?.endsWith(".litertlm", true) == true) {
+            if (text.length > 16_000) {
+                toast("Nachricht zu lang")
+                return
+            }
+            sendLiteRtMessage(text)
+            return
+        }
         val agentSession = mcpAgent.current()
         if (text.length > 16_000) {
             toast("Nachricht zu lang")
@@ -1648,9 +1793,20 @@ class MainActivity : AppCompatActivity() {
             } catch (_: CancellationException) {
                 setStatus("● GESTOPPT")
             } catch (error: Exception) {
-                answer.content += "\n[Fehler: " + (error.message ?: "Unbekannt") + "]"
+                if (error is IncompleteThinkingTurnException) {
+                    // Native SYSTEM/MCP KV already recovered; avoid 171s re-prefill
+                    // and never retry a potentially side-effecting remote call.
+                    pendingNativeToolTurn = null
+                    answer.content = "⚠️ Spark Thinking LOW nicht abgeschlossen. " +
+                        "Unfertigen lokalen Turn verworfen; MCP weiterhin bereit. " +
+                        "Frage erneut stellen oder Thinking OFF wählen. " +
+                        "Keine externe Aktion automatisch wiederholt."
+                    setStatus("● BEREIT · THINKING RESET")
+                } else {
+                    answer.content += "\n[Fehler: " + (error.message ?: "Unbekannt") + "]"
+                    setStatus("Generierung fehlgeschlagen")
+                }
                 chatAdapter.notifyItemChanged(index)
-                setStatus("Generierung fehlgeschlagen")
             } finally {
                 val unresolved = pendingNativeToolTurn
                 if (unresolved != null) {
@@ -1684,6 +1840,52 @@ class MainActivity : AppCompatActivity() {
      * Storage Access Framework. Progress and cancellation share the existing
      * model transfer controls; no broad storage permission is requested.
      */
+    /** LiteRT-LM chat is local and independent from the GGUF MCP tool bridge. */
+    private fun sendLiteRtMessage(text: String) {
+        val runtime = liteRtRuntime
+        if (runtime == null) {
+            toast("LiteRT-Modell zuerst laden")
+            return
+        }
+        messageInput.setText("")
+        val answer = ChatMessage(false, "")
+        messages.add(ChatMessage(true, text))
+        messages.add(answer)
+        val index = messages.lastIndex
+        chatAdapter.notifyItemRangeInserted(index - 1, 2)
+        findViewById<View>(R.id.emptyState).visibility = View.GONE
+        messagesView.scrollToPosition(index)
+        busy = true
+        sendButton.text = "■"
+        messageInput.isEnabled = false
+        setStatus("● LITERT · " + runtime.backendName + " …")
+        generationJob = lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    runtime.send(text).collect { delta ->
+                        withContext(Dispatchers.Main) {
+                            answer.content += delta
+                            chatAdapter.notifyItemChanged(index)
+                            messagesView.scrollToPosition(index)
+                        }
+                    }
+                }
+                setStatus("● LITERT BEREIT · " + runtime.backendName)
+            } catch (_: CancellationException) {
+                setStatus("● LITERT GESTOPPT")
+            } catch (error: Exception) {
+                answer.content += "\n[LiteRT-Fehler: " +
+                    (error.message ?: error.javaClass.simpleName).take(450) + "]"
+                chatAdapter.notifyItemChanged(index)
+                setStatus("● LITERT FEHLER")
+            } finally {
+                busy = false
+                sendButton.text = "➤"
+                renderChatState()
+            }
+        }
+    }
+
     private fun exportModel(file: File, destination: Uri) {
         if (busy || transferBusy) {
             toast("Bitte die laufende Aufgabe zuerst abschließen.")
@@ -1816,7 +2018,7 @@ class MainActivity : AppCompatActivity() {
         }
         AlertDialog.Builder(this)
             .setTitle("Repository durchsuchen")
-            .setMessage("GitHub-Releases und öffentliche Hugging-Face-GGUF-Dateien.")
+            .setMessage("GitHub-Releases sowie öffentliche Hugging-Face-GGUF- und LiteRT-LM-Dateien.")
             .setView(field)
             .setNegativeButton("Abbrechen", null)
             .setPositiveButton("Suchen") { _, _ ->
@@ -1828,8 +2030,8 @@ class MainActivity : AppCompatActivity() {
                         val found = withContext(Dispatchers.IO) { SourceCatalog.list(ref) }
                         prefs.edit().putString("recent_repo", text).apply()
                         if (found.isEmpty()) {
-                            toast("Keine GGUF-Dateien gefunden.")
-                            catalogStatus("Keine GGUF-Dateien gefunden")
+                            toast("Keine kompatiblen Modelldateien gefunden.")
+                            catalogStatus("Keine kompatiblen Modelldateien gefunden")
                         } else {
                             val visible = found.take(100)
                             val options = visible.map {
@@ -1837,7 +2039,7 @@ class MainActivity : AppCompatActivity() {
                                     (if (it.bytes > 0) ModelStore.displaySize(it.bytes) else "Größe unbekannt") +
                                     " · " + it.source
                             }.toTypedArray()
-                            catalogStatus(found.size.toString() + " GGUF-Dateien gefunden")
+                            catalogStatus(found.size.toString() + " Modelldateien gefunden")
                             AlertDialog.Builder(this@MainActivity)
                                 .setTitle("Modell auswählen")
                                 .setItems(options) { _, index -> confirmDownload(visible[index]) }
@@ -1851,48 +2053,143 @@ class MainActivity : AppCompatActivity() {
             }.show()
     }
 
-    private fun quickStart() {
-        if (transferBusy) { toast("Ein Download läuft. Bitte erst abschließen oder abbrechen."); return }
-        data class Starter(val title: String, val repo: String, val filename: String)
-        val models = listOf(
-            Starter("SmolLM2 · 360M · 258 MB", "bartowski/SmolLM2-360M-Instruct-GGUF", "SmolLM2-360M-Instruct-Q4_K_M.gguf"),
-            Starter("Qwen 2.5 · 0.5B · 379 MB", "bartowski/Qwen2.5-0.5B-Instruct-GGUF", "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf"),
-            Starter("Qwen 3.5 · 0.8B · 508 MB", "unsloth/Qwen3.5-0.8B-GGUF", "Qwen3.5-0.8B-Q4_K_M.gguf"),
-            Starter("Gemma 3 · 1B · 769 MB", "unsloth/gemma-3-1b-it-GGUF", "gemma-3-1b-it-Q4_K_M.gguf")
-        )
+    /** Live Hub search from TriForce, with direct official-Hub fallback. */
+    private fun searchHuggingFace() {
+        if (transferBusy) {
+            toast("Ein Download läuft. Bitte erst abschließen oder abbrechen.")
+            return
+        }
+        val field = EditText(this).apply {
+            hint = "z. B. SmolLM, Qwen, Gemma, Deutsch"
+            setSingleLine(true)
+            setText(prefs.getString("last_hf_search", "SmolLM"))
+            setPadding(dp(17), dp(19), dp(17), dp(19))
+        }
+        val format = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity,
+                android.R.layout.simple_spinner_item,
+                listOf("GGUF · llama.cpp", "LiteRT-LM · TPU / GPU / CPU")
+            ).also {
+                it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            }
+        }
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(4), dp(14), dp(6))
+            addView(field)
+            addView(format)
+        }
         AlertDialog.Builder(this)
-            // Model choices disappeared on Android when a separate
-            // setMessage competed with the setItems list content.
-            .setTitle("Leichte Offline-Modelle · GGUF Q4_K_M")
-            .setItems(models.map { it.title }.toTypedArray()) { _, index ->
-                val starter = models[index]
-                catalogStatus("Prüfe " + starter.title + " …")
+            .setTitle("Hugging Face · Modell suchen")
+            .setView(form)
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Suchen") { _, _ ->
+                val query = field.text.toString().trim()
+                val requestedFormat =
+                    if (format.selectedItemPosition == 1) "litertlm" else "gguf"
                 lifecycleScope.launch {
+                    catalogStatus("Hugging Face Suche läuft …")
                     try {
-                        val found = withContext(Dispatchers.IO) {
-                            SourceCatalog.list(RepositoryRef(RepositoryHost.HUGGING_FACE, starter.repo))
+                        val models = withContext(Dispatchers.IO) {
+                            HuggingFaceDiscovery.search(query, format = requestedFormat)
                         }
-                        val model = found.firstOrNull { it.name.equals(starter.filename, true) }
-                            ?: error("Ausgewähltes Modell nicht mehr verfügbar.")
-                        catalogStatus("Bereit zum Download: " + model.name)
-                        confirmDownload(model)
+                        prefs.edit().putString("last_hf_search", query).apply()
+                        showHuggingFaceResults(models, "Suchergebnisse für: " + query)
                     } catch (error: Exception) {
-                        showError("Modell konnte nicht gefunden werden", error)
+                        showError("Hugging Face Suche fehlgeschlagen", error)
                     }
                 }
-            }.setNegativeButton("Schließen", null).show()
+            }.show()
+    }
+
+    /** Verify the requested repo and GGUF files before allowing download. */
+    private fun showHuggingFaceResults(
+        found: List<HuggingFaceRepository>, label: String
+    ) {
+        if (found.isEmpty()) {
+            catalogStatus("Keine passenden öffentlichen Modelle gefunden")
+            toast("Keine passenden öffentlichen Modelle.")
+            return
+        }
+        catalogStatus(found.size.toString() + " öffentliche Modell-Repositories gefunden")
+        val descriptions = found.map {
+            it.id + "\n" + if (it.suggestedBytes > 0) {
+                "Empfohlen: " + ModelStore.displaySize(it.suggestedBytes) + " · " + it.suggestedFile
+            } else {
+                "Downloads: " + it.downloads + " · Likes: " + it.likes
+            }
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(label)
+            .setItems(descriptions) { _, position ->
+                val selected = found[position]
+                lifecycleScope.launch {
+                    catalogStatus("Prüfe " + selected.id + " …")
+                    try {
+                        val files = withContext(Dispatchers.IO) {
+                            SourceCatalog.list(RepositoryRef(
+                                RepositoryHost.HUGGING_FACE, selected.id
+                            )).filter { it.name.endsWith("." + selected.format, true) }
+                        }
+                        if (files.isEmpty()) {
+                            catalogStatus("Keine kompatiblen Modelldateien in " + selected.id)
+                            toast("Keine passenden Modelldateien gefunden.")
+                            return@launch
+                        }
+                        val preferred = selected.suggestedFile?.let { suggested ->
+                            files.firstOrNull { it.name.equals(suggested, true) }
+                        }
+                        if (preferred != null) {
+                            confirmDownload(preferred)
+                        } else {
+                            val options = files.take(80).map {
+                                it.name + "\n" +
+                                    (if (it.bytes > 0) ModelStore.displaySize(it.bytes)
+                                     else "Größe unbekannt")
+                            }.toTypedArray()
+                            AlertDialog.Builder(this@MainActivity)
+                                .setTitle("Modell-Datei auswählen · " + selected.id)
+                                .setItems(options) { _, index -> confirmDownload(files[index]) }
+                                .setNegativeButton("Schließen", null)
+                                .show()
+                        }
+                    } catch (error: Exception) {
+                        showError("Modell-Repository nicht erreichbar", error)
+                    }
+                }
+            }
+            .setNegativeButton("Schließen", null)
+            .show()
+    }
+
+    private fun quickStart() {
+        if (transferBusy) {
+            toast("Ein Download läuft. Bitte erst abschließen oder abbrechen.")
+            return
+        }
+        lifecycleScope.launch {
+            catalogStatus("Prüfe kleine Hugging-Face-Modelle live …")
+            try {
+                val models = withContext(Dispatchers.IO) {
+                    HuggingFaceDiscovery.recommended()
+                }
+                showHuggingFaceResults(models, "Kleine Offline-Modelle · Q4_K_M")
+            } catch (error: Exception) {
+                showError("Kleine Modelle nicht erreichbar", error)
+            }
+        }
     }
 
     private fun promptDirectUrl() {
         if (transferBusy) { toast("Ein Download läuft. Bitte erst abschließen oder abbrechen."); return }
         val field = EditText(this).apply {
-            hint = "https://.../model.Q4_K_M.gguf"
+            hint = "https://.../model.Q4_K_M.gguf oder model.litertlm"
             setSingleLine(false)
             minLines = 2
             setPadding(dp(17), dp(15), dp(17), dp(15))
         }
         AlertDialog.Builder(this)
-            .setTitle("GGUF-Link")
+            .setTitle("Modell-Link · GGUF / LiteRT-LM")
             .setView(field)
             .setNegativeButton("Abbrechen", null)
             .setPositiveButton("Übernehmen") { _, _ ->
@@ -1970,7 +2267,7 @@ class MainActivity : AppCompatActivity() {
         if (active) {
             findViewById<TextView>(R.id.modelLoadingLabel).text =
                 "Lade " + modelName + "\n" +
-                "Native CPU-Inferenz wird vorbereitet. Große Modelle können dauern."
+                "Lokale GGUF- oder LiteRT-LM-Inferenz wird vorbereitet. Große Modelle können dauern."
         }
     }
 
@@ -1989,6 +2286,8 @@ class MainActivity : AppCompatActivity() {
                     val entries = history.take(6).map { exit ->
                         val reasonName = when (exit.reason) {
                             ApplicationExitInfo.REASON_LOW_MEMORY -> "Speichermangel (Low Memory)"
+                            ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE ->
+                                "Android beendet: übermäßige Ressourcennutzung (CPU/GPU etc.)"
                             ApplicationExitInfo.REASON_CRASH_NATIVE -> "Native Crash (C++/JNI)"
                             ApplicationExitInfo.REASON_CRASH -> "Java/Kotlin Crash"
                             ApplicationExitInfo.REASON_ANR -> "App reagiert nicht (ANR)"
@@ -2083,6 +2382,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         if (::mcpUi.isInitialized) mcpUi.close()
+        liteRtRuntime?.close()
+        liteRtRuntime = null
         super.onDestroy()
     }
 

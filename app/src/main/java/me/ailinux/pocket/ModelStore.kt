@@ -20,12 +20,13 @@ class ModelStore(private val context: Context) {
     val dir = File(context.filesDir, "models").also { it.mkdirs() }
 
     fun list(): List<File> = dir.listFiles()
-        ?.filter { it.isFile && it.name.endsWith(".gguf", true) && it.length() > 32 }
+        ?.filter { it.isFile && isModelName(it.name) && it.length() > 32 }
         ?.sortedWith(compareByDescending<File> { it.lastModified() }.thenBy { it.name })
         ?: emptyList()
 
     fun partials(): List<File> = dir.listFiles()
-        ?.filter { it.isFile && it.name.endsWith(".gguf.part", true) }
+        ?.filter { it.isFile && (it.name.endsWith(".gguf.part", true) ||
+            it.name.endsWith(".litertlm.part", true)) }
         ?.sortedBy { it.name } ?: emptyList()
 
     fun sourceName(uri: Uri): String {
@@ -39,7 +40,7 @@ class ModelStore(private val context: Context) {
 
     fun import(uri: Uri, cancelled: AtomicBoolean, progress: (TransferProgress) -> Unit): File {
         val name = sourceName(uri)
-        require(name.endsWith(".gguf", true)) { "Nur .gguf-Dateien werden unterstützt." }
+        require(isModelName(name)) { "Nur .gguf oder .litertlm-Dateien werden unterstützt." }
         val target = uniqueTarget(name)
         val temp = File.createTempFile("pocket-import-", ".part", dir)
         try {
@@ -65,7 +66,7 @@ class ModelStore(private val context: Context) {
                     output.fd.sync()
                 }
             }
-            validate(temp)
+            validate(temp, name)
             check(temp.renameTo(target)) { "Modell konnte nicht gespeichert werden." }
             return target
         } finally {
@@ -80,7 +81,7 @@ class ModelStore(private val context: Context) {
         val url = URL(address)
         require(url.protocol == "https") { "Nur sichere HTTPS-Downloads sind erlaubt." }
         val name = sanitize(displayName)
-        require(name.endsWith(".gguf", true)) { "Der Download muss eine .gguf-Datei sein." }
+        require(isModelName(name)) { "Nur GGUF- oder LiteRT-LM-Downloads sind erlaubt." }
         val target = File(dir, name)
         require(!target.exists()) { "Das Modell ist bereits installiert." }
         val temp = File(dir, "$name.part")
@@ -129,7 +130,7 @@ class ModelStore(private val context: Context) {
             }
             if (total >= 0 && total != written) error("Download unvollständig.")
             try {
-                validate(temp)
+                validate(temp, name)
                 if (sha256 != null) {
                     require(sha256.matches(Regex("[a-fA-F0-9]{64}"))) { "Ungültige SHA-256 Prüfsumme." }
                     require(sha256(temp).equals(sha256, true)) { "SHA-256 stimmt nicht überein." }
@@ -161,7 +162,7 @@ class ModelStore(private val context: Context) {
     ): Long {
         val canonical = source.canonicalFile
         require(canonical.parentFile == dir.canonicalFile &&
-            canonical.isFile && canonical.name.endsWith(".gguf", true)) {
+            canonical.isFile && isModelName(canonical.name)) {
             "Nur eigene GGUF-Modelle dürfen exportiert werden."
         }
         validate(canonical)
@@ -177,17 +178,19 @@ class ModelStore(private val context: Context) {
 
     fun delete(file: File) {
         require(file.parentFile?.canonicalFile == dir.canonicalFile) { "Ungültiger Modellpfad." }
-        require(file.name.endsWith(".gguf", true) || file.name.endsWith(".gguf.part", true))
+        require(isModelName(file.name) || file.name.endsWith(".gguf.part", true) ||
+            file.name.endsWith(".litertlm.part", true))
         check(file.delete()) { "Datei konnte nicht gelöscht werden." }
     }
 
     private fun uniqueTarget(input: String): File {
         val name = sanitize(input)
-        val stem = name.substring(0, name.length - 5)
+        val extension = if (name.endsWith(".litertlm", true)) ".litertlm" else ".gguf"
+        val stem = name.dropLast(extension.length)
         var target = File(dir, name)
         var number = 2
         while (target.exists() || File(dir, target.name + ".part").exists()) {
-            target = File(dir, "$stem-$number.gguf")
+            target = File(dir, "$stem-$number$extension")
             number++
         }
         return target
@@ -210,13 +213,20 @@ class ModelStore(private val context: Context) {
             bytes >= 1048576L -> String.format(Locale.GERMAN, "%.1f MB", bytes / 1048576.0)
             else -> String.format(Locale.GERMAN, "%.1f KB", bytes / 1024.0)
         }
-        fun validate(file: File) {
-            require(file.length() > 32) { "Datei ist zu klein für GGUF." }
+        fun isModelName(name: String): Boolean =
+            name.endsWith(".gguf", true) || name.endsWith(".litertlm", true)
+
+        /** Verify the binary container header before exposing a downloaded file. */
+        fun validate(file: File, logicalName: String = file.name) {
+            require(isModelName(logicalName)) { "GGUF- oder LiteRT-LM-Datei erwartet." }
+            require(file.length() > 32) { "Modell-Datei ist zu klein." }
             RandomAccessFile(file, "r").use {
-                val magic = ByteArray(4)
+                val magic = ByteArray(8)
                 it.readFully(magic)
-                require(String(magic, Charsets.US_ASCII) == "GGUF") {
-                    "Kein gültiger GGUF-Header."
+                val expected = if (logicalName.endsWith(".litertlm", true))
+                    "LITERTLM" else "GGUF"
+                require(String(magic.copyOfRange(0, expected.length), Charsets.US_ASCII) == expected) {
+                    "Kein gültiger " + expected + "-Header."
                 }
             }
         }
