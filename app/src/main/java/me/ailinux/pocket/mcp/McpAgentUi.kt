@@ -225,7 +225,11 @@ class McpAgentUi(
                                 )
                             }
                         }
-                        val runtime = McpProgressiveBridge.Run(sources)
+                        // A 1,000+ tool authenticated catalogue can take time
+                        // to index; never block the Android UI thread.
+                        val runtime = withContext(Dispatchers.Default) {
+                            McpProgressiveBridge.Run(sources)
+                        }
                         require(runtime.totalTools > 0) {
                             "Keine geeigneten, aktuell zugelassenen MCP-Werkzeuge gefunden."
                         }

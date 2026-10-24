@@ -1736,9 +1736,9 @@ class MainActivity : AppCompatActivity() {
         answer: ChatMessage,
         answerIndex: Int
     ): Boolean {
-        val runtime = McpProgressiveBridge.Run(
-            active.progressiveSources, System.currentTimeMillis()
-        )
+        val runtime = withContext(Dispatchers.Default) {
+            McpProgressiveBridge.Run(active.progressiveSources, System.currentTimeMillis())
+        }
         var modelOutput = firstModelOutput
         var serverResult: JSONObject? = null
         var hadSearch = false
@@ -2306,9 +2306,9 @@ class MainActivity : AppCompatActivity() {
         var hadRealCall = false
         var lastServerResult: JSONObject? = null
         val progressive = active.progressiveSources.isNotEmpty()
-        val catalog = if (progressive) McpProgressiveBridge.Run(
-            active.progressiveSources, System.currentTimeMillis()
-        ) else null
+        val catalog = if (progressive) withContext(Dispatchers.Default) {
+            McpProgressiveBridge.Run(active.progressiveSources, System.currentTimeMillis())
+        } else null
         fun evidence(text: String) {
             messages.add(ChatMessage(false, text))
             chatAdapter.notifyItemInserted(messages.lastIndex)
