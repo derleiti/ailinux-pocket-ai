@@ -530,7 +530,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     liteRtRuntime?.let {
                         previousModelUnloaded = true
-                        it.close()
+                        it.shutdown()
                         liteRtRuntime = null
                     }
                     when (engine.state.value) {
@@ -630,7 +630,7 @@ class MainActivity : AppCompatActivity() {
                             engine.state.value is InferenceEngine.State.Error)) {
                         engine.cleanUp()
                     }
-                    liteRtRuntime?.close()
+                    liteRtRuntime?.shutdown()
                     liteRtRuntime = null
                     val prompt = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
                     LiteRtRuntime.load(applicationContext, file, prompt)
@@ -722,7 +722,7 @@ class MainActivity : AppCompatActivity() {
                 if (activeModel?.name?.endsWith(".litertlm", true) == true &&
                         liteRtRuntime?.hasConversation == false) {
                     withContext(Dispatchers.IO) {
-                        try { liteRtRuntime?.close() } catch (_: Exception) {}
+                        try { liteRtRuntime?.shutdown() } catch (_: Exception) {}
                         liteRtRuntime = null
                     }
                     activeModel = null
@@ -1888,7 +1888,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 setStatus("● LITERT BEREIT · " + runtime.backendName)
             } catch (_: CancellationException) {
-                setStatus("● LITERT GESTOPPT")
+                withContext(NonCancellable) {
+                    try { runtime.cancelResponse() } catch (_: Exception) {}
+                }
+                if (!isDestroyed) setStatus("● LITERT GESTOPPT")
             } catch (error: Exception) {
                 answer.content += "\n[LiteRT-Fehler: " +
                     (error.message ?: error.javaClass.simpleName).take(450) + "]"
@@ -2398,7 +2401,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         if (::mcpUi.isInitialized) mcpUi.close()
-        liteRtRuntime?.close()
+        liteRtRuntime?.shutdownAsync()
         liteRtRuntime = null
         super.onDestroy()
     }

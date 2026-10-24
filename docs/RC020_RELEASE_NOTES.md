@@ -20,6 +20,11 @@ VersionCode 25; previous RC14 was versionCode 24.
   recommended small GGUF Q4_K_M files are checked live.
 - Import/download/export supports GGUF and LiteRT-LM binary headers and
   direct HTTPS model links. Public metadata queries do not upload prompts.
+- Google Tensor G5 NPU dispatcher is bundled from the official Google
+  LiteRT sample APK with Apache-2.0 license and SHA256 provenance under
+  third_party/google_tensor_dispatch. APK verification REQUIRES it.
+  The earlier test APK lacked this native library. Physical TPU tests
+  with a compatible model are still required before claiming TPU inference.
 - LiteRT-LM 0.12.0 and LiteRT 2.3.0 provide a separate NPU -> GPU -> CPU
   backend-attempt sequence for eligible Google Pixel 10/11 devices;
   non-Pixel devices start with GPU -> CPU. Actual engine initialization must

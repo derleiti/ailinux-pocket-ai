@@ -42,8 +42,12 @@ def build():
                     native = temp / "native.so"
                     stripped = temp / "stripped.so"
                     native.write_bytes(data)
-                    run(STRIP, "--strip-unneeded", "-o", stripped, native)
-                    data = stripped.read_bytes()
+                    # The Google Tensor dispatcher is an upstream binary.
+                    # Preserve its audited SHA256 exactly (and its symbols)
+                    # rather than rewriting it during generic ELF stripping.
+                    if not info.filename.endswith("/libLiteRtDispatch_GoogleTensor.so"):
+                        run(STRIP, "--strip-unneeded", "-o", stripped, native)
+                        data = stripped.read_bytes()
                     compression = zipfile.ZIP_STORED
                 packed.writestr(info, data, compress_type=compression)
         run(TOOLS / "zipalign", "-P", "16", "-f", "4", archive, aligned)

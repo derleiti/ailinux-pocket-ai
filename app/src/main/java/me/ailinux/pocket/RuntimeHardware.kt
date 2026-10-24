@@ -3,6 +3,7 @@ package me.ailinux.pocket
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import java.io.File
 
 /** Backend suitability is a *candidate*, never a claim of successful TPU execution. */
 internal object RuntimeHardware {
@@ -32,7 +33,14 @@ internal object RuntimeHardware {
             Attempt.GPU -> "GPU (OpenCL, sofern Treiber/Modell kompatibel)"
             Attempt.CPU -> "CPU (Fallback)"
         } }
+        val googleDispatcher = File(
+            context.applicationInfo.nativeLibraryDir,
+            "libLiteRtDispatch_GoogleTensor.so"
+        )
         return "Android-Gerät: " + Build.MANUFACTURER + " " + Build.MODEL +
+            "\nGoogle Tensor NPU Dispatch: " +
+            (if (googleDispatcher.isFile) "als native Bibliothek installiert"
+            else "nicht im App-Library-Verzeichnis vorhanden") +
             "\nSoC: " + Build.SOC_MODEL +
             "\nABI: " + Build.SUPPORTED_ABIS.joinToString(", ") +
             "\nVulkan-Hardware-Level: " + (vulkan?.toString() ?: "nicht erkannt") +

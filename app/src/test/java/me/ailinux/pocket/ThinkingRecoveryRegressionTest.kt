@@ -53,6 +53,14 @@ class ThinkingRecoveryRegressionTest {
         assertTrue(reset.indexOf("old?.close()") < reset.indexOf("engine.createConversation("))
         assertTrue(reset.contains("conversation = null"))
         assertTrue(source.contains("checkNotNull(conversation)"))
+        assertTrue(source.contains("Executors.newSingleThreadExecutor"))
+        assertTrue(source.contains("session.sendMessageAsync(text).collect"))
+        assertTrue(source.contains("suspend fun cancelResponse()"))
+        assertTrue(source.contains("conversation?.cancelProcess()"))
+        assertTrue(source.contains(".flowOn(nativeDispatcher)"))
+        assertTrue(source.contains("withContext(nativeDispatcher)"))
+        assertTrue(source.contains("withContext(NonCancellable + nativeDispatcher)"))
+        assertTrue(activity.contains("liteRtRuntime?.shutdownAsync()"))
         assertTrue(source.contains("val hasConversation: Boolean get()"))
     }
 
