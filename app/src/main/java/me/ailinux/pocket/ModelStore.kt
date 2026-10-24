@@ -148,6 +148,11 @@ class ModelStore(private val context: Context) {
                 check(marker.renameTo(validatorFile)) {
                     "Downloadvalidator konnte nicht gespeichert werden"
                 }
+            } else if (offset == 0L && newValidator == null) {
+                // A server that sends HTTP 200 after If-Range restarted the
+                // incomplete download. Never reuse an old validator with the
+                // new bytes after a later network interruption.
+                validatorFile.delete()
             }
             val total = connection.contentLengthLong.let { if (it >= 0) offset + it else -1L }
             if (total > 0) checkStorage((total - offset).coerceAtLeast(0))

@@ -258,7 +258,10 @@ class ModelTransferJobService : JobService() {
                     if (now - lastUpdate >= 1200) {
                         lastUpdate = now
                         ModelDownloadJournal.change(applicationContext, name) {
-                            it.copy(state = "running", done = p.done, total = p.total)
+                            // onStopJob or the user may have set queued/paused
+                            // while the blocking input stream was closing.
+                            if (it.state == "running") it.copy(done = p.done, total = p.total)
+                            else it
                         }
                         ModelDownloadJournal.read(applicationContext, name)?.let {
                             TransferNotification.update(applicationContext, it)
@@ -327,7 +330,8 @@ class ModelTransferWorker(context: Context, params: WorkerParameters) :
                 if (now - lastUpdate > 1200) {
                     lastUpdate = now
                     ModelDownloadJournal.change(applicationContext, name) {
-                        it.copy(done = p.done, total = p.total, state = "running")
+                        if (it.state == "running") it.copy(done = p.done, total = p.total)
+                        else it
                     }
                     ModelDownloadJournal.read(applicationContext, name)?.let {
                         TransferNotification.update(applicationContext, it)

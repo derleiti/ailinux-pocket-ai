@@ -67,5 +67,8 @@ class PocketRc9ArchitectureTest {
         assertTrue(atomic.contains("Files.createLink(target.toPath(), verifiedPart.toPath())"))
         assertFalse(store.contains("check(temp.renameTo(target))"))
         assertTrue(store.contains("validatorFile.delete()"))
+        val worker = File("src/main/java/me/ailinux/pocket/ModelBackgroundDownloads.kt")
+            .readText()
+        assertTrue(worker.contains("if (it.state == \"running\") it.copy(done = p.done, total = p.total)"))
     }
 }
