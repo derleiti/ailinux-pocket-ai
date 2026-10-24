@@ -37,7 +37,8 @@ object McpRequestRouting {
     private val externalTask = Regex(
         "\\b(?:nutze|benutze|verwende|benutz|mit deinen|mit den|ausführen|führe|" +
             "prüfe den|prüfe die|pruefe den|pruefe die|status|systemstatus|" +
-            "konto|serverzustand|nachrichten|logs|suche|sende|starte|lies|lese)\\b",
+            "konto|serverzustand|nachrichten|logs|suche|sende|starte|lies|lese|" +
+            "crawl|crawle|crawlen|abrufen|abfragen|rufe|ruf|fetch)\\b",
         RegexOption.IGNORE_CASE
     )
     private val externalSubject = Regex(

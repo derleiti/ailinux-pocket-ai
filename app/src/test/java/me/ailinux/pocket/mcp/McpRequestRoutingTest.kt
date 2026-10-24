@@ -58,6 +58,15 @@ class McpRequestRoutingTest {
         assertFalse(activity.contains("!hadRealCall && (catalog?.searchCount ?: 0) == 0"))
     }
 
+    @Test fun crawlAndStatusActionsRequireEvidenceButExplanationsDoNot() {
+        assertTrue(McpRequestRouting.expectsToolEvidence(
+            "Check mit dem MCP-Crawl-Tool https://ailinux.me und zeige die Serverantwort"))
+        assertTrue(McpRequestRouting.expectsToolEvidence(
+            "Rufe den MCP Status von TriForce ab"))
+        assertFalse(McpRequestRouting.expectsToolEvidence(
+            "Erkläre mir die MCP Status-Werkzeuge"))
+    }
+
     @Test fun ordinaryChatDoesNotRequireMcpTool() {
         val chat = "Servus Brumo, wie geht's?"
         assertTrue(McpRequestRouting.useModelAgent(chat, true))

@@ -1464,7 +1464,10 @@ class MainActivity : AppCompatActivity() {
                     return false
                 }
                 is McpAgentBridge.Decision.Answer -> {
-                    if (!hadRealCall && !hadSearch &&
+                    // Native discovery may already have searched or loaded details.
+                    // If a real call did not follow, continue the SAME
+                    // authorized plan through the approved host fallback.
+                    if (!hadRealCall && McpRequestRouting.expectsToolEvidence(request) &&
                         tryHostDiscovery(active, request, runtime, answer, answerIndex)) {
                         return true
                     }
@@ -2009,7 +2012,11 @@ class MainActivity : AppCompatActivity() {
                     (lastServerResult?.let {
                         McpToolFeedback.misleadingSummary(it, summary)
                     } == true)
-                if (!hadRealCall && progressive && (catalog?.searchCount ?: 0) == 0) {
+                // Even after mcp_search_tools / mcp_get_tool_details, a small
+                // model may stop with prose. Reuse this per-turn catalog and
+                // require explicit task intent before proposing a host call.
+                if (!hadRealCall && progressive &&
+                    McpRequestRouting.expectsToolEvidence(request)) {
                     if (tryHostDiscovery(active, request, checkNotNull(catalog),
                             answer, answerIndex)) return
                 }
