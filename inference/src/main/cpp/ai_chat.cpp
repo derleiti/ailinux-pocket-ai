@@ -303,6 +303,12 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_configureSamplingNative(
         throw_java_native_error(env, "sampling", "Invalid sampling settings or model not loaded");
         return;
     }
+    // Preserve the native repetition history when settings are unchanged.
+    if (temperature == g_temperature && top_k == g_top_k && top_p == g_top_p &&
+        min_p == g_min_p && repeat_penalty == g_repeat_penalty &&
+        repeat_last_n == g_repeat_last_n) {
+        return;
+    }
     try {
         // Prepare replacement first. Keep the old sampler if initialization fails.
         const auto old_temp = g_temperature;
