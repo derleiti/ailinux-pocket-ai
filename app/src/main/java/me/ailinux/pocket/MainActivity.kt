@@ -172,14 +172,9 @@ class MainActivity : AppCompatActivity() {
             displayMcpToolResult(result)
         }
         mcpAgent = McpAgentUi(this) { active ->
-            if (activeModel?.name?.endsWith(".litertlm", true) == true) {
-                // Never claim native MCP tool calling for the LiteRT-LM path.
-                if (active != null) {
-                    mcpAgent.clearSessionSilently()
-                    toast("KI + MCP-Agent benötigt derzeit GGUF. MCP-Schnellbefehle bleiben verfügbar.")
-                }
-                updateMcpBadge(null)
-            } else if (activeModel != null) rebindNativeMcpTools(active)
+            if (activeModel?.name?.endsWith(".litertlm", true) == true)
+                rebindLiteRtMcp(active)
+            else if (activeModel != null) rebindNativeMcpTools(active)
             else updateMcpBadge(active)
         }
         // No agent session does not mean the device, its saved MCP profiles,
@@ -665,9 +660,19 @@ class MainActivity : AppCompatActivity() {
                 }
                 liteRtRuntime = loaded
                 activeModel = file
-                // GGUF Jinja tools cannot be injected into a different engine.
-                mcpAgent.clearSessionSilently()
-                updateMcpBadge(null)
+                // LiteRT has its own native function declarations; NEVER
+                // invoke these directly without Pocket's existing approval.
+                val preparedMcp = mcpAgent.current()
+                if (preparedMcp != null) {
+                    try {
+                        loaded.bindMcp(preparedMcp)
+                    } catch (error: Exception) {
+                        mcpAgent.clearSessionSilently()
+                        toast("LiteRT MCP-Bindung fehlgeschlagen: " +
+                            (error.message ?: "Ungültiges Tool-Schema").take(145))
+                    }
+                }
+                updateMcpBadge(mcpAgent.current())
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -697,10 +702,6 @@ class MainActivity : AppCompatActivity() {
      * A model does not need to be loaded yet: the optional agent session
      * can be prepared and bound when the GGUF is next loaded. */
     private fun showMcpAgentMenu() {
-        if (activeModel?.name?.endsWith(".litertlm", true) == true) {
-            toast("LiteRT-LM: Modell-MCP noch nicht freigegeben. MCP-Schnellbefehle sind separat verfügbar.")
-            return
-        }
         if (busy) {
             toast("MCP-Modus erst nach der aktuellen Aktion wechseln.")
             return
@@ -710,6 +711,41 @@ class MainActivity : AppCompatActivity() {
             openHealthCheck = { showLiveMcpHealth("/mcp health", "") },
             openQuickHelp = { showQuickActionPicker() }
         )
+    }
+
+    /** Rebind only the LiteRT conversation and the three short meta tools.
+     * Never load a multi-GB model or call a remote MCP tool here.
+     */
+    private fun rebindLiteRtMcp(active: McpAgentSession?) {
+        val runtime = liteRtRuntime
+        if (busy || runtime == null) {
+            mcpAgent.clearSessionSilently()
+            updateMcpBadge(null)
+            toast("MCP umschalten erst bei bereitem LiteRT-Modell.")
+            return
+        }
+        busy = true
+        renderChatState()
+        setStatus("● LITERT MCP · WERKZEUGE WERDEN EINGEBUNDEN …")
+        lifecycleScope.launch {
+            try {
+                runtime.bindMcp(active)
+                messages.clear()
+                chatAdapter.notifyDataSetChanged()
+                findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
+                updateMcpBadge(active)
+                setStatus("● LITERT " + runtime.backendName +
+                    if (active == null) " · MCP AUS" else " · MCP BEREIT")
+            } catch (error: Exception) {
+                mcpAgent.clearSessionSilently()
+                updateMcpBadge(null)
+                setStatus("● LITERT MCP BINDUNG FEHLGESCHLAGEN")
+                showError("LiteRT MCP-Funktionen nicht bereit", error)
+            } finally {
+                busy = false
+                renderChatState()
+            }
+        }
     }
 
     /** Reset only user/assistant history; NEVER reload model or rerun MCP tools. */
@@ -827,7 +863,7 @@ class MainActivity : AppCompatActivity() {
                 "AGENT AUS · Unter KI + MCP / AUTO-BRIDGE konfigurieren aktivieren."
             prepared ->
                 "MCP-BRIDGE VORBEREITET · " + active.serverName +
-                " · GGUF unter MODELLE laden, danach wird die Bridge eingebunden."
+                " · GGUF oder LiteRT-LM unter MODELLE laden."
             active.progressiveSources.isNotEmpty() ->
                 "MCP AUTO " + active.thinkingMode.uppercase() + " · " +
                 active.progressiveSources.size + " ausgewählte Server · " +
@@ -1884,6 +1920,168 @@ class MainActivity : AppCompatActivity() {
      * Storage Access Framework. Progress and cancellation share the existing
      * model transfer controls; no broad storage permission is requested.
      */
+    /** Host-controlled LiteRT native ToolCall -> explicit permission -> real
+     * server receipt -> genuine role=tool message. Same auth and schema
+     * revalidation as the existing GGUF progressive bridge.
+     */
+    private suspend fun runLiteRtToolbridge(
+        active: McpAgentSession,
+        runtime: LiteRtRuntime,
+        request: String,
+        answer: ChatMessage,
+        answerIndex: Int
+    ) {
+        var turn = runtime.askMcp(request)
+        var hadRealCall = false
+        var lastServerResult: JSONObject? = null
+        val progressive = active.progressiveSources.isNotEmpty()
+        val catalog = if (progressive) McpProgressiveBridge.Run(
+            active.progressiveSources, active.progressiveCreatedAtMs
+        ) else null
+        fun evidence(text: String) {
+            messages.add(ChatMessage(false, text))
+            chatAdapter.notifyItemInserted(messages.lastIndex)
+            messagesView.scrollToPosition(messages.lastIndex)
+        }
+        fun setAnswer(text: String) {
+            answer.content = text
+            chatAdapter.notifyItemChanged(answerIndex)
+        }
+        for (step in 0 until McpProgressiveBridge.MAX_STEPS) {
+            check(mcpAgent.current() == active) {
+                "MCP-Konfiguration wurde während des LiteRT-Turns geändert."
+            }
+            if (turn.calls.isEmpty()) {
+                val summary = turn.text.ifBlank { "Keine Modellantwort erzeugt." }
+                val invalidClaim = McpLogCheck.modelOnlyAuditClaim(request, summary) ||
+                    McpHealthCheck.modelOnlyClaim(summary) ||
+                    (lastServerResult?.let {
+                        McpToolFeedback.misleadingSummary(it, summary)
+                    } == true)
+                if (invalidClaim) {
+                    setAnswer("⚠️ Modellbehauptung nicht durch das echte MCP-Resultat belegt. " +
+                        "Verlässliche Serverquittung steht separat oben.")
+                } else {
+                    setAnswer((if (hadRealCall)
+                        "ⓘ LiteRT-Zusammenfassung der echten MCP-Serverantwort:\n"
+                    else "ⓘ LiteRT-Modellantwort (keine externe MCP-Aktion):\n") + summary)
+                }
+                return
+            }
+            require(turn.calls.size == 1) {
+                "Mehrere gleichzeitige MCP-Toolaufrufe nicht erlaubt."
+            }
+            check(!hadRealCall) { "Maximal ein echter MCP-Aufruf pro Frage" }
+            val (tool, args) = LiteRtMcpProtocol.validate(
+                turn.calls.single(), active.tools
+            )
+            val outcome: JSONObject
+            if (progressive) {
+                val run = checkNotNull(catalog)
+                outcome = when (tool.name) {
+                    McpProgressiveBridge.SEARCH -> {
+                        val result = try {
+                            run.search(args.getString("query"),
+                                args.optInt("limit", McpProgressiveBridge.MAX_RESULTS))
+                        } catch (e: Exception) {
+                            McpProgressiveBridge.localFailure(e.message.orEmpty())
+                        }
+                        evidence(McpProgressiveBridge.displaySearchResult(result))
+                        result
+                    }
+                    McpProgressiveBridge.DETAILS -> {
+                        val result = try { run.details(args.getString("tool_id")) }
+                        catch (e: Exception) {
+                            McpProgressiveBridge.localFailure(e.message.orEmpty())
+                        }
+                        evidence("📋 Werkzeugdefinition (nicht ausgeführt):\n" +
+                            result.toString().take(1500))
+                        result
+                    }
+                    McpProgressiveBridge.CALL -> {
+                        val plan = try {
+                            run.prepareCall(args.getString("tool_id"),
+                                args.getString("arguments_json"))
+                        } catch (e: Exception) {
+                            val error = McpProgressiveBridge.localFailure(e.message.orEmpty())
+                            evidence("⚠️ Werkzeugvorschlag verworfen: " +
+                                e.message.orEmpty().take(320))
+                            turn = runtime.toolFeedback(tool.name, error.toString())
+                            continue
+                        }
+                        setAnswer("🔐 LiteRT schlägt " + plan.source.title + " / " +
+                            plan.tool.name + " vor. Noch nichts ausgeführt.")
+                        val approved = mcpAgent.requestAutoApproval(active, plan)
+                        if (!approved) {
+                            evidence("⛔ MCP-Aufruf abgelehnt. Keine Serveraktion ausgeführt.")
+                            setAnswer("⛔ Werkzeugaufruf abgelehnt.")
+                            return
+                        }
+                        // Mark BEFORE network dispatch. Never retry after timeout
+                        // because remote side effects may already exist.
+                        run.markDispatched(plan)
+                        mcpDispatchInFlight = true
+                        val result = try {
+                            withContext(Dispatchers.IO) { mcpAgent.executeAuto(active, plan) }
+                        } catch (e: Exception) {
+                            evidence("⚠️ MCP-Ergebnis unbekannt: " +
+                                (e.message ?: "Netzwerkfehler").take(350) +
+                                "\nKein automatischer Wiederholungsversuch.")
+                            setAnswer("⚠️ MCP-Aufrufstatus nicht bestätigt.")
+                            return
+                        } finally {
+                            mcpDispatchInFlight = false
+                        }
+                        hadRealCall = true
+                        lastServerResult = result
+                        evidence("🔧 ECHTE MCP-SERVERANTWORT:\n" +
+                            McpAgentBridge.receipt(plan.tool, result))
+                        result
+                    }
+                    else -> error("Unbekanntes lokales MCP-Meta-Tool")
+                }
+            } else {
+                val proposal = McpAgentBridge.Decision.Proposed(tool, args)
+                setAnswer("🔐 LiteRT schlägt " + tool.name +
+                    " vor. Nutzerfreigabe erforderlich.")
+                if (!mcpAgent.requestApproval(active, proposal)) {
+                    setAnswer("⛔ MCP-Werkzeug abgelehnt. Nichts ausgeführt.")
+                    return
+                }
+                mcpDispatchInFlight = true
+                outcome = try {
+                    withContext(Dispatchers.IO) { mcpAgent.execute(active, proposal) }
+                } catch (e: Exception) {
+                    evidence("⚠️ MCP-Ergebnis unbekannt; kein Retry: " +
+                        (e.message ?: "Netzwerkfehler").take(350))
+                    setAnswer("⚠️ MCP-Aufrufstatus nicht bestätigt.")
+                    return
+                } finally {
+                    mcpDispatchInFlight = false
+                }
+                hadRealCall = true
+                lastServerResult = outcome
+                evidence("🔧 ECHTE MCP-SERVERANTWORT:\n" +
+                    McpAgentBridge.receipt(tool, outcome))
+            }
+            if (hadRealCall) {
+                val terminal = McpToolFeedback.terminalMessage(outcome)
+                if (terminal != null) {
+                    evidence(terminal)
+                    setAnswer("🔧 MCP-Serverquittung oben. Keine weitere Aktion.")
+                    return
+                }
+            }
+            // Real LiteRT role=tool for the function that was actually
+            // proposed. The payload is untrusted data and contains NO token.
+            if (step == McpProgressiveBridge.MAX_STEPS - 1) {
+                setAnswer("⚠️ Höchstzahl lokaler Tool-Planungsschritte erreicht.")
+                return
+            }
+            turn = runtime.toolFeedback(tool.name, outcome.toString())
+        }
+    }
+
     /** LiteRT-LM chat is local and independent from the GGUF MCP tool bridge. */
     private fun sendLiteRtMessage(text: String) {
         val runtime = liteRtRuntime
@@ -1905,7 +2103,12 @@ class MainActivity : AppCompatActivity() {
         setStatus("● LITERT · " + runtime.backendName + " …")
         generationJob = lifecycleScope.launch {
             try {
-                withContext(Dispatchers.IO) {
+                val activeMcp = mcpAgent.current()
+                if (activeMcp != null) {
+                    setStatus("● LITERT MCP · PLANUNG …")
+                    runLiteRtToolbridge(activeMcp, runtime, text, answer, index)
+                    setStatus("● LITERT MCP · BEREIT")
+                } else withContext(Dispatchers.IO) {
                     runtime.send(text).collect { delta ->
                         withContext(Dispatchers.Main) {
                             answer.content += delta
