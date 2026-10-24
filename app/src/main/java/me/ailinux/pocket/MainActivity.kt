@@ -18,6 +18,7 @@ import me.ailinux.pocket.mcp.McpAgentBridge
 import me.ailinux.pocket.mcp.McpAgentUi
 import me.ailinux.pocket.mcp.McpAgentSession
 import me.ailinux.pocket.mcp.McpToolCatalog
+import me.ailinux.pocket.mcp.McpRequestRouting
 import me.ailinux.pocket.mcp.McpHealthCheck
 import me.ailinux.pocket.mcp.McpLogCheck
 import me.ailinux.pocket.mcp.McpQuickActions
@@ -1622,33 +1623,39 @@ class MainActivity : AppCompatActivity() {
         if (busy) { toast("Pocket AI ist beschäftigt."); return }
         val text = messageInput.text.toString().trim()
         if (text.isEmpty()) return
-        // Log inspection is NOT a health-check and must be handled before
-        // generic TriForce status detection or ungrounded model generation.
-        if (McpLogCheck.requested(text)) {
-            showLiveMcpLogCapability(text)
-            return
-        }
-        McpHealthCheck.requestedTarget(text)?.let {
-            showLiveMcpHealth(text, it)
-            return
-        }
-        McpToolCatalog.requestedFilter(text)?.let {
-            // User requested the actual catalogue: prefer authenticated
-            // tools/list over small-model prose, even with AUTO-BRIDGE on.
-            showLiveMcpCatalog(text, it)
-            return
-        }
-        when (val direct = McpQuickActions.requestedAction(text)) {
-            is McpQuickActions.Selection.Request -> {
-                showQuickMcpAction(text, direct)
+        // When an MCP agent is active, plain-language work belongs to the
+        // model's native ToolCall planner. Only explicit app diagnostics,
+        // slash commands and unambiguous inventory requests bypass it.
+        val modelToolRequest = McpRequestRouting.useModelAgent(
+            text, mcpAgent.current() != null && activeModel != null
+        )
+        if (!modelToolRequest) {
+            // Log inspection is NOT a health-check. Preserve the direct
+            // diagnostic for explicitly requested app commands or no agent.
+            if (McpLogCheck.requested(text)) {
+                showLiveMcpLogCapability(text)
                 return
             }
-            is McpQuickActions.Selection.Invalid -> {
-                messageInput.setText("")
-                appendReadOnlyChat(text, "⚠️ " + direct.reason)
+            McpHealthCheck.requestedTarget(text)?.let {
+                showLiveMcpHealth(text, it)
                 return
             }
-            null -> Unit
+            McpToolCatalog.requestedFilter(text)?.let {
+                showLiveMcpCatalog(text, it)
+                return
+            }
+            when (val direct = McpQuickActions.requestedAction(text)) {
+                is McpQuickActions.Selection.Request -> {
+                    showQuickMcpAction(text, direct)
+                    return
+                }
+                is McpQuickActions.Selection.Invalid -> {
+                    messageInput.setText("")
+                    appendReadOnlyChat(text, "⚠️ " + direct.reason)
+                    return
+                }
+                null -> Unit
+            }
         }
         if (!::engine.isInitialized || activeModel == null) {
             toast("Bitte zuerst ein Modell laden. Für MCP geht auch /mcp tools.")
@@ -1957,7 +1964,16 @@ class MainActivity : AppCompatActivity() {
                     (lastServerResult?.let {
                         McpToolFeedback.misleadingSummary(it, summary)
                     } == true)
-                if (invalidClaim) {
+                if (!hadRealCall && McpRequestRouting.expectsToolEvidence(request)) {
+                    val searched = (catalog?.searchCount ?: 0) > 0
+                    setAnswer(if (searched)
+                        "⚠️ LiteRT hat MCP-Werkzeuge gesucht, aber keinen echten " +
+                            "tools/call ausgeführt. Kein externer Status bestätigt. " +
+                            "Die Werkzeugliste oben beweist keine Ausführung."
+                    else "⚠️ LiteRT hat keinen nativen MCP-ToolCall angefordert. " +
+                        "Kein externes Werkzeug ausgeführt und kein Systemstatus bestätigt. " +
+                        "Bitte KI + MCP / AUTO-BRIDGE und die Modellkompatibilität prüfen.")
+                } else if (invalidClaim) {
                     setAnswer("⚠️ Modellbehauptung nicht durch das echte MCP-Resultat belegt. " +
                         "Verlässliche Serverquittung steht separat oben.")
                 } else {
