@@ -66,8 +66,9 @@ class McpPrefillStatusTest {
         assertTrue(main.contains("beginMcpBindingProgress()"))
         assertTrue(main.contains("engine.systemPromptPrefillCounts()"))
         assertTrue(main.contains("uiPulseHandler.postDelayed(this, 350L)"))
-        assertTrue(main.contains("messageInput.isEnabled = canInteract || mcpBindingInProgress"))
-        assertTrue(main.contains("sendButton.isEnabled = canInteract || generationJob?.isActive == true"))
+        // Chat DB startup must finish before either action can be used.
+        assertTrue(main.contains("messageInput.isEnabled = chatReady && (canInteract || mcpBindingInProgress)"))
+        assertTrue(main.contains("sendButton.isEnabled = chatReady && (canInteract || generationJob?.isActive == true)"))
         assertTrue(main.contains("finishMcpBindingProgress(completed = true)"))
         assertTrue(main.contains("if (mcpBindingInProgress) finishMcpBindingProgress(completed = false)"))
         assertTrue(xml.contains("android:id=\"@+id/mcpBindProgress\""))

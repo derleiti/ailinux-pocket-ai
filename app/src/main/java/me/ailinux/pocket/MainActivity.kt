@@ -48,6 +48,10 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.drawerlayout.widget.DrawerLayout
+import androidx.core.view.GravityCompat
+import android.text.Editable
+import android.text.TextWatcher
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.arm.aichat.AiChat
@@ -83,6 +87,20 @@ class MainActivity : AppCompatActivity() {
     private var lastMcpBindingReport = "MCP-BINDUNG: Noch keine Einbindung in diesem App-Prozess."
     private val messages = mutableListOf<ChatMessage>()
     private val chatAdapter = ChatAdapter(messages)
+    private var currentConversationId = PocketChatHistory.newId()
+    private var chatReady = false
+    private var showArchivedHistory = false
+    private var historyQueryGeneration = 0
+    private val chatPersistHandler = Handler(Looper.getMainLooper())
+    private val chatWriteExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private var chatPersistQueued = false
+    private val chatPersistCallback = Runnable {
+        chatPersistQueued = false
+        persistChatNow()
+    }
+    private val historyDrawer by lazy {
+        findViewById<DrawerLayout>(R.id.chatDrawerLayout)
+    }
     private var activeModel: File? = null
     /** Alternative LiteRT-LM runtime, only for .litertlm models. */
     private var liteRtRuntime: LiteRtRuntime? = null
@@ -90,6 +108,14 @@ class MainActivity : AppCompatActivity() {
     private var busy = false
     private var transferBusy = false
     private var activeTransferName: String? = null
+    private var backgroundTransferName: String? = null
+    private val downloadUiHandler = Handler(Looper.getMainLooper())
+    private val downloadUiPoll = object : Runnable {
+        override fun run() {
+            updateBackgroundTransferUi()
+            downloadUiHandler.postDelayed(this, 1300L)
+        }
+    }
     private var activePartialLabel: TextView? = null
     private var cancelTransfer = AtomicBoolean(false)
     private var pendingExportModel: File? = null
@@ -186,6 +212,8 @@ class MainActivity : AppCompatActivity() {
 
         messagesView.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
         messagesView.adapter = chatAdapter
+        setupChatHistory()
+        restoreChatHistory()
 
         findViewById<TextView>(R.id.navChat).setOnClickListener { showPage(0) }
         findViewById<TextView>(R.id.navModels).setOnClickListener { showPage(1) }
@@ -214,7 +242,14 @@ class MainActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.hfSearchButton).setOnClickListener { searchHuggingFace() }
         findViewById<MaterialButton>(R.id.quickStartButton).setOnClickListener { quickStart() }
         findViewById<MaterialButton>(R.id.urlButton).setOnClickListener { promptDirectUrl() }
-        cancelDownload.setOnClickListener { cancelTransfer.set(true) }
+        cancelDownload.setOnClickListener {
+            val name = backgroundTransferName
+            if (name != null) {
+                BackgroundModelDownloads.pause(this, name)
+                toast("Download pausiert. Teil-Datei bleibt erhalten.")
+                updateBackgroundTransferUi()
+            } else cancelTransfer.set(true)
+        }
 
         sendButton.setOnClickListener {
             if (generationJob?.isActive == true) {
@@ -340,9 +375,275 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Room owns durable history. Native GGUF/LiteRT conversations remain separate:
+     * opening an older transcript never claims to restore a vanished KV cache.
+     * Only bounded copies of currently visible message text are queued for IO.
+     */
+    private fun setupChatHistory() {
+        findViewById<MaterialButton>(R.id.chatHistoryButton).setOnClickListener {
+            loadChatHistory()
+            historyDrawer.openDrawer(GravityCompat.END)
+        }
+        findViewById<MaterialButton>(R.id.newConversationButton).setOnClickListener {
+            historyDrawer.closeDrawer(GravityCompat.END)
+            resetLocalConversation()
+        }
+        findViewById<MaterialButton>(R.id.showArchivedChatsButton).setOnClickListener {
+            showArchivedHistory = !showArchivedHistory
+            findViewById<MaterialButton>(R.id.showArchivedChatsButton).text =
+                if (showArchivedHistory) "Aktive Chats anzeigen" else "Archivierte Chats"
+            loadChatHistory()
+        }
+        findViewById<EditText>(R.id.chatHistorySearch).addTextChangedListener(
+            object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int,
+                    count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int,
+                    before: Int, count: Int) = loadChatHistory()
+                override fun afterTextChanged(s: Editable?) = Unit
+            }
+        )
+    }
+
+    private fun restoreChatHistory() {
+        chatReady = false
+        lifecycleScope.launch {
+            try {
+                val restored = withContext(Dispatchers.IO) {
+                    val dao = PocketChatHistory.dao(applicationContext)
+                    val selected = prefs.getString("current_chat_id", null)
+                    val metadata = selected?.let { dao.getConversation(it) }
+                        ?: dao.recent().firstOrNull()
+                    Pair(metadata, metadata?.let { dao.lines(it.id) }.orEmpty())
+                }
+                if (!isFinishing && !isDestroyed) {
+                    currentConversationId = restored.first?.id ?: PocketChatHistory.newId()
+                    prefs.edit().putString("current_chat_id", currentConversationId).apply()
+                    // This is a transcript, not a reconstructed LLM KV cache.
+                    messages.clear()
+                    messages.addAll(restored.second.map { ChatMessage(it.isUser, it.content) })
+                    chatAdapter.notifyDataSetChanged()
+                    findViewById<View>(R.id.emptyState).visibility =
+                        if (messages.isEmpty()) View.VISIBLE else View.GONE
+                }
+            } catch (error: Exception) {
+                if (!isFinishing && !isDestroyed)
+                    showError("Chatdatenbank konnte nicht geladen werden", error)
+            } finally {
+                chatReady = true
+                if (!isFinishing && !isDestroyed) renderChatState()
+            }
+        }
+    }
+
+    /** Debounced and serialized so 2B/4B streaming does not fsync every token. */
+    private fun requestChatPersist() {
+        if (!chatReady || chatPersistQueued) return
+        chatPersistQueued = true
+        chatPersistHandler.postDelayed(chatPersistCallback, 1100L)
+    }
+
+    private fun persistChatNow() {
+        if (!chatReady || chatWriteExecutor.isShutdown) return
+        chatPersistHandler.removeCallbacks(chatPersistCallback)
+        chatPersistQueued = false
+        val id = currentConversationId
+        val snapshot = messages.map { ChatMessage(it.isUser, it.content) }
+        val model = activeModel?.name.orEmpty()
+        val application = applicationContext
+        chatWriteExecutor.execute {
+            runCatching {
+                kotlinx.coroutines.runBlocking {
+                    PocketChatHistory.dao(application).saveSnapshot(id, model, snapshot)
+                }
+            }.onFailure {
+                android.util.Log.e("PocketChatHistory", "Unable to persist conversation metadata")
+            }
+        }
+    }
+
+    private fun beginFreshConversation() {
+        persistChatNow()
+        currentConversationId = PocketChatHistory.newId()
+        prefs.edit().putString("current_chat_id", currentConversationId).apply()
+    }
+
+    private fun loadChatHistory() {
+        val generation = ++historyQueryGeneration
+        val term = findViewById<EditText>(R.id.chatHistorySearch).text.toString().trim()
+        val archived = showArchivedHistory
+        lifecycleScope.launch {
+            try {
+                val list = withContext(Dispatchers.IO) {
+                    val dao = PocketChatHistory.dao(applicationContext)
+                    if (archived) dao.archived() else if (term.isBlank()) dao.recent()
+                    else dao.search(term)
+                }
+                if (generation == historyQueryGeneration && !isDestroyed)
+                    renderChatHistoryEntries(list)
+            } catch (error: Exception) {
+                if (!isDestroyed) android.util.Log.e("PocketChatHistory",
+                    "Unable to load conversation list")
+            }
+        }
+    }
+
+    private fun renderChatHistoryEntries(conversations: List<PocketConversation>) {
+        val container = findViewById<LinearLayout>(R.id.chatHistoryEntries)
+        container.removeAllViews()
+        if (conversations.isEmpty()) {
+            container.addView(simpleLabel("Keine gespeicherten Chats gefunden."))
+            return
+        }
+        conversations.forEach { conversation ->
+            val section = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(9), dp(11), dp(9), dp(9))
+                setBackgroundResource(R.drawable.bg_panel)
+            }
+            val title = TextView(this).apply {
+                text = (if (conversation.pinned) "★ " else "") +
+                    conversation.title.take(75)
+                textSize = 15f
+                setTextColor(getColor(R.color.ink))
+                setOnClickListener { openConversation(conversation) }
+                setPadding(dp(5), dp(5), dp(5), dp(9))
+            }
+            section.addView(title)
+            section.addView(TextView(this).apply {
+                text = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
+                    .format(Date(conversation.updatedAt)) + " · " +
+                    conversation.modelName.ifBlank { "Modell nicht angegeben" }.take(45)
+                textSize = 11f
+                setTextColor(getColor(R.color.muted))
+            })
+            val actions = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            fun action(label: String, callback: () -> Unit) {
+                actions.addView(TextView(this).apply {
+                    text = label
+                    setPadding(dp(7), dp(13), dp(7), dp(13))
+                    textSize = 11f
+                    setTextColor(getColor(R.color.primary))
+                    contentDescription = label + ": " + conversation.title.take(55)
+                    setOnClickListener { callback() }
+                })
+            }
+            action("Öffnen") { openConversation(conversation) }
+            action("Titel") { renameConversation(conversation) }
+            action(if (conversation.pinned) "Lösen" else "Anpinnen") {
+                lifecycleScope.launch {
+                    withContext(Dispatchers.IO) {
+                        PocketChatHistory.dao(applicationContext)
+                            .pin(conversation.id, !conversation.pinned)
+                    }
+                    loadChatHistory()
+                }
+            }
+            action(if (conversation.archived) "Aktivieren" else "Archiv") {
+                lifecycleScope.launch {
+                    withContext(Dispatchers.IO) {
+                        PocketChatHistory.dao(applicationContext)
+                            .archive(conversation.id, !conversation.archived)
+                    }
+                    loadChatHistory()
+                }
+            }
+            action("Löschen") { deleteConversation(conversation) }
+            section.addView(actions)
+            container.addView(section, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = dp(10)
+                })
+        }
+    }
+
+    private fun renameConversation(conversation: PocketConversation) {
+        val field = EditText(this).apply {
+            setSingleLine(true)
+            setText(conversation.title)
+            selectAll()
+        }
+        AlertDialog.Builder(this).setTitle("Chat umbenennen").setView(field)
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Speichern") { _, _ ->
+                val title = field.text.toString().trim().take(80)
+                if (title.isNotBlank()) lifecycleScope.launch {
+                    withContext(Dispatchers.IO) {
+                        PocketChatHistory.dao(applicationContext).rename(conversation.id, title)
+                    }
+                    loadChatHistory()
+                }
+            }.show()
+    }
+
+    private fun deleteConversation(conversation: PocketConversation) {
+        if (conversation.id == currentConversationId) {
+            toast("Bitte zuerst einen neuen Chat beginnen oder einen anderen öffnen.")
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Chat dauerhaft löschen?")
+            .setMessage("Chat „" + conversation.title.take(65) +
+                "“ und alle dazugehörigen Nachrichten löschen?")
+            .setNegativeButton("Abbrechen", null)
+            .setPositiveButton("Löschen") { _, _ ->
+                lifecycleScope.launch {
+                    withContext(Dispatchers.IO) {
+                        PocketChatHistory.dao(applicationContext).permanentlyDelete(conversation.id)
+                    }
+                    loadChatHistory()
+                }
+            }.show()
+    }
+
+    private fun openConversation(conversation: PocketConversation) {
+        if (!chatReady || busy || mcpDispatchInFlight || mcpBindingInProgress) {
+            toast("Bitte laufende Inferenz / MCP-Aktion zuerst beenden.")
+            return
+        }
+        if (conversation.id == currentConversationId) {
+            historyDrawer.closeDrawer(GravityCompat.END)
+            return
+        }
+        persistChatNow()
+        busy = true
+        renderChatState()
+        lifecycleScope.launch {
+            try {
+                // The previous native conversation has different message history.
+                // Do NOT imply an old KV cache or native session was restored.
+                if (activeModel?.name?.endsWith(".litertlm", true) == true) {
+                    liteRtRuntime?.clearConversation()
+                } else if (activeModel != null && ::engine.isInitialized) {
+                    engine.clearConversationKeepingSystem()
+                }
+                val history = withContext(Dispatchers.IO) {
+                    PocketChatHistory.dao(applicationContext).lines(conversation.id)
+                }
+                currentConversationId = conversation.id
+                prefs.edit().putString("current_chat_id", conversation.id).apply()
+                messages.clear()
+                messages.addAll(history.map { ChatMessage(it.isUser, it.content) })
+                chatAdapter.notifyDataSetChanged()
+                findViewById<View>(R.id.emptyState).visibility =
+                    if (messages.isEmpty()) View.VISIBLE else View.GONE
+                historyDrawer.closeDrawer(GravityCompat.END)
+                setStatus("● Historischer Chat geladen · nativer Modellkontext zurückgesetzt")
+            } catch (error: Exception) {
+                showError("Chatwechsel nicht möglich", error)
+            } finally {
+                busy = false
+                renderChatState()
+            }
+        }
+    }
+
     private fun showPage(which: Int) {
         currentPage = which
-        chatPage.visibility = if (which == 0) View.VISIBLE else View.GONE
+        historyDrawer.visibility = if (which == 0) View.VISIBLE else View.GONE
         libraryPage.visibility = if (which == 1) View.VISIBLE else View.GONE
         settingsPage.visibility = if (which == 2) View.VISIBLE else View.GONE
         val ids = intArrayOf(R.id.navChat, R.id.navModels, R.id.navSettings)
@@ -367,8 +668,8 @@ class MainActivity : AppCompatActivity() {
         // Native prefill can take time on 4B CPU models. Keep the text
         // editor and navigation responsive while preventing a premature send.
         val canInteract = !busy
-        messageInput.isEnabled = canInteract || mcpBindingInProgress
-        sendButton.isEnabled = canInteract || generationJob?.isActive == true
+        messageInput.isEnabled = chatReady && (canInteract || mcpBindingInProgress)
+        sendButton.isEnabled = chatReady && (canInteract || generationJob?.isActive == true)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -448,15 +749,18 @@ class MainActivity : AppCompatActivity() {
         }
         store.partials().forEach { part ->
             val name = part.name.removeSuffix(".part")
-            val source = prefs.getString("pending_url_" + name, null)
+            val journal = ModelDownloadJournal.read(this, name)
+            val source = journal?.url?.takeIf { it.isNotBlank() }
+                ?: prefs.getString("pending_url_" + name, null)
             val line = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), dp(12), dp(12), dp(12))
                 setBackgroundResource(R.drawable.bg_panel)
             }
-            val runningNow = DownloadPresentation.isActivePartial(
-                part.name, activeTransferName, transferBusy
-            )
+            val runningNow = journal?.state in setOf("queued", "running") ||
+                DownloadPresentation.isActivePartial(
+                    part.name, activeTransferName, transferBusy
+                )
             val partialLabel = simpleLabel(DownloadPresentation.partialStatus(
                 name, part.length(), runningNow
             ))
@@ -469,7 +773,8 @@ class MainActivity : AppCompatActivity() {
                     resume.isEnabled = !transferBusy
                     resume.setOnClickListener {
                         startDownload(RemoteModel(
-                            name, source, -1, prefs.getString("pending_sha_" + name, null)
+                            name, source, -1,
+                            journal?.hash ?: prefs.getString("pending_sha_" + name, null)
                         ))
                     }
                     line.addView(resume)
@@ -577,6 +882,7 @@ class MainActivity : AppCompatActivity() {
                 // A bridge configured in SETUP before model download is now
                 // actually bound to the loaded GGUF; update the visible badge.
                 updateMcpBadge(mcpAgent.current())
+                beginFreshConversation()
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -673,6 +979,7 @@ class MainActivity : AppCompatActivity() {
                 // LiteRT has its own native function declarations; NEVER
                 // invoke these directly without Pocket's existing approval.
                 updateMcpBadge(mcpAgent.current())
+                beginFreshConversation()
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -730,6 +1037,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 runtime.bindMcp(active)
+                beginFreshConversation()
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -756,6 +1064,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (activeModel == null) {
+            beginFreshConversation()
             messages.clear()
             chatAdapter.notifyDataSetChanged()
             findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -776,6 +1085,7 @@ class MainActivity : AppCompatActivity() {
                     engine.clearConversationKeepingSystem()
                     setStatus("● BEREIT · MCP-SYSTEMKONTEXT ERHALTEN")
                 }
+                beginFreshConversation()
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -963,6 +1273,7 @@ class MainActivity : AppCompatActivity() {
                 engine.resetConversationWithTools(
                     groundedSystemPrompt(active), json, thinkingMode
                 )
+                beginFreshConversation()
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -1029,6 +1340,7 @@ class MainActivity : AppCompatActivity() {
             "🔎 Prüfe MCP-Verbindung und tools/list am echten Server …"))
         val index = messages.lastIndex
         chatAdapter.notifyItemRangeInserted(index - 1, 2)
+        requestChatPersist()
         findViewById<View>(R.id.emptyState).visibility = View.GONE
         showPage(0)
         messagesView.scrollToPosition(index)
@@ -1107,6 +1419,7 @@ class MainActivity : AppCompatActivity() {
         messages.add(ChatMessage(false, "🔎 Prüfe reale Log-Werkzeugfreigaben mit tools/list …"))
         val index = messages.lastIndex
         chatAdapter.notifyItemRangeInserted(index - 1, 2)
+        requestChatPersist()
         findViewById<View>(R.id.emptyState).visibility = View.GONE
         showPage(0)
         messagesView.scrollToPosition(index)
@@ -1626,6 +1939,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun sendMessage() {
+        if (!chatReady) { toast("Lade Chatverlauf ..."); return }
         if (busy) { toast("Pocket AI ist beschäftigt."); return }
         val text = messageInput.text.toString().trim()
         if (text.isEmpty()) return
@@ -1691,6 +2005,7 @@ class MainActivity : AppCompatActivity() {
         messages.add(answer)
         val index = messages.lastIndex
         chatAdapter.notifyItemRangeInserted(index - 1, 2)
+        requestChatPersist()
         findViewById<View>(R.id.emptyState).visibility = View.GONE
         messagesView.scrollToPosition(index)
         busy = true
@@ -1709,6 +2024,7 @@ class MainActivity : AppCompatActivity() {
                             fullReply.append(token)
                         } else withContext(Dispatchers.Main) {
                             answer.content += token
+                            requestChatPersist()
                             chatAdapter.notifyItemChanged(index)
                             messagesView.scrollToPosition(index)
                         }
@@ -1920,6 +2236,7 @@ class MainActivity : AppCompatActivity() {
                     chatAdapter.notifyItemInserted(messages.lastIndex)
                     messagesView.scrollToPosition(messages.lastIndex)
                 }
+                requestChatPersist()
                 busy = false
                 sendButton.text = "➤"
                 renderChatState()
@@ -2156,7 +2473,12 @@ class MainActivity : AppCompatActivity() {
                 setAnswer("⚠️ Höchstzahl lokaler Tool-Planungsschritte erreicht.")
                 return
             }
-            turn = runtime.toolFeedback(tool.name, outcome.toString().take(12_000))
+            // Do not feed raw, arbitrarily large server JSON to a local
+            // model; it may contain injected role delimiters or credentials.
+            val boundedFeedback = if (hadRealCall)
+                McpToolFeedback.nativePayload(tool, outcome)
+            else outcome.toString().take(12_000)
+            turn = runtime.toolFeedback(tool.name, boundedFeedback)
         }
     }
 
@@ -2173,6 +2495,7 @@ class MainActivity : AppCompatActivity() {
         messages.add(answer)
         val index = messages.lastIndex
         chatAdapter.notifyItemRangeInserted(index - 1, 2)
+        requestChatPersist()
         findViewById<View>(R.id.emptyState).visibility = View.GONE
         messagesView.scrollToPosition(index)
         busy = true
@@ -2190,6 +2513,7 @@ class MainActivity : AppCompatActivity() {
                     runtime.send(text).collect { delta ->
                         withContext(Dispatchers.Main) {
                             answer.content += delta
+                            requestChatPersist()
                             chatAdapter.notifyItemChanged(index)
                             messagesView.scrollToPosition(index)
                         }
@@ -2207,6 +2531,7 @@ class MainActivity : AppCompatActivity() {
                 chatAdapter.notifyItemChanged(index)
                 setStatus("● LITERT FEHLER")
             } finally {
+                requestChatPersist()
                 busy = false
                 sendButton.text = "➤"
                 renderChatState()
@@ -2291,49 +2616,74 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startDownload(model: RemoteModel) {
+    /**
+     * Schedule only from an explicitly confirmed user action. UI lifetime is
+     * deliberately disconnected from Android JobScheduler / WorkManager.
+     */
+    private fun startDownload(model: RemoteModel, wifiOnly: Boolean =
+        prefs.getBoolean("download_wifi_only", false)) {
         if (transferBusy) { toast("Ein Transfer läuft bereits."); return }
         val previousUrl = prefs.getString("pending_url_" + model.name, null)
         if (previousUrl != null && previousUrl != model.url &&
-            File(store.dir, model.name + ".part").exists()) {
+            File(store.dir, ModelStore.sanitize(model.name) + ".part").exists()) {
             toast("Teil-Download gehört zu einer anderen Quelle. Bitte zuerst löschen.")
             return
         }
-        transferBusy = true
-        activeTransferName = model.name
-        cancelTransfer = AtomicBoolean(false)
-        prefs.edit().putString("pending_url_" + model.name, model.url)
-            .putString("pending_sha_" + model.name, model.sha256).apply()
-        showPage(1)
-        setDownloadUi("Lade " + model.name, true)
-        lifecycleScope.launch {
-            try {
-                val result = withContext(Dispatchers.IO) {
-                    store.download(model.url, model.name, model.sha256, cancelTransfer) { p ->
-                        runOnUiThread { updateProgress(p) }
-                    }
-                }
-                prefs.edit().remove("pending_url_" + model.name)
-                    .remove("pending_sha_" + model.name).apply()
-                setDownloadUi("✓ " + model.name + " installiert", false)
-                toast("Modell heruntergeladen!")
-                refreshLibrary()
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Modell bereit")
-                    .setMessage("Jetzt " + result.name + " in die Engine laden?")
-                    .setNegativeButton("Später", null)
-                    .setPositiveButton("Laden") { _, _ -> loadModel(result) }
-                    .show()
-            } catch (error: Exception) {
-                setDownloadUi(error.message ?: "Download fehlgeschlagen", false)
-                if (error !is TransferCancelled) showError("Download fehlgeschlagen", error)
-            } finally {
-                transferBusy = false
-                activeTransferName = null
-                activePartialLabel = null
-                refreshLibrary()
+        try {
+            BackgroundModelDownloads.start(this, model, wifiOnly)
+            prefs.edit().putString("pending_url_" + model.name, model.url)
+                .putString("pending_sha_" + model.name, model.sha256).apply()
+            backgroundTransferName = ModelStore.sanitize(model.name)
+            activeTransferName = backgroundTransferName
+            transferBusy = true
+            showPage(1)
+            setDownloadUi("Hintergrunddownload gestartet: " + model.name, true)
+            refreshLibrary()
+            if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                    android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 510)
             }
+        } catch (problem: Exception) {
+            showError("Download konnte nicht geplant werden", problem)
         }
+    }
+
+    /** Display a persisted OS job state; do not cancel work on onStop(). */
+    private fun updateBackgroundTransferUi() {
+        val name = backgroundTransferName
+            ?: BackgroundModelDownloads.latestActive(this)?.name ?: return
+        val entry = ModelDownloadJournal.read(this, name) ?: return
+        if (entry.state in setOf("queued", "running")) {
+            backgroundTransferName = name
+            activeTransferName = name
+            transferBusy = true
+            setDownloadUi(
+                if (entry.state == "queued") "Download wartet auf Android/Netzwerk: " + name
+                else "Hintergrunddownload: " + name + " · " +
+                    ModelStore.displaySize(entry.done) +
+                    if (entry.total > 0) " / " + ModelStore.displaySize(entry.total) else "",
+                true
+            )
+            downloadProgress.isIndeterminate = entry.total <= 0
+            if (entry.total > 0) downloadProgress.progress =
+                ((entry.done * 100 / entry.total).coerceIn(0, 100)).toInt()
+            return
+        }
+        if (name != backgroundTransferName) return
+        val message = when (entry.state) {
+            "complete" -> "✓ Modell installiert und geprüft: " + name
+            "paused" -> "⏸ Download pausiert: " + name
+            else -> "⚠ Download fehlgeschlagen: " + entry.error.take(100)
+        }
+        backgroundTransferName = null
+        activeTransferName = null
+        transferBusy = false
+        setDownloadUi(message, false)
+        if (entry.state == "complete") {
+            prefs.edit().remove("pending_url_" + name).remove("pending_sha_" + name).apply()
+        }
+        refreshLibrary()
     }
 
     private fun browseRepository() {
@@ -2528,13 +2878,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun confirmDownload(model: RemoteModel) {
         if (transferBusy) { toast("Ein Transfer läuft bereits."); return }
+        val wifiOnly = SwitchCompat(this).apply {
+            text = "Nur WLAN (keine mobilen Daten)"
+            isChecked = prefs.getBoolean("download_wifi_only", false)
+            setPadding(dp(18), dp(8), dp(18), dp(8))
+        }
         AlertDialog.Builder(this)
             .setTitle("Modell herunterladen?")
             .setMessage(model.name + "\n" +
                 (if (model.bytes > 0) ModelStore.displaySize(model.bytes) else "Größe unbekannt") +
-                "\nQuelle: " + model.url + "\n\nDie Datei wird im privaten App-Speicher abgelegt.")
+                "\nQuelle: " + model.url +
+                "\n\nAndroid führt den Download bei minimierter App fort, soweit erlaubt.")
+            .setView(wifiOnly)
             .setNegativeButton("Abbrechen", null)
-            .setPositiveButton("Download starten") { _, _ -> startDownload(model) }
+            .setPositiveButton("Download starten") { _, _ ->
+                prefs.edit().putBoolean("download_wifi_only", wifiOnly.isChecked).apply()
+                startDownload(model, wifiOnly.isChecked)
+            }
             .show()
     }
 
@@ -2709,6 +3069,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        persistChatNow()
+        chatWriteExecutor.shutdown()
         if (::mcpUi.isInitialized) mcpUi.close()
         liteRtRuntime?.shutdownAsync()
         liteRtRuntime = null
@@ -2733,6 +3095,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        downloadUiHandler.removeCallbacks(downloadUiPoll)
+        downloadUiHandler.post(downloadUiPoll)
         uiPulseHandler.removeCallbacks(uiPulse)
         uiPulseEnabled = true
         uiResponsiveness.arm(SystemClock.uptimeMillis())
@@ -2743,6 +3107,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
+        persistChatNow()
+        downloadUiHandler.removeCallbacks(downloadUiPoll)
         mcpBindPoll?.let { uiPulseHandler.removeCallbacks(it) }
         uiPulseEnabled = false
         uiPulseHandler.removeCallbacks(uiPulse)
