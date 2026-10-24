@@ -657,22 +657,20 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
                     val prompt = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
-                    LiteRtRuntime.load(applicationContext, file, prompt)
+                    LiteRtRuntime.load(applicationContext, file, prompt,
+                        mcpAgent.current()) { phase ->
+                        // Diagnostics are best effort; never break a valid model start.
+                        runCatching {
+                            (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
+                                .setProcessStateSummary(("PocketAI load=" + file.name.take(45) +
+                                    " phase=" + phase).toByteArray(Charsets.UTF_8))
+                        }
+                    }
                 }
                 liteRtRuntime = loaded
                 activeModel = file
                 // LiteRT has its own native function declarations; NEVER
                 // invoke these directly without Pocket's existing approval.
-                val preparedMcp = mcpAgent.current()
-                if (preparedMcp != null) {
-                    try {
-                        loaded.bindMcp(preparedMcp)
-                    } catch (error: Exception) {
-                        mcpAgent.clearSessionSilently()
-                        toast("LiteRT MCP-Bindung fehlgeschlagen: " +
-                            (error.message ?: "Ungültiges Tool-Schema").take(145))
-                    }
-                }
                 updateMcpBadge(mcpAgent.current())
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
