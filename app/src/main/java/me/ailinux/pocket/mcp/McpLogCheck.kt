@@ -48,6 +48,10 @@ object McpLogCheck {
         val text = message.trim().replace(Regex("\\s+"), " ")
         if (text.length !in 3..280) return false
         if (explicit.matches(text)) return true
+        // Other explicit slash commands belong to their own action router.
+        // Otherwise a search containing "TriForce Logs" can become a
+        // misleading tools/list-only audit instead of an approved tools/call.
+        if (text.startsWith("/mcp ", ignoreCase = true)) return false
         if (explanation.containsMatchIn(text)) return false
         if (!namedTarget.containsMatchIn(text) || !logs.containsMatchIn(text)) return false
         return actions.containsMatchIn(text)
