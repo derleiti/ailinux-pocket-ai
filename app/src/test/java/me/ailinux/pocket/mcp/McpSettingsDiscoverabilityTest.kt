@@ -14,9 +14,12 @@ class McpSettingsDiscoverabilityTest {
     private val activity = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
 
     @Test fun setupShowsModelBridgeAndStatusNextToMcpProfiles() {
-        val section = ui.substringAfter("MCP VERBINDUNGEN")
+        val section = ui.substringAfter("@string/mcp_connections_header")
             .substringBefore("android:id=\"@+id/appVersion\"")
-        assertTrue(section.contains("MCP MODELL-AGENT · AUTO-BRIDGE"))
+        assertTrue(section.contains("@string/mcp_agent_header"))
+        val german = File("src/main/res/values/strings.xml").readText()
+        assertTrue(german.contains("MCP VERBINDUNGEN"))
+        assertTrue(german.contains("MCP MODELL-AGENT · AUTO-BRIDGE"))
         assertTrue(section.contains("android:id=\"@+id/mcpAgentSettingsStatus\""))
         assertTrue(section.contains("android:id=\"@+id/mcpAgentSettingsButton\""))
         assertTrue(section.contains("android:id=\"@+id/mcpToolListSettingsButton\""))

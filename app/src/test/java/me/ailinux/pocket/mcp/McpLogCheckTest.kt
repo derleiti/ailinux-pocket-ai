@@ -150,6 +150,8 @@ class McpLogCheckTest {
         assertFalse(main.contains("McpConnection.callTool(authorized, \"logs\""))
         assertTrue(main.contains("TriForce: echten Log-Zugriff prüfen (ohne Spark)"))
         val layout = File("src/main/res/layout/activity_main.xml").readText()
-        assertTrue(layout.contains("Es aktiviert weder MCP-Zugriff noch Werkzeuge"))
+        assertTrue(layout.contains("@string/thinking_explanation"))
+        assertTrue(File("src/main/res/values/strings.xml").readText()
+            .contains("Es aktiviert weder MCP-Zugriff noch Werkzeuge"))
     }
 }

@@ -24,8 +24,8 @@ android {
         applicationId = "me.ailinux.pocket"
         minSdk = 33
         targetSdk = 35
-        versionCode = 34
-        versionName = "2.1.0-RC9"
+        versionCode = 35
+        versionName = "2.1.0-RC10"
         ndk { abiFilters += "arm64-v8a" }
     }
     signingConfigs {

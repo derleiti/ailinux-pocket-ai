@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  SOHBET</string>
+    <string name="nav_models">▤  MODELLER</string>
+    <string name="nav_setup">⚙  AYARLAR</string>
+    <string name="chat_heading">SOHBET</string>
+    <string name="history_title">SOHBET GEÇMİŞİ</string>
+    <string name="new_chat">+ Yeni sohbet</string>
+    <string name="search_chats">Sohbetlerde ara</string>
+    <string name="archived_chats">Arşivlenmiş sohbetler</string>
+    <string name="library_title">Model kitaplığı</string>
+    <string name="settings_title">Ayarlar</string>
+    <string name="language_heading">UYGULAMA DİLİ</string>
+    <string name="language_dialog_title">Dil seç</string>
+    <string name="language_system_default">Sistem dili</string>
+    <string name="language_preview_suffix">Önizleme</string>
+    <string name="language_button">Dil: %1$s</string>
+</resources>

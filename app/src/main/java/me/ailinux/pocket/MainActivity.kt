@@ -31,6 +31,7 @@ import me.ailinux.pocket.mcp.McpVault
 import me.ailinux.pocket.mcp.McpProfile
 import me.ailinux.pocket.mcp.McpAuth
 import me.ailinux.pocket.mcp.McpOAuth
+import me.ailinux.pocket.mcp.McpExecutionUncertain
 import me.ailinux.pocket.mcp.McpConnection
 import me.ailinux.pocket.mcp.McpHttpFailure
 import android.view.View
@@ -46,6 +47,8 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.os.LocaleListCompat
 import androidx.appcompat.widget.SwitchCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.drawerlayout.widget.DrawerLayout
@@ -104,6 +107,25 @@ class MainActivity : AppCompatActivity() {
     private var activeModel: File? = null
     /** Alternative LiteRT-LM runtime, only for .litertlm models. */
     private var liteRtRuntime: LiteRtRuntime? = null
+    @Volatile private var diagnosticTrace = PocketDiagnostics.newTrace()
+    private fun trace(
+        domain: PocketDiagnostics.Domain, step: PocketDiagnostics.Step,
+        state: PocketDiagnostics.State = PocketDiagnostics.State.INFO,
+        tool: String = "", count: Int = -1, durationMs: Long = -1,
+        code: PocketDiagnostics.ErrorCode = PocketDiagnostics.ErrorCode.NONE
+    ): String = PocketDiagnostics.log(
+        applicationContext, diagnosticTrace, domain, step, state,
+        backend = if (activeModel?.name?.endsWith(".litertlm", true) == true) "LITERT"
+            else if (activeModel != null) "GGUF" else "",
+        tool = tool, count = count, durationMs = durationMs, code = code
+    )
+    private fun failure(
+        domain: PocketDiagnostics.Domain, step: PocketDiagnostics.Step,
+        error: Throwable, uncertain: Boolean = false
+    ): String = PocketDiagnostics.failure(
+        applicationContext, diagnosticTrace, domain, step, error, uncertain
+    )
+
     private var generationJob: Job? = null
     private var busy = false
     private var transferBusy = false
@@ -205,6 +227,7 @@ class MainActivity : AppCompatActivity() {
             else if (activeModel != null) rebindNativeMcpTools(active)
             else updateMcpBadge(active)
         }
+        mcpAgent.bindDiagnosticsTrace { diagnosticTrace }
         // No agent session does not mean the device, its saved MCP profiles,
         // or the remote server is offline. Show exactly what is disabled.
         updateMcpBadge(null)
@@ -215,9 +238,17 @@ class MainActivity : AppCompatActivity() {
         setupChatHistory()
         restoreChatHistory()
 
+        findViewById<MaterialButton>(R.id.appLanguageButton).setOnClickListener {
+            showAppLanguagePicker()
+        }
+        updateAppLanguageLabel()
+
         findViewById<TextView>(R.id.navChat).setOnClickListener { showPage(0) }
         findViewById<TextView>(R.id.navModels).setOnClickListener { showPage(1) }
         findViewById<TextView>(R.id.navSettings).setOnClickListener { showPage(2) }
+        findViewById<View>(R.id.chatDebugButton).setOnClickListener {
+            showDiagnosticTimeline(inChat = true)
+        }
         findViewById<MaterialButton>(R.id.chatMcpButton).setOnClickListener {
             showMcpAgentMenu()
         }
@@ -308,6 +339,9 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<MaterialButton>(R.id.crashDiagnosticsButton).setOnClickListener {
             showProcessExitInfo()
+        }
+        findViewById<MaterialButton>(R.id.pocketDiagnosticsButton).setOnClickListener {
+            showDiagnosticTimeline(inChat = false)
         }
         findViewById<MaterialButton>(R.id.hardwareProbeButton).setOnClickListener {
             val live = liteRtRuntime?.backendName
@@ -493,7 +527,7 @@ class MainActivity : AppCompatActivity() {
         val container = findViewById<LinearLayout>(R.id.chatHistoryEntries)
         container.removeAllViews()
         if (conversations.isEmpty()) {
-            container.addView(simpleLabel("Keine gespeicherten Chats gefunden."))
+            container.addView(simpleLabel(getString(R.string.history_empty)))
             return
         }
         conversations.forEach { conversation ->
@@ -531,9 +565,10 @@ class MainActivity : AppCompatActivity() {
                     setOnClickListener { callback() }
                 })
             }
-            action("Öffnen") { openConversation(conversation) }
-            action("Titel") { renameConversation(conversation) }
-            action(if (conversation.pinned) "Lösen" else "Anpinnen") {
+            action(getString(R.string.history_open_action)) { openConversation(conversation) }
+            action(getString(R.string.history_rename_action)) { renameConversation(conversation) }
+            action(if (conversation.pinned)
+                getString(R.string.history_unpin_action) else getString(R.string.history_pin_action)) {
                 lifecycleScope.launch {
                     withContext(Dispatchers.IO) {
                         PocketChatHistory.dao(applicationContext)
@@ -542,7 +577,8 @@ class MainActivity : AppCompatActivity() {
                     loadChatHistory()
                 }
             }
-            action(if (conversation.archived) "Aktivieren" else "Archiv") {
+            action(if (conversation.archived)
+                getString(R.string.history_activate_action) else getString(R.string.history_archive_action)) {
                 lifecycleScope.launch {
                     withContext(Dispatchers.IO) {
                         PocketChatHistory.dao(applicationContext)
@@ -551,7 +587,7 @@ class MainActivity : AppCompatActivity() {
                     loadChatHistory()
                 }
             }
-            action("Löschen") { deleteConversation(conversation) }
+            action(getString(R.string.history_delete_action)) { deleteConversation(conversation) }
             section.addView(actions)
             container.addView(section, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -567,9 +603,9 @@ class MainActivity : AppCompatActivity() {
             setText(conversation.title)
             selectAll()
         }
-        AlertDialog.Builder(this).setTitle("Chat umbenennen").setView(field)
-            .setNegativeButton("Abbrechen", null)
-            .setPositiveButton("Speichern") { _, _ ->
+        AlertDialog.Builder(this).setTitle(R.string.history_rename_title).setView(field)
+            .setNegativeButton(R.string.language_cancel, null)
+            .setPositiveButton(R.string.confirm_save) { _, _ ->
                 val title = field.text.toString().trim().take(80)
                 if (title.isNotBlank()) lifecycleScope.launch {
                     withContext(Dispatchers.IO) {
@@ -582,12 +618,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun deleteConversation(conversation: PocketConversation) {
         if (conversation.id == currentConversationId) {
-            toast("Bitte zuerst einen neuen Chat beginnen oder einen anderen öffnen.")
+            toast(getString(R.string.history_current_delete_warning))
             return
         }
-        AlertDialog.Builder(this).setTitle("Chat dauerhaft löschen?")
-            .setMessage("Chat „" + conversation.title.take(65) +
-                "“ und alle dazugehörigen Nachrichten löschen?")
+        AlertDialog.Builder(this).setTitle(R.string.history_delete_title)
+            .setMessage(getString(R.string.history_delete_message, conversation.title.take(65)))
             .setNegativeButton("Abbrechen", null)
             .setPositiveButton("Löschen") { _, _ ->
                 lifecycleScope.launch {
@@ -601,7 +636,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun openConversation(conversation: PocketConversation) {
         if (!chatReady || busy || mcpDispatchInFlight || mcpBindingInProgress) {
-            toast("Bitte laufende Inferenz / MCP-Aktion zuerst beenden.")
+            toast(getString(R.string.history_select_busy))
             return
         }
         if (conversation.id == currentConversationId) {
@@ -631,7 +666,7 @@ class MainActivity : AppCompatActivity() {
                 findViewById<View>(R.id.emptyState).visibility =
                     if (messages.isEmpty()) View.VISIBLE else View.GONE
                 historyDrawer.closeDrawer(GravityCompat.END)
-                setStatus("● Historischer Chat geladen · nativer Modellkontext zurückgesetzt")
+                setStatus(getString(R.string.history_loaded_status))
             } catch (error: Exception) {
                 showError("Chatwechsel nicht möglich", error)
             } finally {
@@ -639,6 +674,72 @@ class MainActivity : AppCompatActivity() {
                 renderChatState()
             }
         }
+    }
+
+    /**
+     * Android 13+ owns application locales. Never save a competing locale in
+     * preferences; setApplicationLocales synchronizes with system Settings.
+     * Changing configuration recreates the Activity and invalidates native
+     * GGUF/LiteRT objects, so block busy actions and explain the reset.
+     */
+    private fun updateAppLanguageLabel() {
+        val current = AppLanguageCatalog.selectedIndex(
+            AppCompatDelegate.getApplicationLocales().toLanguageTags()
+        )
+        val selected = AppLanguageCatalog.choices[current]
+        val name = if (selected.tag.isEmpty()) getString(R.string.language_system_default)
+            else selected.nativeName +
+                (if (selected.preview) " · " + getString(R.string.language_preview_suffix)
+                 else "")
+        findViewById<MaterialButton>(R.id.appLanguageButton).text =
+            getString(R.string.language_button, name)
+    }
+
+    private fun showAppLanguagePicker() {
+        val options = AppLanguageCatalog.choices
+        val current = AppLanguageCatalog.selectedIndex(
+            AppCompatDelegate.getApplicationLocales().toLanguageTags()
+        )
+        val choices = options.map { option ->
+            if (option.tag.isEmpty()) getString(R.string.language_system_default)
+            else option.nativeName + (if (option.preview)
+                " · " + getString(R.string.language_preview_suffix) else "")
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(R.string.language_dialog_title)
+            .setSingleChoiceItems(choices, current) { dialog, which ->
+                dialog.dismiss()
+                if (which == current) return@setSingleChoiceItems
+                if (busy || mcpDispatchInFlight || mcpBindingInProgress ||
+                    generationJob?.isActive == true) {
+                    toast(getString(R.string.language_busy_message))
+                    return@setSingleChoiceItems
+                }
+                val selected = options[which]
+                val warnings = mutableListOf<String>()
+                if (activeModel != null)
+                    warnings.add(getString(R.string.language_restart_message))
+                if (selected.preview)
+                    warnings.add(getString(R.string.language_beta_notice))
+                fun switchLocale() {
+                    if (busy || generationJob?.isActive == true || mcpDispatchInFlight)
+                        return
+                    persistChatNow()
+                    AppCompatDelegate.setApplicationLocales(
+                        if (selected.tag.isEmpty()) LocaleListCompat.getEmptyLocaleList()
+                        else LocaleListCompat.forLanguageTags(selected.tag)
+                    )
+                }
+                if (warnings.isEmpty()) switchLocale()
+                else AlertDialog.Builder(this)
+                    .setTitle(R.string.language_restart_title)
+                    .setMessage(warnings.joinToString("\n\n"))
+                    .setNegativeButton(R.string.language_cancel, null)
+                    .setPositiveButton(R.string.language_apply) { _, _ -> switchLocale() }
+                    .show()
+            }
+            .setNegativeButton(R.string.language_cancel, null)
+            .show()
     }
 
     private fun showPage(which: Int) {
@@ -662,9 +763,13 @@ class MainActivity : AppCompatActivity() {
      */
     private fun renderChatState() {
         val loaded = activeModel != null
-        chatModelName.text = ChatPresentation.modelLabel(activeModel?.name)
-        emptyHint.text = ChatPresentation.emptyHint(loaded)
-        messageInput.hint = ChatPresentation.inputHint(loaded)
+        chatModelName.text = if (loaded)
+            ChatPresentation.modelLabel(activeModel?.name)
+            else getString(R.string.no_model_loaded)
+        emptyHint.text = getString(if (loaded) R.string.chat_ready_hint
+            else R.string.chat_missing_hint)
+        messageInput.hint = getString(if (loaded) R.string.input_chat_hint
+            else R.string.input_missing_hint)
         // Native prefill can take time on 4B CPU models. Keep the text
         // editor and navigation responsive while preventing a premature send.
         val canInteract = !busy
@@ -1334,6 +1439,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun runMcpHealth(question: String, profile: McpProfile) {
         if (busy) { toast("Pocket AI arbeitet bereits."); return }
+        diagnosticTrace = PocketDiagnostics.newTrace()
+        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DISCOVERY_START,
+            PocketDiagnostics.State.START)
         messageInput.setText("")
         messages.add(ChatMessage(true, question))
         messages.add(ChatMessage(false,
@@ -1362,12 +1470,17 @@ class MainActivity : AppCompatActivity() {
                         val started = SystemClock.elapsedRealtime()
                         val server = McpConnection.inspect(authorized)
                         val duration = SystemClock.elapsedRealtime() - started
+                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DISCOVERY_DONE,
+                            PocketDiagnostics.State.OK, count = server.tools.size,
+                            durationMs = duration)
                         McpHealthCheck.success(authorized, server, duration)
                     }
                 }
                 messages[index].content = result
                 setStatus("● MCP PRÜFUNG BEENDET")
             } catch (problem: Exception) {
+                failure(PocketDiagnostics.Domain.MCP,
+                    PocketDiagnostics.Step.DISCOVERY_DONE, problem)
                 messages[index].content = McpHealthCheck.failure(profile, problem)
                 setStatus("● MCP NICHT BESTÄTIGT")
             } finally {
@@ -1414,6 +1527,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun runMcpLogCapability(question: String, profile: McpProfile) {
         if (busy) { toast("Pocket AI arbeitet bereits."); return }
+        diagnosticTrace = PocketDiagnostics.newTrace()
+        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DISCOVERY_START,
+            PocketDiagnostics.State.START)
         messageInput.setText("")
         messages.add(ChatMessage(true, question))
         messages.add(ChatMessage(false, "🔎 Prüfe reale Log-Werkzeugfreigaben mit tools/list …"))
@@ -1444,12 +1560,16 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         val authorized = McpOAuth(vault).refreshIfNeeded(fresh)
                         val info = McpConnection.inspect(authorized)
+                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DISCOVERY_DONE,
+                            PocketDiagnostics.State.OK, count = info.tools.size)
                         McpLogCheck.capabilityReport(authorized, info)
                     }
                 }
                 messages[index].content = reply
                 setStatus("● LOG-TOOLLISTE BESTÄTIGT")
             } catch (problem: Exception) {
+                failure(PocketDiagnostics.Domain.MCP,
+                    PocketDiagnostics.Step.DISCOVERY_DONE, problem)
                 messages[index].content = McpLogCheck.failure(profile, problem)
                 setStatus("● LOG-ZUGRIFF UNBESTÄTIGT")
             } finally {
@@ -1502,6 +1622,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun readMcpToolCatalog(question: String, filter: String, profile: McpProfile) {
         if (busy) { toast("Pocket AI arbeitet bereits."); return }
+        diagnosticTrace = PocketDiagnostics.newTrace()
+        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DISCOVERY_START,
+            PocketDiagnostics.State.START)
         messageInput.setText("")
         messages.add(ChatMessage(true, question))
         messages.add(ChatMessage(false, "🔎 MCP tools/list wird direkt am Server abgefragt …"))
@@ -1523,6 +1646,8 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         val authorized = McpOAuth(vault).refreshIfNeeded(fresh)
                         val actual = McpConnection.inspect(authorized)
+                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DISCOVERY_DONE,
+                            PocketDiagnostics.State.OK, count = actual.tools.size)
                         McpToolCatalog.format(authorized, actual, filter)
                     }
                 }
@@ -1533,9 +1658,11 @@ class MainActivity : AppCompatActivity() {
                     problem.code in setOf(401, 403)) {
                     McpToolCatalog.loginRequired(profile)
                 } else {
+                    val id = failure(PocketDiagnostics.Domain.MCP,
+                        PocketDiagnostics.Step.DISCOVERY_DONE, problem)
                     "⚠️ MCP-Toolliste konnte nicht live abgefragt werden.\n" +
-                        "Server: " + profile.title + "\n" +
-                        "Grund: " + (problem.message ?: "Unbekannter Netzwerkfehler").take(900) +
+                        "Grund: " + getString(R.string.diagnostics_error,
+                            PocketDiagnostics.publicError(problem), id) +
                         "\nKeine Toolfunktionen erfunden oder ausgeführt."
                 }
                 messages[answerIndex].content = reason
@@ -1620,6 +1747,9 @@ class MainActivity : AppCompatActivity() {
         profile: McpProfile
     ) {
         if (busy) { toast("Pocket AI arbeitet bereits."); return }
+        diagnosticTrace = PocketDiagnostics.newTrace()
+        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DISCOVERY_START,
+            PocketDiagnostics.State.START)
         messageInput.setText("")
         messages.add(ChatMessage(true, question))
         messages.add(ChatMessage(false, "🔎 Prüfe verfügbares MCP-Lesewerkzeug direkt am Server …"))
@@ -1649,7 +1779,11 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         val authorized = McpOAuth(vault).refreshIfNeeded(fresh)
                         val info = McpConnection.inspect(authorized)
+                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DISCOVERY_DONE,
+                            PocketDiagnostics.State.OK, count = info.tools.size)
                         val proposal = McpQuickActions.validatedProposal(request, info)
+                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
+                            PocketDiagnostics.State.OK, tool = proposal.tool.name)
                         Pair(authorized, proposal)
                     }
                 }
@@ -1675,6 +1809,7 @@ class MainActivity : AppCompatActivity() {
                         chatAdapter.notifyItemChanged(answerIndex)
                         setStatus("● MCP LESEABFRAGE …")
                         mcpDispatchInFlight = true
+                        val started = SystemClock.elapsedRealtime()
                         try {
                             val result = withContext(Dispatchers.IO) {
                                 val latest = McpVault(applicationContext).get(profile.id)
@@ -1683,16 +1818,39 @@ class MainActivity : AppCompatActivity() {
                                       latest.auth == authorized.auth) {
                                     "MCP-Profil wurde während der Freigabe geändert"
                                 }
-                                McpConnection.callTool(authorized, proposal.tool, proposal.args)
+                                trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.AUTH_CHECK,
+                                    PocketDiagnostics.State.OK, tool = proposal.tool.name)
+                                PocketDiagnostics.markDispatch(applicationContext,
+                                    diagnosticTrace, proposal.tool.name)
+                                try {
+                                    McpConnection.callTool(authorized, proposal.tool, proposal.args)
+                                } catch (error: Exception) {
+                                    if (error is CancellationException) throw error
+                                    throw McpExecutionUncertain(error)
+                                }
                             }
+                            trace(PocketDiagnostics.Domain.MCP,
+                                if (result.optBoolean("isError", false))
+                                    PocketDiagnostics.Step.REMOTE_ERROR
+                                else PocketDiagnostics.Step.SERVER_RESULT,
+                                if (result.optBoolean("isError", false))
+                                    PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK,
+                                tool = proposal.tool.name,
+                                durationMs = SystemClock.elapsedRealtime() - started)
                             messages[answerIndex].content =
                                 McpQuickActions.displayReceipt(proposal.tool, result)
                             setStatus("● MCP SERVERANTWORT")
                         } catch (problem: Exception) {
+                            val id = failure(PocketDiagnostics.Domain.MCP,
+                                PocketDiagnostics.Step.REMOTE_ERROR, problem,
+                                uncertain = problem is McpExecutionUncertain)
                             messages[answerIndex].content =
-                                "⚠️ MCP-Leseabfrage fehlgeschlagen / Ergebnis unbekannt.\n" +
+                                (if (problem is McpExecutionUncertain)
+                                    "⚠️ MCP-Ergebnis unbekannt (Anfrage möglicherweise ausgeführt).\n"
+                                else "⚠️ MCP-Aufruf vor dem Senden abgebrochen.\n") +
                                 "Werkzeug: " + proposal.tool.name + "\n" +
-                                (problem.message ?: "Netzwerk- oder Serverfehler").take(550) +
+                                getString(R.string.diagnostics_error,
+                                    PocketDiagnostics.publicError(problem), id) +
                                 "\nKein automatischer Wiederholungsversuch."
                             setStatus("● MCP UNBESTÄTIGT")
                         } finally {
@@ -1707,9 +1865,12 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     (problem.message ?: "Keine MCP-Serverantwort").take(550)
                 }
+                val id = failure(PocketDiagnostics.Domain.MCP,
+                    PocketDiagnostics.Step.AUTH_CHECK, problem)
                 messages[answerIndex].content =
                     "⚠️ MCP-Werkzeug nicht ausgeführt.\n" +
-                    "Profil: " + profile.title + "\nGrund: " + detail +
+                    getString(R.string.diagnostics_error,
+                        PocketDiagnostics.publicError(problem), id) +
                     "\nKein Erfolg bestätigt."
                 setStatus("● MCP UNBESTÄTIGT")
             } finally {
@@ -1739,6 +1900,8 @@ class MainActivity : AppCompatActivity() {
         val runtime = withContext(Dispatchers.Default) {
             McpProgressiveBridge.Run(active.progressiveSources, System.currentTimeMillis())
         }
+        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DISCOVERY_DONE,
+            PocketDiagnostics.State.OK, count = runtime.totalTools)
         var modelOutput = firstModelOutput
         var serverResult: JSONObject? = null
         var hadSearch = false
@@ -1771,12 +1934,17 @@ class MainActivity : AppCompatActivity() {
                 thinkingEnabled = active.thinkingMode != "off"
             )) {
                 is McpAgentBridge.Decision.Invalid -> {
+                    trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PLAN,
+                        PocketDiagnostics.State.FAIL)
                     answer.content = "⚠️ Auto-Bridge: Kein gültiger Toolaufruf. " +
                         decision.reason + "\nKeine ungeprüfte MCP-Aktion ausgeführt."
                     chatAdapter.notifyItemChanged(answerIndex)
                     return false
                 }
                 is McpAgentBridge.Decision.Answer -> {
+                    trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PLAN,
+                        if (hadRealCall) PocketDiagnostics.State.OK
+                        else PocketDiagnostics.State.INFO)
                     // Native discovery may already have searched or loaded details.
                     // If a real call did not follow, continue the SAME
                     // authorized plan through the approved host fallback.
@@ -1834,6 +2002,7 @@ class MainActivity : AppCompatActivity() {
                     val args = decision.args
                     val outcome: JSONObject
                     if (meta == McpProgressiveBridge.SEARCH) {
+                        val searchStart = SystemClock.elapsedRealtime()
                         outcome = try {
                             runtime.search(
                                 args.getString("query"),
@@ -1842,6 +2011,10 @@ class MainActivity : AppCompatActivity() {
                         } catch (issue: Exception) {
                             McpProgressiveBridge.localFailure(issue.message.orEmpty())
                         }
+                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SEARCH,
+                            if (outcome.optBoolean("isError", false))
+                                PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK,
+                            durationMs = SystemClock.elapsedRealtime() - searchStart)
                         if (!outcome.optBoolean("isError", false)) {
                             hadSearch = true
                         }
@@ -1849,11 +2022,16 @@ class MainActivity : AppCompatActivity() {
                             McpProgressiveBridge.displaySearchResult(outcome)
                         )
                     } else if (meta == McpProgressiveBridge.DETAILS) {
+                        val detailsStart = SystemClock.elapsedRealtime()
                         outcome = try {
                             runtime.details(args.getString("tool_id"))
                         } catch (issue: Exception) {
                             McpProgressiveBridge.localFailure(issue.message.orEmpty())
                         }
+                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
+                            if (outcome.optBoolean("isError", false))
+                                PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK,
+                            durationMs = SystemClock.elapsedRealtime() - detailsStart)
                         showEvidence(
                             "📋 MCP-Tooldetails aus dem geprüften Katalog " +
                             "(nicht ausgeführt):\n" +
@@ -1869,6 +2047,8 @@ class MainActivity : AppCompatActivity() {
                                 args.getString("arguments_json")
                             )
                         } catch (issue: Exception) {
+                            failure(PocketDiagnostics.Domain.MCP,
+                                PocketDiagnostics.Step.SCHEMA_CHECK, issue)
                             val localError = McpProgressiveBridge.localFailure(
                                 issue.message.orEmpty()
                             )
@@ -1879,6 +2059,8 @@ class MainActivity : AppCompatActivity() {
                             modelOutput = deliver(decision.tool, localError)
                             continue
                         }
+                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
+                            PocketDiagnostics.State.OK, tool = plan.tool.name)
                         answer.content = "🔐 Auto-Bridge schlägt vor: " +
                             plan.source.title + " → " + plan.tool.name +
                             "\nEchter MCP-Aufruf noch NICHT ausgeführt."
@@ -1901,9 +2083,15 @@ class MainActivity : AppCompatActivity() {
                                 mcpAgent.executeAuto(active, plan)
                             }
                         } catch (issue: Exception) {
+                            val eventId = failure(PocketDiagnostics.Domain.MCP,
+                                PocketDiagnostics.Step.REMOTE_ERROR, issue,
+                                uncertain = issue is McpExecutionUncertain)
                             showEvidence(
-                                "⚠️ MCP-Aufruf fehlgeschlagen / Ergebnis unbekannt: " +
-                                (issue.message ?: "Netzwerk-/Serverfehler").take(700) +
+                                (if (issue is McpExecutionUncertain)
+                                    "⚠️ MCP-Ergebnis unbekannt: " else
+                                    "⚠️ MCP-Aufruf vor dem Senden abgebrochen: ") +
+                                getString(R.string.diagnostics_error,
+                                    PocketDiagnostics.publicError(issue), eventId) +
                                 "\nKEIN automatischer Wiederholungsversuch."
                             )
                             return false
@@ -1926,6 +2114,8 @@ class MainActivity : AppCompatActivity() {
                     // Local meta tool results and the single remote result
                     // both become real native Jinja tool-role messages.
                     modelOutput = deliver(decision.tool, outcome)
+                    trace(PocketDiagnostics.Domain.GGUF, PocketDiagnostics.Step.MODEL_FOLLOWUP,
+                        PocketDiagnostics.State.OK, tool = decision.tool.name)
                     if (step == McpProgressiveBridge.MAX_STEPS - 1) {
                         showEvidence(
                             "⚠️ Maximale Anzahl Bridge-Schritte erreicht; " +
@@ -1943,6 +2133,12 @@ class MainActivity : AppCompatActivity() {
         if (busy) { toast("Pocket AI ist beschäftigt."); return }
         val text = messageInput.text.toString().trim()
         if (text.isEmpty()) return
+        if (text.equals("/debug", true) || text.equals("/mcp debug", true) ||
+            text.equals("/mcp diagnose", true)) {
+            messageInput.setText("")
+            showDiagnosticTimeline(inChat = true)
+            return
+        }
         // When an MCP agent is active, plain-language work belongs to the
         // model's native ToolCall planner. Only explicit app diagnostics,
         // slash commands and unambiguous inventory requests bypass it.
@@ -1998,6 +2194,12 @@ class MainActivity : AppCompatActivity() {
         // Spark Jinja system block via resetConversationWithTools(). Do not
         // duplicate it in untrusted user text as RC2 did.
         val request = text
+        diagnosticTrace = PocketDiagnostics.newTrace()
+        trace(PocketDiagnostics.Domain.GGUF, PocketDiagnostics.Step.MODEL_START,
+            PocketDiagnostics.State.START, count = agentSession?.tools?.size ?: 0)
+        if (agentSession != null)
+            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.REQUEST,
+                PocketDiagnostics.State.START, count = agentSession.tools.size)
 
         messageInput.setText("")
         val answer = ChatMessage(false, "")
@@ -2068,6 +2270,8 @@ class MainActivity : AppCompatActivity() {
                             chatAdapter.notifyItemChanged(index)
                         }
                         is McpAgentBridge.Decision.Invalid -> {
+                            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PLAN,
+                                PocketDiagnostics.State.FAIL)
                             answer.content = "⚠️ Kein MCP-Aufruf ausgeführt: " + proposal.reason +
                                 "\nBitte die Anfrage präzisieren oder das Tool manuell wählen."
                             // An unterminated Spark thinking prefix cannot be
@@ -2091,6 +2295,8 @@ class MainActivity : AppCompatActivity() {
                             chatAdapter.notifyItemChanged(index)
                         }
                         is McpAgentBridge.Decision.Proposed -> {
+                            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
+                                PocketDiagnostics.State.OK, tool = proposal.tool.name)
                             if (proposal.nativeToolCall) {
                                 // Must receive a real TOOL role + final assistant,
                                 // or be rolled back in the coroutine finally.
@@ -2112,8 +2318,12 @@ class MainActivity : AppCompatActivity() {
                                 val toolResult = try {
                                     mcpAgent.execute(agentSession, proposal)
                                 } catch (problem: Exception) {
+                                    val id = failure(PocketDiagnostics.Domain.MCP,
+                                        PocketDiagnostics.Step.REMOTE_ERROR, problem,
+                                        uncertain = problem is McpExecutionUncertain)
                                     answer.content = "⚠️ MCP-Aufruf fehlgeschlagen/Erfolg unbekannt: " +
-                                        (problem.message ?: "Netzwerkfehler").take(1000) +
+                                        getString(R.string.diagnostics_error,
+                                            PocketDiagnostics.publicError(problem), id) +
                                         "\nDer Server könnte den Auftrag bereits erhalten haben. Kein automatischer Retry."
                                     chatAdapter.notifyItemChanged(index)
                                     null
@@ -2182,7 +2392,9 @@ class MainActivity : AppCompatActivity() {
                                                 McpToolFeedback.summaryBanner(toolResult) + clean))
                                             chatAdapter.notifyItemInserted(messages.lastIndex)
                                             messagesView.scrollToPosition(messages.lastIndex)
-                                        } catch (_: Exception) {
+                                        } catch (summaryError: Exception) {
+                                            failure(PocketDiagnostics.Domain.GGUF,
+                                                PocketDiagnostics.Step.MODEL_FOLLOWUP, summaryError)
                                             // Never replace or hide the real server receipt.
                                             messages.add(ChatMessage(false,
                                                 "Das echte MCP-Ergebnis steht oben. " +
@@ -2197,10 +2409,16 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+                trace(PocketDiagnostics.Domain.GGUF, PocketDiagnostics.Step.MODEL_DONE,
+                    PocketDiagnostics.State.OK)
                 setStatus("● BEREIT")
             } catch (_: CancellationException) {
+                trace(PocketDiagnostics.Domain.GGUF, PocketDiagnostics.Step.CANCELLED,
+                    PocketDiagnostics.State.REJECTED)
                 setStatus("● GESTOPPT")
             } catch (error: Exception) {
+                val eventId = failure(PocketDiagnostics.Domain.GGUF,
+                    PocketDiagnostics.Step.MODEL_ERROR, error)
                 if (error is IncompleteThinkingTurnException) {
                     // Native SYSTEM/MCP KV already recovered; avoid 171s re-prefill
                     // and never retry a potentially side-effecting remote call.
@@ -2211,7 +2429,8 @@ class MainActivity : AppCompatActivity() {
                         "Keine externe Aktion automatisch wiederholt."
                     setStatus("● BEREIT · THINKING RESET")
                 } else {
-                    answer.content += "\n[Fehler: " + (error.message ?: "Unbekannt") + "]"
+                    answer.content += "\n⚠ " + getString(R.string.diagnostics_error,
+                        PocketDiagnostics.publicError(error), eventId)
                     setStatus("Generierung fehlgeschlagen")
                 }
                 chatAdapter.notifyItemChanged(index)
@@ -2266,6 +2485,8 @@ class MainActivity : AppCompatActivity() {
         val plan = runCatching { McpOnDemandDiscovery.propose(request, run) }.getOrNull()
             ?: return false
         if (mcpAgent.current() != active) return false
+        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
+            PocketDiagnostics.State.OK, tool = plan.tool.name)
         answer.content = "🔎 App-gestützter Werkzeugvorschlag (kein Modell-ToolCall): " +
             plan.source.title + " / " + plan.tool.name + "\nNoch nicht ausgeführt."
         chatAdapter.notifyItemChanged(answerIndex)
@@ -2285,8 +2506,14 @@ class MainActivity : AppCompatActivity() {
                 McpAgentBridge.receipt(plan.tool, result) +
                 "\nKeine native Modell-Toolfortsetzung behauptet."
         } catch (error: Exception) {
-            answer.content = "⚠️ MCP-Ausführung unklar: " +
-                (error.message ?: "Netzwerkfehler").take(260) +
+            val eventId = failure(PocketDiagnostics.Domain.MCP,
+                PocketDiagnostics.Step.REMOTE_ERROR, error,
+                uncertain = error is McpExecutionUncertain)
+            answer.content = (if (error is McpExecutionUncertain)
+                "⚠️ MCP-Ausführung unklar: " else
+                "⚠️ MCP-Aufruf vor dem Senden abgebrochen: ") +
+                getString(R.string.diagnostics_error,
+                    PocketDiagnostics.publicError(error), eventId) +
                 "\nKein automatischer Wiederholungsversuch."
         } finally {
             mcpDispatchInFlight = false
@@ -2302,6 +2529,8 @@ class MainActivity : AppCompatActivity() {
         answer: ChatMessage,
         answerIndex: Int
     ) {
+        trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.PLAN,
+            PocketDiagnostics.State.START)
         var turn = runtime.askMcp(request)
         var hadRealCall = false
         var lastServerResult: JSONObject? = null
@@ -2309,6 +2538,9 @@ class MainActivity : AppCompatActivity() {
         val catalog = if (progressive) withContext(Dispatchers.Default) {
             McpProgressiveBridge.Run(active.progressiveSources, System.currentTimeMillis())
         } else null
+        if (catalog != null)
+            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DISCOVERY_DONE,
+                PocketDiagnostics.State.OK, count = catalog.totalTools)
         fun evidence(text: String) {
             messages.add(ChatMessage(false, text))
             chatAdapter.notifyItemInserted(messages.lastIndex)
@@ -2323,6 +2555,9 @@ class MainActivity : AppCompatActivity() {
                 "MCP-Konfiguration wurde während des LiteRT-Turns geändert."
             }
             if (turn.calls.isEmpty()) {
+                trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.PLAN,
+                    if (hadRealCall) PocketDiagnostics.State.OK
+                    else PocketDiagnostics.State.INFO)
                 val summary = turn.text.ifBlank { "Keine Modellantwort erzeugt." }
                 val invalidClaim = McpLogCheck.modelOnlyAuditClaim(request, summary) ||
                     McpHealthCheck.modelOnlyClaim(summary) ||
@@ -2370,6 +2605,8 @@ class MainActivity : AppCompatActivity() {
             val (tool, args) = LiteRtMcpProtocol.validate(
                 turn.calls.single(), active.tools
             )
+            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
+                PocketDiagnostics.State.OK, tool = tool.name)
             val outcome: JSONObject
             if (progressive) {
                 val run = checkNotNull(catalog)
@@ -2381,6 +2618,9 @@ class MainActivity : AppCompatActivity() {
                         } catch (e: Exception) {
                             McpProgressiveBridge.localFailure(e.message.orEmpty())
                         }
+                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SEARCH,
+                            if (result.optBoolean("isError",false))
+                                PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK)
                         evidence(McpProgressiveBridge.displaySearchResult(result))
                         result
                     }
@@ -2389,6 +2629,9 @@ class MainActivity : AppCompatActivity() {
                         catch (e: Exception) {
                             McpProgressiveBridge.localFailure(e.message.orEmpty())
                         }
+                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
+                            if (result.optBoolean("isError",false))
+                                PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK)
                         evidence("📋 Werkzeugdefinition (nicht ausgeführt):\n" +
                             result.toString().take(1500))
                         result
@@ -2398,6 +2641,8 @@ class MainActivity : AppCompatActivity() {
                             run.prepareCall(args.getString("tool_id"),
                                 args.getString("arguments_json"))
                         } catch (e: Exception) {
+                            failure(PocketDiagnostics.Domain.MCP,
+                                PocketDiagnostics.Step.SCHEMA_CHECK, e)
                             val error = McpProgressiveBridge.localFailure(e.message.orEmpty())
                             evidence("⚠️ Werkzeugvorschlag verworfen: " +
                                 e.message.orEmpty().take(320))
@@ -2419,8 +2664,12 @@ class MainActivity : AppCompatActivity() {
                         val result = try {
                             withContext(Dispatchers.IO) { mcpAgent.executeAuto(active, plan) }
                         } catch (e: Exception) {
+                            val id = failure(PocketDiagnostics.Domain.MCP,
+                                PocketDiagnostics.Step.REMOTE_ERROR, e,
+                                uncertain = e is McpExecutionUncertain)
                             evidence("⚠️ MCP-Ergebnis unbekannt: " +
-                                (e.message ?: "Netzwerkfehler").take(350) +
+                                getString(R.string.diagnostics_error,
+                                    PocketDiagnostics.publicError(e), id) +
                                 "\nKein automatischer Wiederholungsversuch.")
                             setAnswer("⚠️ MCP-Aufrufstatus nicht bestätigt.")
                             return
@@ -2447,8 +2696,12 @@ class MainActivity : AppCompatActivity() {
                 outcome = try {
                     withContext(Dispatchers.IO) { mcpAgent.execute(active, proposal) }
                 } catch (e: Exception) {
+                    val id = failure(PocketDiagnostics.Domain.MCP,
+                        PocketDiagnostics.Step.REMOTE_ERROR, e,
+                        uncertain = e is McpExecutionUncertain)
                     evidence("⚠️ MCP-Ergebnis unbekannt; kein Retry: " +
-                        (e.message ?: "Netzwerkfehler").take(350))
+                        getString(R.string.diagnostics_error,
+                            PocketDiagnostics.publicError(e), id))
                     setAnswer("⚠️ MCP-Aufrufstatus nicht bestätigt.")
                     return
                 } finally {
@@ -2479,6 +2732,8 @@ class MainActivity : AppCompatActivity() {
                 McpToolFeedback.nativePayload(tool, outcome)
             else outcome.toString().take(12_000)
             turn = runtime.toolFeedback(tool.name, boundedFeedback)
+            trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_FOLLOWUP,
+                PocketDiagnostics.State.OK, tool = tool.name)
         }
     }
 
@@ -2489,6 +2744,12 @@ class MainActivity : AppCompatActivity() {
             toast("LiteRT-Modell zuerst laden")
             return
         }
+        diagnosticTrace = PocketDiagnostics.newTrace()
+        trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_START,
+            PocketDiagnostics.State.START)
+        if (mcpAgent.current() != null)
+            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.REQUEST,
+                PocketDiagnostics.State.START, count = mcpAgent.current()?.tools?.size ?: 0)
         messageInput.setText("")
         val answer = ChatMessage(false, "")
         messages.add(ChatMessage(true, text))
@@ -2519,15 +2780,21 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+                trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_DONE,
+                    PocketDiagnostics.State.OK)
                 setStatus("● LITERT BEREIT · " + runtime.backendName)
             } catch (_: CancellationException) {
+                trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.CANCELLED,
+                    PocketDiagnostics.State.REJECTED)
                 withContext(NonCancellable) {
                     try { runtime.cancelResponse() } catch (_: Exception) {}
                 }
                 if (!isDestroyed) setStatus("● LITERT GESTOPPT")
             } catch (error: Exception) {
-                answer.content += "\n[LiteRT-Fehler: " +
-                    (error.message ?: error.javaClass.simpleName).take(450) + "]"
+                val eventId = failure(PocketDiagnostics.Domain.LITERT,
+                    PocketDiagnostics.Step.MODEL_ERROR, error)
+                answer.content += "\n⚠ " + getString(R.string.diagnostics_error,
+                    PocketDiagnostics.publicError(error), eventId)
                 chatAdapter.notifyItemChanged(index)
                 setStatus("● LITERT FEHLER")
             } finally {
@@ -3028,7 +3295,9 @@ class MainActivity : AppCompatActivity() {
                     } else entries.joinToString("\n\n---\n\n")
                     "ANDROID-PROZESSDIAGNOSE – normale Updates sind keine Abstürze; keine Übertragung\n\n" +
                         uiDelayReport + "\n\n" + bindReport +
-                        "\n\n---\n\n" + historical
+                        "\n\n---\n\n" + historical +
+                        "\n\n--- MCP/MODELL-EVENTS ---\n\n" +
+                        PocketDiagnostics.report(applicationContext).takeLast(12_000)
                 }
                 if (!isFinishing && !isDestroyed) {
                     showError("Android-Prozessdiagnose", IllegalStateException(report))
@@ -3039,6 +3308,43 @@ class MainActivity : AppCompatActivity() {
                 button.isEnabled = true
                 button.text = "Letzte App-Abstürze prüfen"
             }
+        }
+    }
+
+    private fun showDiagnosticTimeline(inChat: Boolean) {
+        lifecycleScope.launch {
+            val report = PocketDiagnostics.report(applicationContext)
+            if (inChat) {
+                // Host-side record, NOT model-generated diagnostic evidence.
+                displayMcpToolResult("⌁ LOKALE MCP/MODELL-DIAGNOSE\n" +
+                    report.takeLast(12_000))
+                return@launch
+            }
+            if (isFinishing || isDestroyed) return@launch
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle(R.string.diagnostics_title)
+                .setMessage(report)
+                .setNeutralButton(R.string.diagnostics_copy) { _, _ ->
+                    val clipboard =
+                        getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(
+                        ClipData.newPlainText("Pocket AI diagnostics", report))
+                    toast(getString(R.string.diagnostics_copy))
+                }
+                .setNegativeButton(R.string.diagnostics_clear) { _, _ ->
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle(R.string.diagnostics_clear)
+                        .setMessage(R.string.diagnostics_hint)
+                        .setNegativeButton(R.string.language_cancel, null)
+                        .setPositiveButton(R.string.diagnostics_clear) { _, _ ->
+                            lifecycleScope.launch {
+                                PocketDiagnostics.clear(applicationContext)
+                                toast(getString(R.string.diagnostics_cleared))
+                            }
+                        }.show()
+                }
+                .setPositiveButton(R.string.diagnostics_close, null)
+                .show()
         }
     }
 
@@ -3079,7 +3385,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun toast(value: String) = Toast.makeText(this, value, Toast.LENGTH_SHORT).show()
     private fun showError(title: String, error: Throwable) {
-        val details = (error.message ?: error.javaClass.simpleName).take(15000)
+        val domain = when {
+            title.contains("MCP", true) || title.contains("OAuth", true) ->
+                PocketDiagnostics.Domain.MCP
+            title.contains("LiteRT", true) -> PocketDiagnostics.Domain.LITERT
+            title.contains("Modell", true) || title.contains("Engine", true) ||
+                title.contains("GGUF", true) -> PocketDiagnostics.Domain.GGUF
+            else -> PocketDiagnostics.Domain.SYSTEM
+        }
+        val id = failure(domain, PocketDiagnostics.Step.DIAGNOSTIC, error)
+        // Only the host-constructed process report may contain diagnostic text;
+        // arbitrary exception messages can leak signed URLs or auth headers.
+        val details = if (title == "Android-Prozessdiagnose")
+            error.message.orEmpty().take(15000)
+        else getString(R.string.diagnostics_error, PocketDiagnostics.publicError(error), id)
         AlertDialog.Builder(this).setTitle(title)
             .setMessage(details)
             .setNeutralButton("Diagnose kopieren") { _, _ ->

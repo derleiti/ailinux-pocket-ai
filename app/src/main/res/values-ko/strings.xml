@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  채팅</string>
+    <string name="nav_models">▤  모델</string>
+    <string name="nav_setup">⚙  설정</string>
+    <string name="chat_heading">대화</string>
+    <string name="history_title">채팅 기록</string>
+    <string name="new_chat">+ 새 채팅</string>
+    <string name="search_chats">채팅 검색</string>
+    <string name="archived_chats">보관된 채팅</string>
+    <string name="library_title">모델 라이브러리</string>
+    <string name="settings_title">설정</string>
+    <string name="language_heading">앱 언어</string>
+    <string name="language_dialog_title">언어 선택</string>
+    <string name="language_system_default">시스템 언어</string>
+    <string name="language_preview_suffix">미리보기</string>
+    <string name="language_button">언어: %1$s</string>
+</resources>

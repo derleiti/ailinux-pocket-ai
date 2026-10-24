@@ -1,5 +1,7 @@
 package me.ailinux.pocket.mcp
 
+import android.os.SystemClock
+import me.ailinux.pocket.PocketDiagnostics
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -39,6 +41,14 @@ class McpSettingsUi(
     private val oauth = McpOAuth(vault)
     private var loopback: McpLoopback? = null
     private var working = false
+    private var diagTrace = PocketDiagnostics.newTrace()
+    private fun diag(step: PocketDiagnostics.Step,
+        state: PocketDiagnostics.State = PocketDiagnostics.State.INFO,
+        tool: String = "", count: Int = -1, durationMs: Long = -1) =
+        PocketDiagnostics.log(activity.applicationContext, diagTrace,
+            PocketDiagnostics.Domain.MCP, step, state,
+            tool = tool, count = count, durationMs = durationMs)
+
 
     init {
         add.setOnClickListener { addServerChooser() }
@@ -399,11 +409,17 @@ class McpSettingsUi(
     }
 
     private fun inspect(p: McpProfile, showTools: Boolean) {
+        diagTrace = PocketDiagnostics.newTrace()
+        diag(PocketDiagnostics.Step.DISCOVERY_START, PocketDiagnostics.State.START)
         execute("MCP-Verbindung") {
             val fresh = oauth.refreshIfNeeded(
                 vault.get(p.id) ?: throw IllegalStateException("Server nicht gefunden")
             )
+            val started = SystemClock.elapsedRealtime()
             val info = McpConnection.inspect(fresh)
+            diag(PocketDiagnostics.Step.DISCOVERY_DONE,
+                PocketDiagnostics.State.OK, count = info.tools.size,
+                durationMs = SystemClock.elapsedRealtime() - started)
             activity.runOnUiThread {
                 render()
                 if (showTools) toolPicker(fresh, info)
@@ -548,19 +564,72 @@ class McpSettingsUi(
                     showError("JSON-Argumente ungültig", e)
                     return@setOnClickListener
                 }
+                diagTrace = PocketDiagnostics.newTrace()
+                diag(PocketDiagnostics.Step.PROPOSAL,
+                    PocketDiagnostics.State.OK, tool = tool.name)
+                diag(PocketDiagnostics.Step.APPROVAL_REQUEST,
+                    PocketDiagnostics.State.START, tool = tool.name)
                 dialog.dismiss()
                 AlertDialog.Builder(activity).setTitle("MCP-Tool wirklich ausführen?")
                     .setMessage("„" + tool.name + "“ auf „" + profile.title +
                         "“ kann Dateien ändern oder andere Aktionen ausführen. " +
                         "Nur starten, wenn du den Server und die Parameter kennst.")
-                    .setNegativeButton("Abbrechen", null)
+                    .setNegativeButton("Abbrechen") { _, _ ->
+                        diag(PocketDiagnostics.Step.APPROVAL_DENY,
+                            PocketDiagnostics.State.REJECTED, tool = tool.name)
+                    }
                     .setPositiveButton("Tool starten") { _, _ ->
+                        diag(PocketDiagnostics.Step.APPROVAL_ACCEPT,
+                            PocketDiagnostics.State.OK, tool = tool.name)
                         execute("MCP-Tool") {
+                            diag(PocketDiagnostics.Step.AUTH_CHECK,
+                                PocketDiagnostics.State.START, tool = tool.name)
                             val p = oauth.refreshIfNeeded(
                                 vault.get(profile.id) ?: throw IllegalStateException("Server entfernt")
                             )
-                            val response = McpConnection.callTool(p, tool, arguments)
-                            activity.runOnUiThread { showResult(tool.name, response.toString(2)) }
+                            require(p.endpoint == profile.endpoint && p.auth == profile.auth) {
+                                "MCP-Server/Anmeldung geändert"
+                            }
+                            diag(PocketDiagnostics.Step.AUTH_CHECK,
+                                PocketDiagnostics.State.OK, tool = tool.name)
+                            val actual = McpConnection.inspect(p).tools
+                                .singleOrNull { it.name == tool.name }
+                                ?: throw IllegalStateException("Werkzeug nicht mehr verfügbar")
+                            check(actual.description == tool.description &&
+                                McpToolSchema.equivalent(actual.schema, tool.schema) &&
+                                McpToolSchema.equivalent(actual.annotations, tool.annotations)) {
+                                "MCP-Tooldefinition geändert; erneut prüfen"
+                            }
+                            McpToolSchema.validate(actual.schema, arguments)?.let {
+                                throw IllegalArgumentException("MCP-Schema ungültig")
+                            }
+                            diag(PocketDiagnostics.Step.SCHEMA_CHECK,
+                                PocketDiagnostics.State.OK, tool = actual.name)
+                            val started = SystemClock.elapsedRealtime()
+                            PocketDiagnostics.markDispatch(activity.applicationContext,
+                                diagTrace, actual.name)
+                            try {
+                                val response = McpConnection.callTool(p, actual, arguments)
+                                diag(if (response.optBoolean("isError", false))
+                                        PocketDiagnostics.Step.REMOTE_ERROR
+                                     else PocketDiagnostics.Step.SERVER_RESULT,
+                                    if (response.optBoolean("isError", false))
+                                        PocketDiagnostics.State.FAIL
+                                    else PocketDiagnostics.State.OK,
+                                    tool = actual.name,
+                                    durationMs = SystemClock.elapsedRealtime() - started)
+                                activity.runOnUiThread {
+                                    showResult(tool.name, response.toString(2))
+                                }
+                            } catch (problem: Exception) {
+                                PocketDiagnostics.failure(activity.applicationContext, diagTrace,
+                                    PocketDiagnostics.Domain.MCP,
+                                    PocketDiagnostics.Step.REMOTE_ERROR,
+                                    problem, uncertain = true)
+                                if (problem is kotlinx.coroutines.CancellationException)
+                                    throw problem
+                                throw McpExecutionUncertain(problem)
+                            }
                         }
                     }.show()
             }
@@ -648,6 +717,8 @@ class McpSettingsUi(
                 withContext(Dispatchers.IO) { block() }
             } catch (e: Exception) {
                 onError?.invoke()
+                PocketDiagnostics.failure(activity.applicationContext, diagTrace,
+                    PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DIAGNOSTIC, e)
                 if (!activity.isFinishing && !activity.isDestroyed) showError(title, e)
             } finally {
                 working = false
@@ -663,7 +734,8 @@ class McpSettingsUi(
     private fun showError(title: String, error: Exception) {
         if (activity.isFinishing || activity.isDestroyed) return
         AlertDialog.Builder(activity).setTitle(title)
-            .setMessage((error.message ?: "Unbekannter Fehler").take(1500))
+            .setMessage("Fehlerkategorie: " + PocketDiagnostics.publicError(error) +
+                "\nWeitere Hinweise unter SETUP → MCP/Modell-Diagnose.")
             .setPositiveButton("OK", null).show()
     }
 

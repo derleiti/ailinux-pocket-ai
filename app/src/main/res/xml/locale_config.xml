@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Only de/en are advertised to Android's system App Language settings.
+         Other packs are explicitly labeled partial in the app's own picker. -->
+    <locale android:name="de"/>
+    <locale android:name="en"/>
+</locale-config>

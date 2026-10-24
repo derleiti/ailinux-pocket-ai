@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_chat">✦  CHAT</string>
+    <string name="nav_models">▤  MODELE</string>
+    <string name="nav_setup">⚙  SETĂRI</string>
+    <string name="chat_heading">CONVERSAȚIE</string>
+    <string name="history_title">ISTORICUL CONVERSAȚIILOR</string>
+    <string name="new_chat">+ Chat nou</string>
+    <string name="search_chats">Caută conversații</string>
+    <string name="archived_chats">Conversații arhivate</string>
+    <string name="library_title">Biblioteca de modele</string>
+    <string name="settings_title">Setări</string>
+    <string name="language_heading">LIMBA APLICAȚIEI</string>
+    <string name="language_dialog_title">Alege limba</string>
+    <string name="language_system_default">Limba sistemului</string>
+    <string name="language_preview_suffix">Previzualizare</string>
+    <string name="language_button">Limbă: %1$s</string>
+</resources>

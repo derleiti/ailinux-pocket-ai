@@ -1,3 +1,8 @@
+> **Historical migration notes:** this engineering document tracks the earlier
+> native tool-role work and older RC numbering. For the actual 2.1.0-RC10
+> QA candidate (diagnostics and locale previews), see RELEASE_2_1_0_RC10.md.
+> The old notes are retained to preserve technical context.
+
 # AILinux Pocket AI RC10 — Native Model Toolbridge and safe Gemma 4 GGUF diagnostics
 
 ## Why RC10 exists
