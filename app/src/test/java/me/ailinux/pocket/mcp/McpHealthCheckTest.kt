@@ -33,6 +33,29 @@ class McpHealthCheckTest {
         assertEquals("triforce", McpHealthCheck.requestedTarget("TriForce MCP-Health-Check"))
     }
 
+    @Test fun pixelSlashQuickCommandsReachActualToolsCallRouter() {
+        val commands = listOf(
+            "/mcp quick triforce-status",
+            "/mcp quick discord-status",
+            "/mcp quick discord-guilds",
+            "/mcp quick discord-voice",
+            "/mcp quick notifications",
+            "/mcp search AILinux",
+            "/mcp code-search MCP",
+            "/mcp memory-search Brumo"
+        )
+        for (command in commands) {
+            assertNull("Health router intercepted $command",
+                McpHealthCheck.requestedTarget(command))
+            assertFalse("Log router intercepted $command",
+                McpLogCheck.requested(command))
+            assertTrue("Expected direct quick tool: $command",
+                McpQuickActions.requestedAction(command) is McpQuickActions.Selection.Request)
+        }
+        assertEquals("triforce",
+            McpHealthCheck.requestedTarget("/mcp status triforce"))
+    }
+
     @Test fun routesTheExactUnrecognizedPixelRequestWithoutMcpKeyword() {
         val requests = listOf(
             "check triforce dev server status",

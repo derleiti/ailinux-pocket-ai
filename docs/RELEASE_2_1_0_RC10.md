@@ -78,3 +78,19 @@ None of those are claimed completed by this release candidate.
 - Offline/privacy notice explicitly includes optional networked MCP calls.
 - Added dedicated review regression tests including cancellation-before/
   -after-dispatch; updated older source-level tests for the new call signature.
+
+
+## Live device discovery: command routing collision (fixed)
+
+With the explicitly paired Android 17 device (AILinux Helper), the pre-RC10
+installed Pocket AI successfully executed /mcp health triforce and
+received 2026-07-28 + tools/list with 91 tools in 649 ms. But the next
+explicit /mcp quick triforce-status was incorrectly treated as another
+health check and again returned only tools/list (185 ms). This is not
+evidence of a successful tool call: it identified a direct-command routing
+collision in McpHealthCheck.requestedTarget(). RC10 now gives exact
+/mcp quick and search commands ownership of McpQuickActions instead
+of interpreting the substring triforce-status as a health check.
+Regression tests cover all known quick commands, while explicit
+/mcp status triforce and natural-language health requests still work.
+A real RC10 tools/call on this device remains a release QA gate.
