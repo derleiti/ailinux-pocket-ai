@@ -75,7 +75,8 @@ object McpOnDemandDiscovery {
         // The fallback is deliberately limited to exact audited contracts;
         // native tool calls still support all permitted MCP tools.
         if (tool.name !in setOf("crawl", "status", "discord_connection_status",
-                "current_time", "models", "device_info")) return null
+                "current_time", "models", "device_info") ||
+            !tool.declaresReadOnly) return null
         // Never guess mandatory parameters; allow a single HTTPS URL only for
         // a schema requiring exactly one URL-like string property.
         val schema = tool.schema
@@ -92,6 +93,6 @@ object McpOnDemandDiscovery {
         }
         val detail = run.details(id)
         if (detail.optBoolean("isError")) return null
-        return run.prepareCall(id,args.toString())
+        return run.prepareCall(id,args.toString()).copy(hostFallback = true)
     }
 }

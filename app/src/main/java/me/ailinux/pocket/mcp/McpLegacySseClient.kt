@@ -190,7 +190,8 @@ class McpLegacySseClient(private val profile: McpProfile) : Closeable {
                 val name = tool.optString("name")
                 if (name.isNotBlank()) tools.add(McpTool(name,
                     tool.optString("description").take(650),
-                    tool.optJSONObject("inputSchema") ?: JSONObject()))
+                    tool.optJSONObject("inputSchema") ?: JSONObject(),
+                    tool.optJSONObject("annotations") ?: JSONObject()))
             }
             cursor = result.optString("nextCursor").ifBlank { null }
             if (cursor == null || tools.size >= 250) {

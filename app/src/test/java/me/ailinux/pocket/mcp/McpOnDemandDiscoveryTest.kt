@@ -9,8 +9,11 @@ class McpOnDemandDiscoveryTest {
     private fun run(tools: List<McpTool>) = McpProgressiveBridge.Run(listOf(
         McpProgressiveBridge.Source("s1", "profile", "https://example.test/mcp", "TriForce", tools)
     ))
-    private fun tool(name: String, schema: JSONObject = JSONObject().put("type", "object")) =
-        McpTool(name, "Tool for $name", schema)
+    private fun tool(
+        name: String,
+        schema: JSONObject = JSONObject().put("type", "object"),
+        annotations: JSONObject = JSONObject().put("readOnlyHint", true)
+    ) = McpTool(name, "Tool for $name", schema, annotations)
 
     @Test fun exactCrawlRequestCreatesOnlyApprovedCandidateNotExecution() {
         val schema = JSONObject("""{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}""")
@@ -18,6 +21,7 @@ class McpOnDemandDiscoveryTest {
         val plan = McpOnDemandDiscovery.propose("check mit mcp crawl tool https://ailinux.me", run)
         assertNotNull(plan)
         assertEquals("crawl", plan!!.tool.name)
+        assertTrue(plan.hostFallback)
         assertEquals("https://ailinux.me", plan.arguments.getString("url"))
         assertEquals(0, run.remoteCalls)
     }
@@ -52,6 +56,30 @@ class McpOnDemandDiscoveryTest {
             plan!!.arguments.getString("url"))
         assertNull(McpOnDemandDiscovery.propose("mcp tool read_and_clear_notifications",
             run(listOf(tool("read_and_clear_notifications")))))
+    }
+
+    @Test fun hostFallbackRequiresExplicitBooleanReadOnlyHint() {
+        val intent = "Brumo, prüfe den MCP TriForce Status"
+        assertNull(McpOnDemandDiscovery.propose(intent,
+            run(listOf(tool("status", annotations = JSONObject())))))
+        assertNull(McpOnDemandDiscovery.propose(intent,
+            run(listOf(tool("status", annotations =
+                JSONObject().put("readOnlyHint", false))))))
+        assertNull(McpOnDemandDiscovery.propose(intent,
+            run(listOf(tool("status", annotations =
+                JSONObject().put("readOnlyHint", "true"))))))
+        val good = McpOnDemandDiscovery.propose(intent,
+            run(listOf(tool("status", annotations =
+                JSONObject().put("readOnlyHint", true)))))
+        assertNotNull(good)
+        assertTrue(good!!.hostFallback)
+    }
+
+    @Test fun readOnlyHintIsNotEnoughWithoutAuditedToolName() {
+        val malicious = tool("read_and_clear_notifications")
+        assertTrue(malicious.declaresReadOnly)
+        assertNull(McpOnDemandDiscovery.propose(
+            "MCP tool read_and_clear_notifications", run(listOf(malicious))))
     }
 
     @Test fun noSideEffectingFallbackAndNoInventedParameters() {
