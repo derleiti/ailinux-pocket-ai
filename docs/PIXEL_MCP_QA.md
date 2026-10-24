@@ -136,3 +136,26 @@ Reproduce the original two-prompt Pixel scenario:
 
 The desktop regression includes the literal screenshot claim and negative
 cases (examples, hypothetical statements and honest lack-of-access replies).
+
+## RC10: actual native model tool-role bridge
+
+- Install RC10 directly OVER RC9 (same debug signer; do NOT uninstall).
+- With Spark-X2.6 and exactly one known read-only MCP tool, select
+  CHAT > MCP > KI + MCP aktivieren, Thinking LOW.
+- Prompt the model for that tool. Confirm the exact tool/arguments in the
+  one-time dialog. Verify that one real tools/call receipt appears BEFORE
+  the local summarization.
+- Reject a tool call and check that the model can continue a fresh chat.
+  No tool execution or hidden replay is permitted.
+- Force a network timeout/error and verify the app does not retry after
+  dispatch; the receipt/status must not claim success.
+- If a server returns isError, check that Spark's reply cannot change it
+  into a successful report.
+- If the server returns resultType=input_required, Pocket AI must not
+  fulfill the input request automatically.
+- An unrecognized GGUF with a JSON-only tool proposal is NOT given a
+  native role=tool continuation with no matching native assistant call.
+- Probe the Gemma4 GGUF "gemna-4-tiny.gguf": missing
+  gemma4.context_length must be reported without modifying model files.
+- Android process exit code 10 appears as a user-requested stop, not a
+  native crash.

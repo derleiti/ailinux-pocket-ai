@@ -2,6 +2,7 @@
 #include <jni.h>
 #include <iomanip>
 #include <cmath>
+#include <cctype>
 #include <string>
 #include <atomic>
 #include <mutex>
@@ -12,6 +13,7 @@
 
 #include "logging.h"
 #include "chat.h"
+#include "tool_result_guard.h"
 #include "common.h"
 #include "llama.h"
 
@@ -486,6 +488,7 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_benchModel(JNIEnv *env, jobject
 constexpr const char *ROLE_SYSTEM       = "system";
 constexpr const char *ROLE_USER         = "user";
 constexpr const char *ROLE_ASSISTANT    = "assistant";
+constexpr const char *ROLE_TOOL         = "tool";
 
 static std::vector<common_chat_msg> chat_msgs;
 // Direct-answer mode by default: GGUF templates such as Spark-X2.6 otherwise
@@ -555,12 +558,17 @@ static std::string chat_render(const std::vector<common_chat_msg> &messages, boo
     return common_chat_templates_apply(g_chat_templates.get(), inputs).prompt.str();
 }
 
-static std::string chat_add_and_format_msg(const common_chat_msg & new_msg) {
+static std::string chat_add_and_format_msg(
+        const common_chat_msg & new_msg, const bool assistant_reply = false) {
     const std::string & role = new_msg.role;
     const std::string rendered_past = chat_msgs.empty() ? "" : chat_render(chat_msgs, false);
     auto updated_msgs = chat_msgs;
     updated_msgs.push_back(new_msg);
-    const std::string rendered_updated = chat_render(updated_msgs, role == ROLE_USER);
+    // A real TOOL role, not a counterfeit user turn. The tool result itself
+    // is rendered by the model's actual Jinja template; then the next native
+    // assistant generation prefix is decoded on the same llama.cpp KV cache.
+    const std::string rendered_updated =
+        chat_render(updated_msgs, role == ROLE_USER || assistant_reply);
 
     // Incremental KV-cache decoding relies on the new chat template sharing
     // exactly the same prefix as the already-decoded message history.
@@ -858,6 +866,92 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processUserPrompt(
         return 3;
     } catch (...) {
         set_native_error("user_prompt", "Unknown native C++ exception");
+        return 4;
+    }
+}
+
+/**
+ * Only the exact tool proposed by the most recent assistant turn may receive
+ * a result, once. Kotlin validates model args and asks user approval before
+ * any network tools/call. Native does not grant or execute tool permissions.
+ * Reject any second/unrelated result, thinking interruption, or changed
+ * transcript without silently converting the payload into a user prompt.
+ */
+static bool awaiting_native_tool_result(const std::string &tool) {
+    if (g_pending_assistant || g_incomplete_thinking_turn || chat_msgs.empty()) return false;
+    const auto & msg = chat_msgs.back();
+    return msg.role == ROLE_ASSISTANT &&
+        pocket_native_tool::matches_pending_call(msg.content, tool);
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_processToolResult(
+        JNIEnv *env,
+        jobject /*unused*/,
+        jstring jtool_name,
+        jstring jresult,
+        jint n_predict) {
+    try {
+        reset_load_diagnostics();
+        finalize_assistant_turn();
+        const std::string tool = java_string(env, jtool_name);
+        const std::string result = java_string(env, jresult);
+        if (!g_context || g_chat_tools.empty() ||
+                !awaiting_native_tool_result(tool)) {
+            set_native_error("tool_result",
+                "No matching pending assistant tool call. Do not inject as user text.");
+            return 1;
+        }
+        bool selected = false;
+        for (const auto & candidate : g_chat_tools) {
+            if (candidate.name == tool) { selected = true; break; }
+        }
+        if (!selected || !pocket_native_tool::is_safe_payload(result)) {
+            set_native_error("tool_result", "Unselected tool or malformed/big result");
+            return 1;
+        }
+        reset_short_term_states();
+        common_chat_msg msg;
+        msg.role = ROLE_TOOL;
+        msg.tool_name = tool;
+        msg.content = result;
+        const bool has_template = common_chat_templates_was_explicit(g_chat_templates.get());
+        if (!has_template) {
+            set_native_error("tool_result", "Native tool message requires a GGUF Jinja template");
+            return 1;
+        }
+        // Builds and pins a dedicated <|Tool|><tool_response> message plus
+        // the next assistant prefix; no user text is synthesized.
+        const auto rendered = chat_add_and_format_msg(msg, true);
+        const auto tokens = common_tokenize(g_context, rendered, true, true);
+        const int required = static_cast<int>(tokens.size());
+        const int capacity = g_effective_context_size - OVERFLOW_HEADROOM;
+        if (required > capacity - system_prompt_position - USER_PREFILL_RESERVE - 1) {
+            set_native_error("tool_result", "Tool result too large for local context");
+            return 1;
+        }
+        while (current_position + required + USER_PREFILL_RESERVE >= capacity) {
+            if (!shift_context()) {
+                set_native_error("tool_result", "Insufficient context for genuine tool result");
+                return 1;
+            }
+        }
+        if (decode_tokens_in_batches(g_context, g_batch, tokens, current_position, true)) {
+            set_native_error("tool_result", "Unable to decode native tool-role result");
+            return 2;
+        }
+        g_generated_tokens = 0;
+        g_generation_token_limit = std::max(1, std::min(256, static_cast<int>(n_predict)));
+        g_pending_assistant = true;
+        LOGi("MCP tool result added as native tool role (%zu bytes, limit=%d)",
+             result.size(), g_generation_token_limit);
+        return 0;
+    } catch (const std::exception &e) {
+        set_native_error("tool_result", e.what());
+        return 3;
+    } catch (...) {
+        set_native_error("tool_result", "Unknown native C++ exception");
         return 4;
     }
 }

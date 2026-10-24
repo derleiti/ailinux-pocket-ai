@@ -330,9 +330,27 @@ class McpAgentUi(
             "MCP-Serveradresse hat sich geändert. Bitte neu verbinden."
         }
         val authorized = oauth.refreshIfNeeded(profile)
-        // No automatic retry after tool side effects. The result may be
-        // a failure even when HTTP returned 200.
-        McpConnection.callTool(authorized, proposal.tool, proposal.args)
+        // Re-discover live tools/list AFTER consent. A tool may disappear,
+        // become restricted or change its schema after initial selection.
+        // Do not send a possibly mutating tools/call with a stale signature.
+        val advertised = McpConnection.inspect(authorized).tools
+        val current = advertised.singleOrNull { it.name == proposal.tool.name }
+            ?: throw IllegalStateException(
+                "MCP-Tool wurde seit der Auswahl entfernt: " + proposal.tool.name)
+        check(current.description == proposal.tool.description &&
+            McpToolSchema.equivalent(current.schema, proposal.tool.schema)) {
+            "MCP-Tooldefinition hat sich geändert. Bitte neu verbinden und bestätigen."
+        }
+        // Revalidate the exact approved arguments against the CURRENT schema.
+        val proposedAgain = McpAgentBridge.parse(JSONObject()
+            .put("mcp_tool", current.name)
+            .put("arguments", proposal.args).toString(), listOf(current))
+        require(proposedAgain is McpAgentBridge.Decision.Proposed) {
+            "MCP-Argumente entsprechen nicht mehr dem aktuellen Tool-Schema."
+        }
+        // Exactly one dispatch. An HTTP error may occur after side effects;
+        // NEVER retry through another transport automatically.
+        McpConnection.callTool(authorized, current, proposal.args)
     }
 
     private fun error(title: String, problem: Throwable) {

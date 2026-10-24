@@ -50,6 +50,16 @@ interface InferenceEngine {
      * Sends a user prompt to the loaded model and returns a Flow of generated tokens.
      */
     fun sendUserPrompt(message: String, predictLength: Int = DEFAULT_PREDICT_LENGTH): Flow<String>
+    /**
+     * Continue a user-approved MCP tools/call through a genuine native GGUF
+     * Jinja TOOL-role turn, not through a forged user prompt. Only an exact
+     * pending tool name, one result and bounded untrusted data are accepted.
+     * No tool invocation occurs here; the Android MCP client does that.
+     */
+    fun sendToolResult(
+        toolName: String, untrustedResult: String, predictLength: Int = 160
+    ): Flow<String>
+
 
     /**
      * Runs a benchmark with the specified parameters.

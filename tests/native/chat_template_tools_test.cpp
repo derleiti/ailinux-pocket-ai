@@ -114,6 +114,32 @@ int main(int argc, char ** argv) {
                                tools, true, "low");
     require(lowNext.compare(0, lowComplete.size(), lowComplete) == 0,
             "Native LOW thinking transcript corrupts a second chat turn");
+    // Real MCP tool feedback MUST be rendered as a native TOOL message,
+    // not masquerade as a new user prompt. Spark's tool role wraps it in
+    // <tool_response> and must preserve prior KV history across a continuation.
+    common_chat_msg nativeCall;
+    nativeCall.role = "assistant";
+    nativeCall.content = "<tool_call>discord_connection_status</tool_call>";
+    common_chat_msg nativeResult;
+    nativeResult.role = "tool";
+    nativeResult.tool_name = "discord_connection_status";
+    nativeResult.content = R"({"isError":false,"content":[{"type":"text","text":"Discord linked"}]})";
+    const auto beforeTool = render(templ.get(), {system, user, nativeCall}, tools, false);
+    const auto withTool = render(templ.get(), {system, user, nativeCall, nativeResult}, tools, true);
+    require(withTool.compare(0, beforeTool.size(), beforeTool) == 0,
+            "Spark native tool-result continuation rewrote prior KV prefix");
+    require(withTool.find("<tool_response>") != std::string::npos,
+            "Native tool result did not use a dedicated TOOL role");
+    require(withTool.find("Discord linked") != std::string::npos,
+            "Actual MCP result absent from native tool message");
+    require(withTool.find("<|Bot|></think>") != std::string::npos,
+            "Native tool response cannot elicit final assistant answer");
+    const auto lowTool = render(templ.get(), {system, user, thought, nativeResult}, tools, true, "low");
+    const auto priorLow = render(templ.get(), {system, user, thought}, tools, false, "low");
+    require(lowTool.compare(0, priorLow.size(), priorLow) == 0,
+            "Spark LOW thinking tool response rewrote the prior transcript");
+    require(lowTool.find("<tool_response>") != std::string::npos,
+            "Spark LOW thinking missing native tool response");
     const auto highSystem = render(templ.get(), {system}, tools, false, "high");
     require(highSystem.find("thinking_effort=high") != std::string::npos,
             "Spark HIGH mode was not set correctly");
@@ -123,4 +149,5 @@ int main(int argc, char ** argv) {
     std::cout << "PASS function names, descriptions and argument schemas exposed\n";
     std::cout << "PASS thinking off; repeated Jinja prompt prefix stable\n";
     std::cout << "PASS tools disappear when native tool binding is disabled\n";
+    std::cout << "PASS real MCP result rendered as native TOOL role with stable Jinja KV prefix\n";
 }

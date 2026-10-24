@@ -50,6 +50,39 @@ object ModelCompatibility {
         return Inspection(architecture, name, type, incompatibleReason = reason)
     }
 
+    /**
+     * llama.cpp requires gemma4.context_length in every Gemma 4 GGUF.
+     * This number is training metadata, NOT the runtime KV context.
+     * Never invent or silently patch it: the converter must supply it.
+     */
+    internal fun verifyEssentialMetadata(
+        result: Inspection, contextLength: Int?
+    ): Inspection {
+        if (!result.architecture.equals("gemma4", ignoreCase = true)) return result
+        if (result.incompatibleReason != null) return result
+        if (contextLength != null && contextLength > 0) return result
+        return result.copy(
+            incompatibleReason = "Gemma-4-GGUF unvollständig: " +
+                "Der Pflichtschlüssel gemma4.context_length fehlt oder ist ungültig. " +
+                "llama.cpp kann diese Modellparameter deshalb nicht laden. " +
+                "Die GGUF-Datei bitte aus einer verlässlichen Quelle erneut " +
+                "laden oder mit einem aktuellen offiziellen GGUF-Konverter " +
+                "aus dem Originalmodell neu erstellen. " +
+                "Pocket AI verändert Modellgewichte und Kontextlängen nicht automatisch."
+        )
+    }
+
+    /** Human-readable context if native loading reveals a malformed GGUF. */
+    fun explainMissingGemma4Context(errorText: String): String? =
+        if ("gemma4.context_length" in errorText.lowercase(Locale.ROOT) &&
+            "key not found" in errorText.lowercase(Locale.ROOT)) {
+            "Die Datei hat einen Gemma-4-GGUF-Header, aber der erforderliche " +
+                "Schlüssel gemma4.context_length fehlt. " +
+                "Das ist ein GGUF-Metadaten-/Konvertierungsproblem, " +
+                "kein Thinking-, RAM- oder MCP-Fehler. " +
+                "Das Modell wird nicht automatisch verändert."
+        } else null
+
     suspend fun inspect(file: File): Inspection {
         ModelStore.validate(file)
         return try {
@@ -59,7 +92,10 @@ object ModelCompatibility {
             val architecture = metadata.architecture?.architecture
             val type = metadata.additional?.type
             val parsedName = metadata.basic.nameLabel ?: metadata.basic.name ?: file.name
-            val primary = classify(architecture, parsedName, type)
+            val primary = verifyEssentialMetadata(
+                classify(architecture, parsedName, type),
+                metadata.dimensions?.contextLength
+            )
             if (primary.canAttemptTextInference) {
                 val filenameCheck = classify(architecture, file.name, type)
                 if (!filenameCheck.canAttemptTextInference) filenameCheck else primary

@@ -12,7 +12,13 @@ object McpAgentBridge {
 
     sealed interface Decision {
         data class Answer(val text: String) : Decision
-        data class Proposed(val tool: McpTool, val args: JSONObject) : Decision
+        data class Proposed(
+            val tool: McpTool,
+            val args: JSONObject,
+            // Only a native GGUF <tool_call> may be paired with a native
+            // role=tool reply. JSON fallback has no matching assistant turn.
+            val nativeToolCall: Boolean = false
+        ) : Decision
         data class Invalid(val reason: String) : Decision
     }
 
@@ -28,9 +34,19 @@ object McpAgentBridge {
         val functions = JSONArray()
         for (tool in tools) {
             require(toolName.matches(tool.name)) { "Ungültiger Werkzeugname" }
+            McpToolSchema.supported(tool.schema)?.let { reason ->
+                throw IllegalArgumentException("Tool " + tool.name + ": " + reason)
+            }
+            // SEP-2243 parameter-header annotations are validated by the
+            // protocol transport, even if they are not shown in the GGUF's
+            // reduced function parameter schema.
+            McpClient.parameterHeaderAnnotations(tool.schema)
             val schema = JSONObject().put("type", "object")
             val properties = tool.schema.optJSONObject("properties")
             if (properties != null) {
+                require(properties.length() <= 12) {
+                    "Tool hat zu viele Parameter für die native GGUF-Funktionsbeschreibung"
+                }
                 val subset = JSONObject()
                 val names = properties.keys()
                 var count = 0
@@ -42,6 +58,11 @@ object McpAgentBridge {
                         .put("type", original.optString("type", "string"))
                     val detail = original.optString("description").safeDescription(70)
                     if (detail.isNotBlank()) shape.put("description", detail)
+                    for (key in listOf("minLength", "maxLength", "minimum",
+                        "maximum", "exclusiveMinimum", "exclusiveMaximum",
+                        "minItems", "maxItems", "const")) {
+                        if (original.has(key)) shape.put(key, original.get(key))
+                    }
                     original.optJSONArray("enum")?.let {
                         if (it.length() <= 8) shape.put("enum", it)
                     }
@@ -125,8 +146,8 @@ object McpAgentBridge {
             return Decision.Invalid("Argumente entsprechen nicht dem Schema")
         }
         if (args.toString().length > 3500) return Decision.Invalid("Argumente zu lang")
-        validate(tool.schema, args)?.let { return Decision.Invalid(it) }
-        return Decision.Proposed(tool, args)
+        McpToolSchema.validate(tool.schema, args)?.let { return Decision.Invalid(it) }
+        return Decision.Proposed(tool, args, nativeToolCall = spark)
     }
 
     private fun parseSpark(text: String): Pair<String, JSONObject> {
@@ -172,40 +193,6 @@ object McpAgentBridge {
             })
         }
         return converted
-    }
-
-    private fun validate(schema: JSONObject, args: JSONObject): String? {
-        val required = schema.optJSONArray("required")
-        if (required != null) for (i in 0 until required.length()) {
-            val key = required.getString(i)
-            if (!args.has(key) || args.isNull(key)) return "Pflichtparameter fehlt: $key"
-        }
-        val props = schema.optJSONObject("properties")
-        val keys = args.keys()
-        while (keys.hasNext()) {
-            val key = keys.next()
-            if (!argName.matches(key)) return "Ungültiger Parametername"
-            val field = props?.optJSONObject(key)
-            if (props != null && field == null) return "Unbekannter Parameter: $key"
-            val value = args.opt(key)
-            if (value == null || value == JSONObject.NULL) return "Null-Parameter: $key"
-            val type = field?.optString("type")
-            val valid = when (type) {
-                "string" -> value is String
-                "integer" -> value is Number && value.toString().matches(Regex("-?[0-9]+"))
-                "number" -> value is Number
-                "boolean" -> value is Boolean
-                "array" -> value is JSONArray
-                "object" -> value is JSONObject
-                else -> true
-            }
-            if (!valid) return "Falscher Datentyp: $key"
-            val allowed = field?.optJSONArray("enum")
-            if (allowed != null && (0 until allowed.length()).none { allowed.opt(it) == value }) {
-                return "Nicht erlaubter Wert für $key"
-            }
-        }
-        return null
     }
 
     fun receipt(tool: McpTool, result: JSONObject): String {

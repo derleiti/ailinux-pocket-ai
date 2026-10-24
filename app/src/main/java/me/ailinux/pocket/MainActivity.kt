@@ -19,6 +19,7 @@ import me.ailinux.pocket.mcp.McpToolCatalog
 import me.ailinux.pocket.mcp.McpHealthCheck
 import me.ailinux.pocket.mcp.McpLogCheck
 import me.ailinux.pocket.mcp.McpQuickActions
+import me.ailinux.pocket.mcp.McpToolFeedback
 import me.ailinux.pocket.mcp.McpVault
 import me.ailinux.pocket.mcp.McpProfile
 import me.ailinux.pocket.mcp.McpAuth
@@ -49,6 +50,7 @@ import com.google.android.material.card.MaterialCardView
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -486,6 +488,9 @@ class MainActivity : AppCompatActivity() {
                         throw IOException(
                             "Modell: " + file.name + "\n" +
                             "Architektur: " + (inspection.architecture ?: "unbekannt") + "\n" +
+                            (ModelCompatibility.explainMissingGemma4Context(
+                                error.message.orEmpty()
+                            )?.let { it + "\n\n" } ?: "") +
                             (error.message ?: "Natives Modellladen fehlgeschlagen."),
                             error
                         )
@@ -541,6 +546,23 @@ class MainActivity : AppCompatActivity() {
             "verwende den nativen Werkzeugaufruf. Bei fehlendem Werkzeug sage " +
             "ausdrücklich, dass du es nicht ausführen kannst. " +
             "Gib niemals erfundene Toolergebnisse aus."
+    }
+
+    /** Reset a denied, failed or incomplete native tool turn without
+     * any network retry or hidden tool execution. */
+    private suspend fun resetUnresolvedNativeToolTurn(active: McpAgentSession): Boolean {
+        return try {
+            engine.resetConversationWithTools(
+                groundedSystemPrompt(active),
+                McpAgentBridge.nativeToolsJson(active.tools),
+                active.thinkingMode
+            )
+            true
+        } catch (_: Exception) {
+            mcpAgent.clearSessionSilently()
+            updateMcpBadge(null)
+            false
+        }
     }
 
     private fun updateMcpBadge(active: McpAgentSession?) {
@@ -1085,6 +1107,7 @@ class MainActivity : AppCompatActivity() {
         messageInput.isEnabled = false
         setStatus(if (agentSession == null) "● GENERIERT …" else "● MCP PLANT …")
         generationJob = lifecycleScope.launch {
+            var pendingNativeToolTurn: McpAgentSession? = null
             try {
                 val fullReply = StringBuilder()
                 withContext(Dispatchers.Default) {
@@ -1151,6 +1174,11 @@ class MainActivity : AppCompatActivity() {
                             chatAdapter.notifyItemChanged(index)
                         }
                         is McpAgentBridge.Decision.Proposed -> {
+                            if (proposal.nativeToolCall) {
+                                // Must receive a real TOOL role + final assistant,
+                                // or be rolled back in the coroutine finally.
+                                pendingNativeToolTurn = agentSession
+                            }
                             answer.content = "🔎 Das Modell schlägt " + proposal.tool.name +
                                 " vor. Ausführung noch nicht bestätigt."
                             chatAdapter.notifyItemChanged(index)
@@ -1176,38 +1204,76 @@ class MainActivity : AppCompatActivity() {
                                     mcpDispatchInFlight = false
                                 }
                                 if (toolResult != null) {
+                                    // Always expose the actual server receipt as evidence.
+                                    // A model's second-turn prose is not a second tool result.
                                     answer.content = McpAgentBridge.receipt(proposal.tool, toolResult)
                                     chatAdapter.notifyItemChanged(index)
-                                    // The model sees a bounded external DATA record, not an instruction
-                                    // from the server. The receipt itself remains visible separately.
-                                    val summary = StringBuilder()
-                                    setStatus("● MCP ERGEBNIS …")
-                                    try {
-                                        withContext(Dispatchers.Default) {
-                                            engine.sendUserPrompt(
-                                                McpAgentBridge.summaryPrompt(proposal.tool, toolResult),
-                                                160
-                                            ).collect { summary.append(it) }
-                                        }
-                                        val reply = McpAgentBridge.parse(
-                                            summary.toString(), agentSession.tools,
-                                            thinkingEnabled = agentSession.thinkingMode != "off"
-                                        )
-                                        val summarization = when (reply) {
-                                            is McpAgentBridge.Decision.Answer -> reply.text
-                                            else -> "Weiterer Toolaufruf blockiert. Siehe MCP-Serverergebnis."
-                                        }
-                                        messages.add(ChatMessage(false, summarization.ifBlank {
-                                            "Das MCP-Serverergebnis steht oben."
-                                        }))
+                                    val terminal = McpToolFeedback.terminalMessage(toolResult)
+                                    if (terminal != null) {
+                                        // 2026-07-28 input_required needs an explicit
+                                        // MRTR interaction, not an implicit tool retry.
+                                        messages.add(ChatMessage(false, terminal))
                                         chatAdapter.notifyItemInserted(messages.lastIndex)
                                         messagesView.scrollToPosition(messages.lastIndex)
-                                    } catch (_: Exception) {
-                                        // Never hide the actual receipt if the second LLM
-                                        // turn cannot fit into the native context.
+                                    } else if (!proposal.nativeToolCall) {
+                                        // A JSON fallback was executed after consent, but
+                                        // it was not a canonical native Spark <tool_call>.
+                                        // Never corrupt Jinja KV by inserting a tool
+                                        // response without the matching assistant turn.
                                         messages.add(ChatMessage(false,
-                                            "Das überprüfbare MCP-Serverergebnis steht oben."))
+                                            "ⓘ Echt ausgeführter MCP-Aufruf (JSON-Fallback). " +
+                                            "Das Serverergebnis steht oben. Keine native " +
+                                            "Modellfortsetzung ohne passenden Tool-Turn."))
                                         chatAdapter.notifyItemInserted(messages.lastIndex)
+                                        messagesView.scrollToPosition(messages.lastIndex)
+                                    } else {
+                                        val summary = StringBuilder()
+                                        setStatus("● NATIVES TOOLERGEBNIS …")
+                                        try {
+                                            val payload = McpToolFeedback.nativePayload(
+                                                proposal.tool, toolResult
+                                            )
+                                            // Genuine GGUF/Jinja role=tool response (not a
+                                            // second USER message with remote instructions).
+                                            // C++ verifies one pending matching assistant call.
+                                            withContext(Dispatchers.Default) {
+                                                engine.sendToolResult(
+                                                    proposal.tool.name, payload, 160
+                                                ).collect { summary.append(it) }
+                                            }
+                                            val reply = McpAgentBridge.parse(
+                                                summary.toString(), agentSession.tools,
+                                                thinkingEnabled = agentSession.thinkingMode != "off"
+                                            )
+                                            val clean = when (reply) {
+                                                is McpAgentBridge.Decision.Answer -> {
+                                                    // Native tool reply completed; the
+                                                    // next user turn may reuse its context.
+                                                    pendingNativeToolTurn = null
+                                                    if (McpToolFeedback.misleadingSummary(
+                                                            toolResult, reply.text)) {
+                                                        "Modellbehauptung widerspricht dem " +
+                                                            "MCP-Serverergebnis. Die belegte " +
+                                                            "Antwort steht oben."
+                                                    } else reply.text.ifBlank {
+                                                        "Keine weitere Modellantwort erzeugt."
+                                                    }
+                                                }
+                                                else -> McpToolFeedback.noMoreCalls()
+                                            }
+                                            messages.add(ChatMessage(false,
+                                                McpToolFeedback.summaryBanner(toolResult) + clean))
+                                            chatAdapter.notifyItemInserted(messages.lastIndex)
+                                            messagesView.scrollToPosition(messages.lastIndex)
+                                        } catch (_: Exception) {
+                                            // Never replace or hide the real server receipt.
+                                            messages.add(ChatMessage(false,
+                                                "Das echte MCP-Ergebnis steht oben. " +
+                                                "Die native Modellzusammenfassung konnte " +
+                                                "nicht abgeschlossen werden. " +
+                                                "Ggf. Modell neu laden."))
+                                            chatAdapter.notifyItemInserted(messages.lastIndex)
+                                        }
                                     }
                                 }
                             }
@@ -1222,6 +1288,26 @@ class MainActivity : AppCompatActivity() {
                 chatAdapter.notifyItemChanged(index)
                 setStatus("Generierung fehlgeschlagen")
             } finally {
+                val unresolved = pendingNativeToolTurn
+                if (unresolved != null) {
+                    // Cancellation is possible during the approval dialog
+                    // or network dispatch; cleanup must still run.
+                    val restored = withContext(NonCancellable) {
+                        resetUnresolvedNativeToolTurn(unresolved)
+                    }
+                    val notice = if (restored) {
+                        "ⓘ Unvollständiger lokaler Tool-Turn entfernt. " +
+                            "Keine weitere MCP-Aktion ausgeführt."
+                    } else {
+                        "⚠️ MCP-Agent deaktiviert: Nativer Modellkontext " +
+                            "konnte nicht wiederhergestellt werden. Modell neu laden. " +
+                            "Ein möglicherweise ausgeführter MCP-Aufruf " +
+                            "wurde NICHT wiederholt."
+                    }
+                    messages.add(ChatMessage(false, notice))
+                    chatAdapter.notifyItemInserted(messages.lastIndex)
+                    messagesView.scrollToPosition(messages.lastIndex)
+                }
                 busy = false
                 sendButton.text = "➤"
                 renderChatState()
@@ -1541,6 +1627,8 @@ class MainActivity : AppCompatActivity() {
                             ApplicationExitInfo.REASON_ANR -> "App reagiert nicht (ANR)"
                             ApplicationExitInfo.REASON_SIGNALED -> "Signalbedingter Abbruch"
                             ApplicationExitInfo.REASON_PACKAGE_UPDATED -> "App-Update (kein Crash)"
+                            ApplicationExitInfo.REASON_USER_REQUESTED ->
+                                "Vom Nutzer beendet / Aufgabe entfernt (kein Crash)"
                             else -> "Android-Code " + exit.reason
                         }
                         val date = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.GERMANY)
@@ -1554,9 +1642,10 @@ class MainActivity : AppCompatActivity() {
                             append(exit.pss).append(" kB")
                             if (summary.isNotEmpty()) {
                                 append("\nPhase: ").append(summary)
-                                if (exit.reason == ApplicationExitInfo.REASON_PACKAGE_UPDATED) {
+                                if (exit.reason == ApplicationExitInfo.REASON_PACKAGE_UPDATED ||
+                                    exit.reason == ApplicationExitInfo.REASON_USER_REQUESTED) {
                                     append("\nHinweis: Die Phase ist der letzte gespeicherte " +
-                                        "Prozesszustand, nicht die Ursache des App-Updates.")
+                                        "Prozesszustand, nicht die Ursache der Beendigung.")
                                 }
                             }
                             exit.description?.takeIf { it.isNotBlank() }?.let {

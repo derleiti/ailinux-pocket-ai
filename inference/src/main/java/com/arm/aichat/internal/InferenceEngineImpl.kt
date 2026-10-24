@@ -103,6 +103,11 @@ internal class InferenceEngineImpl private constructor(
     private external fun processSystemPrompt(systemPrompt: String, toolsJson: String): Int
 
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
+    /** True tool-role continuation; never feeds server data as user text. */
+    private external fun processToolResult(
+        toolName: String, untrustedResult: String, predictLength: Int
+    ): Int
+
 
     private external fun configureSamplingNative(temperature: Float, topK: Int,
         topP: Float, minP: Float, repeatPenalty: Float, repeatLastN: Int)
@@ -377,6 +382,66 @@ internal class InferenceEngineImpl private constructor(
             } else e
             _state.value = InferenceEngine.State.Error(error)
             throw error
+        }
+    }.flowOn(llamaDispatcher)
+
+    /**
+     * The local model sees actual MCP output in a native TOOL role. Its
+     * previous assistant message MUST be a single completed matching tool
+     * call; C++ rejects any unrelated or duplicated result.
+     */
+    override fun sendToolResult(
+        toolName: String, untrustedResult: String, predictLength: Int
+    ): Flow<String> = flow {
+        require(toolName.matches(Regex("^[A-Za-z_][A-Za-z0-9_.-]{0,127}$"))) {
+            "MCP-Werkzeugname ungültig"
+        }
+        require(untrustedResult.isNotBlank() &&
+            untrustedResult.toByteArray(Charsets.UTF_8).size <= 2200 &&
+            '<' !in untrustedResult) {
+            "MCP-Toolergebnis ist zu groß oder enthält Modell-Steuerzeichen"
+        }
+        require(predictLength in 1..256) { "Tool-Antwortlänge ungültig" }
+        check(_state.value is InferenceEngine.State.ModelReady) {
+            "Das Modell muss für das echte Toolergebnis bereit sein"
+        }
+        try {
+            _readyForSystemPrompt = false
+            _state.value = InferenceEngine.State.ProcessingUserPrompt
+            recordNativeStage("mcp_tool_result")
+            processToolResult(toolName, untrustedResult, predictLength).let { code ->
+                if (code != 0) {
+                    val detail = lastLoadError().trim().takeLast(1700)
+                        .ifBlank { "Natives Jinja-Toolergebnis nicht akzeptiert" }
+                    throw IOException(
+                        "MCP-Toolrollen-Bridge fehlgeschlagen (Code $code):\n$detail"
+                    )
+                }
+            }
+            _state.value = InferenceEngine.State.Generating
+            recordNativeStage("mcp_answer_generating")
+            while (!_cancelGeneration) {
+                generateNextToken()?.let { next ->
+                    if (next.isNotEmpty()) emit(next)
+                } ?: break
+            }
+            finalizeGenerationNative()
+            _state.value = InferenceEngine.State.ModelReady
+            recordNativeStage("prompt_ready")
+        } catch (e: CancellationException) {
+            withContext(NonCancellable + llamaDispatcher) {
+                try {
+                    finalizeGenerationNative()
+                    _state.value = InferenceEngine.State.ModelReady
+                } catch (problem: Exception) {
+                    _state.value = InferenceEngine.State.Error(problem)
+                }
+            }
+            throw e
+        } catch (e: Exception) {
+            _state.value = InferenceEngine.State.Error(e)
+            recordNativeStage("mcp_result_failed")
+            throw e
         }
     }.flowOn(llamaDispatcher)
 
