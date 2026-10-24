@@ -94,3 +94,10 @@ of interpreting the substring triforce-status as a health check.
 Regression tests cover all known quick commands, while explicit
 /mcp status triforce and natural-language health requests still work.
 A real RC10 tools/call on this device remains a release QA gate.
+
+
+Additional regression: the general log-audit and catalogue-intent matchers
+also must not consume other /mcp slash commands if their search terms mention
+TriForce logs or Discord tools. Explicit health/log/catalogue commands retain
+their original behavior; search/quick commands own their arguments entirely.
+The added tests were first run red on the old router, then green after fixes.
