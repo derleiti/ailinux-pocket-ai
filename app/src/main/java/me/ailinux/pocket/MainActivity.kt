@@ -493,7 +493,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadModel(file: File, acknowledgedLargeModel: Boolean = false) {
-        if (busy) return
+        if (busy || transferBusy) return
+        if (activeModel?.canonicalPath == file.canonicalPath) {
+            toast("Dieses Modell ist bereits geladen.")
+            return
+        }
         if (file.name.endsWith(".litertlm", true)) {
             loadLiteRtModel(file, acknowledgedLargeModel)
             return
@@ -528,10 +532,13 @@ class MainActivity : AppCompatActivity() {
                     check(prefs.edit().putString(PREF_LOADING_MODEL, file.name).commit()) {
                         "Prozessdiagnose-Marker konnte nicht gespeichert werden."
                     }
-                    liteRtRuntime?.let {
+                    liteRtRuntime?.let { previous ->
                         previousModelUnloaded = true
-                        it.shutdown()
+                        // Publish invalidation BEFORE a potentially failing
+                        // native shutdown. Never retain a stale released engine.
+                        activeModel = null
                         liteRtRuntime = null
+                        previous.shutdown()
                     }
                     when (engine.state.value) {
                         is InferenceEngine.State.ModelReady,
@@ -596,6 +603,11 @@ class MainActivity : AppCompatActivity() {
     /** Separate LiteRT-LM binary model path: try NPU, then GPU, then CPU. */
     private fun loadLiteRtModel(file: File, acknowledgedLargeModel: Boolean = false) {
         if (busy || transferBusy) return
+        if (activeModel?.canonicalPath == file.canonicalPath &&
+            liteRtRuntime?.hasConversation == true) {
+            toast("Dieses LiteRT-Modell ist bereits geladen.")
+            return
+        }
         val memory = ActivityManager.MemoryInfo().also {
             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
         }
@@ -624,14 +636,30 @@ class MainActivity : AppCompatActivity() {
                     }
                     // Only now alter runtime ownership. Invalid import files
                     // must not make the already loaded model disappear.
+                    // Release the old engine BEFORE initialising the new
+                    // one. Mark stale model handles unusable immediately.
                     previousModelUnloaded = true
-                    // Never hold two multi-GB models in memory simultaneously.
+                    val previousLiteRt = liteRtRuntime
+                    liteRtRuntime = null
+                    activeModel = null
+                    if (previousLiteRt != null) {
+                        previousLiteRt.shutdown()
+                    }
                     if (::engine.isInitialized && (engine.state.value is InferenceEngine.State.ModelReady ||
                             engine.state.value is InferenceEngine.State.Error)) {
                         engine.cleanUp()
                     }
-                    liteRtRuntime?.shutdown()
-                    liteRtRuntime = null
+                    val currentMemory = ActivityManager.MemoryInfo().also {
+                        (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
+                    }
+                    if (ModelLoadSafety.insufficientAfterUnload(file.length(), currentMemory.availMem)) {
+                        throw IOException(
+                            "Nach dem Modellwechsel sind nur " +
+                                ModelStore.displaySize(currentMemory.availMem) +
+                                " RAM verfügbar. Neues Modell zur Vermeidung eines Android-Low-Memory-Abbruchs " +
+                                "nicht gestartet. Andere Apps schließen oder kleineres Modell wählen."
+                        )
+                    }
                     val prompt = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
                     LiteRtRuntime.load(applicationContext, file, prompt)
                 }
