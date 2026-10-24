@@ -389,6 +389,21 @@
                     app:backgroundTint="@color/surface_raised"
                     app:cornerRadius="14dp"/>
                 <com.google.android.material.button.MaterialButton
+                    android:id="@+id/mcpServerInstructionsButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="10dp"
+                    android:text="MCP Server-Instructions anzeigen"
+                    android:textAllCaps="false"
+                    android:textColor="@color/ink"
+                    app:backgroundTint="@color/surface_raised"
+                    app:cornerRadius="14dp"/>
+                <TextView android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="Die festen MCP-Discovery-Regeln gelten automatisch. Optionale Serverhinweise lassen sich ansehen und beim Verbinden der AUTO-BRIDGE bewusst aktivieren; sie geben niemals zusätzliche Rechte."
+                    android:textColor="@color/muted" android:textSize="11sp"/>
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/addMcpServerButton"
                     android:layout_width="match_parent"
                     android:layout_height="48dp"

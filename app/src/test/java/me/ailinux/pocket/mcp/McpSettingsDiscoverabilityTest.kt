@@ -20,6 +20,7 @@ class McpSettingsDiscoverabilityTest {
         assertTrue(section.contains("android:id=\"@+id/mcpAgentSettingsStatus\""))
         assertTrue(section.contains("android:id=\"@+id/mcpAgentSettingsButton\""))
         assertTrue(section.contains("android:id=\"@+id/mcpToolListSettingsButton\""))
+        assertTrue(section.contains("android:id=\"@+id/mcpServerInstructionsButton\""))
         assertTrue(section.contains("android:id=\"@+id/addMcpServerButton\""))
         assertTrue(section.contains("android:id=\"@+id/mcpServerList\""))
         assertTrue(section.indexOf("@+id/mcpAgentSettingsButton") <
@@ -33,7 +34,9 @@ class McpSettingsDiscoverabilityTest {
         assertTrue(chat.contains("showMcpAgentMenu()"))
         assertTrue(chat.contains("R.id.mcpAgentSettingsButton"))
         assertTrue(chat.contains("R.id.mcpToolListSettingsButton"))
+        assertTrue(chat.contains("R.id.mcpServerInstructionsButton"))
         assertTrue(chat.contains("mcpUi.showToolsChooser()"))
+        assertTrue(chat.contains("mcpUi.showServerGuidanceChooser()"))
         assertEquals(1, Regex("private fun showMcpAgentMenu\\(").findAll(activity).count())
         assertTrue(activity.contains("mcpAgent.showMenu("))
     }

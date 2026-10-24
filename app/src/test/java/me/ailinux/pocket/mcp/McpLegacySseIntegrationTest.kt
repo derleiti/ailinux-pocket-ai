@@ -113,6 +113,7 @@ class McpLegacySseIntegrationTest {
                     val content = when (method) {
                         "initialize" -> JSONObject().put("protocolVersion", "2024-11-05")
                             .put("serverInfo", JSONObject().put("name", "Legacy-Mock"))
+                            .put("instructions", "Legacy SSE: ping is a read-only connectivity check.")
                         "tools/list" -> JSONObject().put("tools", JSONArray().put(JSONObject()
                             .put("name", "ping").put("inputSchema", JSONObject())))
                         "tools/call" -> JSONObject().put("content", JSONArray().put(
@@ -139,6 +140,8 @@ class McpLegacySseIntegrationTest {
         }
         assertEquals("Legacy-Mock", result.title)
         assertEquals("2024-11-05 (HTTP+SSE)", result.protocol)
+        assertEquals("Legacy SSE: ping is a read-only connectivity check.",
+            result.instructions)
         assertEquals("ping", result.tools.single().name)
         assertTrue(requests.get() >= 3)
     }

@@ -32,8 +32,10 @@ class McpStreamableIntegrationTest {
                 "server/discover" -> JSONObject()
                     .put("protocolVersion", "2026-07-28")
                     .put("serverInfo", JSONObject().put("name", "Mock-MCP Modern"))
+                    .put("instructions", "Use ping for test connectivity. No action without consent.")
                 "initialize" -> JSONObject().put("protocolVersion", "2025-11-25")
                     .put("serverInfo", JSONObject().put("name", "Mock-MCP Legacy"))
+                    .put("instructions", "Legacy tip: ping checks availability.")
                     .put("capabilities", JSONObject().put("tools", JSONObject()))
                 "tools/list" -> JSONObject().put("tools", JSONArray().put(JSONObject()
                     .put("name", "ping").put("description", "Ping")
@@ -62,6 +64,7 @@ class McpStreamableIntegrationTest {
         val info = McpClient(profile(), transport).inspect()
         assertEquals("Mock-MCP Legacy", info.title)
         assertEquals("2025-11-25", info.protocol)
+        assertEquals("Legacy tip: ping checks availability.", info.instructions)
         assertEquals("ping", info.tools.single().name)
         val methods = transport.calls.map { it.first.getString("method") }
         assertEquals(listOf("server/discover", "initialize", "notifications/initialized",
@@ -73,6 +76,8 @@ class McpStreamableIntegrationTest {
         val info = McpClient(profile(), transport).inspect()
         assertEquals("Mock-MCP Modern", info.title)
         assertEquals("2026-07-28", info.protocol)
+        assertEquals("Use ping for test connectivity. No action without consent.",
+            info.instructions)
         val headers = transport.calls[1].second
         assertEquals("tools/list", headers["Mcp-Method"])
         assertEquals("2026-07-28", headers["MCP-Protocol-Version"])

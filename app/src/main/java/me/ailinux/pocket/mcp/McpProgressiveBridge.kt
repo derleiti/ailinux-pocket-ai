@@ -42,7 +42,9 @@ object McpProgressiveBridge {
         val title: String,
         val tools: List<McpTool>,
         val auth: McpAuth = McpAuth.NONE,
-        val publicOauthClientId: String = ""
+        val publicOauthClientId: String = "",
+        /** Descriptive, untrusted MCP server instructions from tools/list discovery. */
+        val instructions: String = ""
     )
 
     data class RemoteCall(val source: Source, val tool: McpTool, val arguments: JSONObject) {

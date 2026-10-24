@@ -1,6 +1,7 @@
 package me.ailinux.pocket.mcp
 
 import android.graphics.Typeface
+import android.widget.CheckBox
 import android.widget.Toast
 import android.widget.ArrayAdapter
 import android.widget.EditText
@@ -31,7 +32,10 @@ data class McpAgentSession(
     // Native Spark GGUF template thinking mode; default LOW for MCP planning.
     val thinkingMode: String = "low",
     val progressiveSources: List<McpProgressiveBridge.Source> = emptyList(),
-    val progressiveCreatedAtMs: Long = System.currentTimeMillis()
+    val progressiveCreatedAtMs: Long = System.currentTimeMillis(),
+    val serverInstructions: String = "",
+    /** Explicit one-session opt-in; never blindly trust remote instructions. */
+    val includeServerGuidance: Boolean = false
 )
 
 class McpAgentUi(
@@ -124,10 +128,30 @@ class McpAgentUi(
      * OAuth credentials for each original server.
      */
     private fun chooseAutoServers() {
+        loadProfilesWithoutBlockingUi { profiles -> showAutoServerChooser(profiles) }
+    }
+
+    /** Android Keystore decrypt must never happen on the UI thread. */
+    private fun loadProfilesWithoutBlockingUi(
+        show: (List<McpProfile>) -> Unit
+    ) {
         if (selecting) { toast("MCP-Verbindung läuft bereits"); return }
-        val profiles = runCatching { vault.list() }.getOrElse {
-            error("MCP-Tresor", it); return
+        selecting = true
+        activity.lifecycleScope.launch {
+            val found = withContext(Dispatchers.IO) {
+                runCatching { vault.list() }
+            }
+            selecting = false
+            if (activity.isFinishing || activity.isDestroyed) return@launch
+            val profiles = found.getOrElse {
+                error("MCP-Tresor", it)
+                return@launch
+            }
+            show(profiles)
         }
+    }
+
+    private fun showAutoServerChooser(profiles: List<McpProfile>) {
         if (profiles.isEmpty()) {
             AlertDialog.Builder(activity)
                 .setTitle("Kein MCP-Profil")
@@ -140,13 +164,22 @@ class McpAgentUi(
             p.auth != McpAuth.OAUTH ||
                 p.oauthAccessToken.isNotBlank() || p.oauthRefreshToken.isNotBlank()
         }
+        val allowServerGuidance = CheckBox(activity).apply {
+            text = "Optionale MCP-Serverhinweise für Spark (nicht vertrauenswürdig)"
+            textSize = 12f
+            isChecked = false
+            contentDescription = "Server-Instructions nach Vorschau optional im " +
+                "Modell-Systemprompt als untrusted data verwenden"
+        }
         AlertDialog.Builder(activity)
             .setCustomTitle(listDialogHeader(
                 "MCP AUTO-BRIDGE · Server",
                 "Bis zu 4 Server wählen. Spark bekommt 3 lokale Meta-Tools; " +
                     "jede externe Aktion braucht deine Freigabe. " +
                     "OAuth-Tokens bleiben im Android-Tresor."
-            ))
+            ).apply {
+                addView(allowServerGuidance)
+            })
             // setMessage + setMultiChoiceItems hides the server choices on
             // many Android/AppCompat versions; customTitle preserves them.
             .setMultiChoiceItems(
@@ -187,7 +220,8 @@ class McpAgentUi(
                                     title = fresh.title,
                                     tools = live.tools.distinctBy { it.name }.take(250),
                                     auth = fresh.auth,
-                                    publicOauthClientId = fresh.oauthClientId
+                                    publicOauthClientId = fresh.oauthClientId,
+                                    instructions = live.instructions
                                 )
                             }
                         }
@@ -203,7 +237,8 @@ class McpAgentUi(
                             serverName = "Auto-Bridge · " + sources.size + " Server",
                             tools = meta,
                             thinkingMode = "low",
-                            progressiveSources = sources
+                            progressiveSources = sources,
+                            includeServerGuidance = allowServerGuidance.isChecked
                         )
                         onActiveChanged(session)
                         toast("AUTO-Bridge: " + runtime.totalTools +
@@ -219,9 +254,10 @@ class McpAgentUi(
     }
 
     private fun chooseServer() {
-        val profiles = runCatching { vault.list() }.getOrElse {
-            error("MCP-Tresor", it); return
-        }
+        loadProfilesWithoutBlockingUi { profiles -> showManualServerChooser(profiles) }
+    }
+
+    private fun showManualServerChooser(profiles: List<McpProfile>) {
         if (profiles.isEmpty()) {
             AlertDialog.Builder(activity).setTitle("Noch kein MCP-Server")
                 .setMessage("Unter SETUP zuerst einen MCP-Server hinzufügen und verbinden.")
@@ -294,6 +330,22 @@ class McpAgentUi(
             setSelection(0)
         }
         root.addView(thinkingPicker, LinearLayout.LayoutParams(-1, dp(43)))
+        val safeRemoteHintAvailable =
+            McpServerGuidance.promptExcerpt(info.instructions).isNotBlank()
+        val allowServerGuidance = CheckBox(activity).apply {
+            text = when {
+                info.instructions.isBlank() ->
+                    "Server liefert keine MCP instructions (Pocket-AI-Regeln gelten weiter)"
+                !safeRemoteHintAvailable ->
+                    "Serverhinweise enthalten riskante Anweisungen (nicht übernehmbar)"
+                else ->
+                    "Serverhinweise optional in Spark übernehmen (nur Referenzdaten)"
+            }
+            textSize = 12f
+            isChecked = false
+            isEnabled = safeRemoteHintAvailable
+        }
+        root.addView(allowServerGuidance)
         val search = EditText(activity).apply {
             hint = "Tools suchen (z. B. discord, status …)"
             setSingleLine(true)
@@ -372,7 +424,9 @@ class McpAgentUi(
                         else -> "low"
                     }
                     session = McpAgentSession(
-                        profile.id, profile.endpoint, profile.title, tools, mode
+                        profile.id, profile.endpoint, profile.title, tools, mode,
+                        serverInstructions = info.instructions,
+                        includeServerGuidance = allowServerGuidance.isChecked
                     )
                     onActiveChanged(session)
                     toast("MCP-Werkzeuge mit Thinking " + mode.uppercase() +

@@ -167,13 +167,14 @@ class McpLegacySseClient(private val profile: McpProfile) : Closeable {
             .put("protocolVersion", "2024-11-05")
             .put("capabilities", JSONObject())
             .put("clientInfo", JSONObject().put("name", "AILinux Pocket AI")
-                .put("version", "1.0.0-rc.1")))
+                .put("version", "1.0.0-rc.13")))
         post(JSONObject().put("jsonrpc", "2.0").put("method", "notifications/initialized"))
         return result
     }
 
     fun inspect(): McpServerInfo {
         val handshake = initialize()
+        val guidance = McpServerGuidance.fromDiscovery(handshake)
         val name = handshake.optJSONObject("serverInfo")?.optString("name").orEmpty()
             .ifBlank { profile.title }
         val tools = ArrayList<McpTool>()
@@ -193,10 +194,10 @@ class McpLegacySseClient(private val profile: McpProfile) : Closeable {
             }
             cursor = result.optString("nextCursor").ifBlank { null }
             if (cursor == null || tools.size >= 250) {
-                return McpServerInfo(name, "2024-11-05 (HTTP+SSE)", tools)
+                return McpServerInfo(name, "2024-11-05 (HTTP+SSE)", tools, guidance)
             }
         }
-        return McpServerInfo(name, "2024-11-05 (HTTP+SSE)", tools)
+        return McpServerInfo(name, "2024-11-05 (HTTP+SSE)", tools, guidance)
     }
 
     fun callTool(name: String, args: JSONObject): JSONObject {

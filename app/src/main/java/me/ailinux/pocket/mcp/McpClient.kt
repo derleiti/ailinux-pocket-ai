@@ -8,7 +8,13 @@ import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
 
 data class McpTool(val name: String, val description: String, val schema: JSONObject)
-data class McpServerInfo(val title: String, val protocol: String, val tools: List<McpTool>)
+data class McpServerInfo(
+    val title: String,
+    val protocol: String,
+    val tools: List<McpTool>,
+    /** MCP server/discover or legacy initialize instructions; untrusted data. */
+    val instructions: String = ""
+)
 class McpRpcFailure(val code: Int, method: String, detail: String) :
     IOException("MCP " + method + " (" + code + "): " + detail.take(250))
 
@@ -40,7 +46,7 @@ class McpClient(
             params.put("_meta", JSONObject()
                 .put("io.modelcontextprotocol/protocolVersion", version)
                 .put("io.modelcontextprotocol/clientInfo", JSONObject()
-                    .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.12"))
+                    .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.13"))
                 .put("io.modelcontextprotocol/clientCapabilities", JSONObject()))
         }
         if (modern || rawParams != null) body.put("params", params)
@@ -106,7 +112,7 @@ class McpClient(
             .put("protocolVersion", version)
             .put("capabilities", JSONObject())
             .put("clientInfo", JSONObject()
-                .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.12")))
+                .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.13")))
         version = result.optString("protocolVersion", version)
         require(version in setOf("2025-11-25", "2025-06-18", "2025-03-26")) {
             "Nicht unterstützte alte MCP-Version: " + version
@@ -128,6 +134,7 @@ class McpClient(
 
     private fun inspectModern(): McpServerInfo {
         val hello = init()
+        val guidance = McpServerGuidance.fromDiscovery(hello)
         val name = hello.optJSONObject("serverInfo")?.optString("name")
             ?.take(100)?.ifBlank { profile.title } ?: profile.title
         val tools = ArrayList<McpTool>()
@@ -149,9 +156,9 @@ class McpClient(
                 }
             }
             cursor = result.optString("nextCursor").ifBlank { null }
-            if (cursor == null || tools.size >= 250) return McpServerInfo(name, version, tools)
+            if (cursor == null || tools.size >= 250) return McpServerInfo(name, version, tools, guidance)
         }
-        return McpServerInfo(name, version, tools)
+        return McpServerInfo(name, version, tools, guidance)
     }
 
     fun callTool(name: String, params: JSONObject, schema: JSONObject = JSONObject()): JSONObject {

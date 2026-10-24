@@ -108,15 +108,32 @@ class McpSettingsUi(
             }
         }
 
+    private var renderGeneration = 0
+
     fun render() {
+        // Android Keystore loading/decryption and encrypted file access
+        // may block on heavily loaded Pixels. Never perform it on the UI
+        // thread, even during the Activity's initial screen construction.
+        val generation = ++renderGeneration
         rows.removeAllViews()
-        val servers = try {
-            vault.list()
-        } catch (e: Exception) {
-            rows.addView(label("Verschlüsselter MCP-Tresor nicht lesbar: " +
-                (e.message ?: "Keystore-Fehler"), 12f))
-            return
+        rows.addView(label("MCP-Verbindungen werden geladen …", 12f))
+        activity.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { vault.list() }
+            }
+            if (generation != renderGeneration ||
+                activity.isFinishing || activity.isDestroyed) return@launch
+            rows.removeAllViews()
+            val servers = result.getOrElse { e ->
+                rows.addView(label("Verschlüsselter MCP-Tresor nicht lesbar: " +
+                    (e.message ?: "Keystore-Fehler"), 12f))
+                return@launch
+            }
+            renderRecords(servers)
         }
+    }
+
+    private fun renderRecords(servers: List<McpProfile>) {
         if (servers.isEmpty()) {
             rows.addView(label("Noch kein MCP-Server eingerichtet. " +
                 "Füge eine HTTPS-Adresse hinzu und teste anschließend die Verbindung."))
@@ -403,9 +420,28 @@ class McpSettingsUi(
 
     /** Short MCP shortcut used from CHAT, without adding model selectors there. */
     fun showToolsChooser() {
-        val profiles = runCatching { vault.list() }.getOrElse {
-            showError("MCP-Tresor", Exception(it)); return
+        loadProfileMenuSafely { profiles -> openToolsMenu(profiles) }
+    }
+
+    /**
+     * Both tools/list and server-instruction previews must first decrypt
+     * account profiles off-main. Dialog creation stays on main.
+     */
+    private fun loadProfileMenuSafely(display: (List<McpProfile>) -> Unit) {
+        activity.lifecycleScope.launch {
+            val profiles = withContext(Dispatchers.IO) {
+                runCatching { vault.list() }
+            }.getOrElse {
+                if (!activity.isFinishing && !activity.isDestroyed) {
+                    showError("MCP-Tresor", Exception(it))
+                }
+                return@launch
+            }
+            if (!activity.isFinishing && !activity.isDestroyed) display(profiles)
         }
+    }
+
+    private fun openToolsMenu(profiles: List<McpProfile>) {
         if (profiles.isEmpty()) {
             AlertDialog.Builder(activity).setTitle("MCP-Tools")
                 .setMessage("Noch kein MCP-Server vorhanden. Unter SETUP zuerst einen Server hinzufügen.")
@@ -417,6 +453,55 @@ class McpSettingsUi(
         AlertDialog.Builder(activity).setTitle("MCP-Tools · Server wählen")
             .setItems(profiles.map { it.title }.toTypedArray()) { _, index ->
                 inspect(profiles[index], true)
+            }.setNegativeButton("Abbrechen", null).show()
+    }
+
+    /** Show genuine server/discover or initialize instructions WITHOUT
+     * requesting model generation and without any tools/call. */
+    fun showServerGuidanceChooser() {
+        loadProfileMenuSafely { profiles -> openServerGuidanceMenu(profiles) }
+    }
+
+    private fun openServerGuidanceMenu(profiles: List<McpProfile>) {
+        // The trusted Pocket AI standard instructions are always available,
+        // even if the user has not signed into any MCP server yet.
+        val options = listOf("Pocket AI · Standard Tool-Discovery-Regeln (lokal)") +
+            profiles.map { it.title + " · server.instructions live abrufen" }
+        AlertDialog.Builder(activity)
+            .setTitle("MCP instructions · Quelle wählen")
+            .setItems(options.toTypedArray()) { _, index ->
+                if (index == 0) {
+                    AlertDialog.Builder(activity)
+                        .setTitle("Pocket AI · MCP-Systemregeln")
+                        .setMessage(
+                            McpServerGuidance.trustedDiscoveryContract(true) +
+                                "\n\nDiese Regeln gehören zur App und gelten " +
+                                "nur im aktivierten MCP-Modellmodus. " +
+                                "Sie können keine OAuth-Rechte vergeben."
+                        )
+                        .setPositiveButton("Schließen", null).show()
+                } else {
+                    val selected = profiles[index - 1]
+                    execute("MCP Server-Instructions") {
+                        val fresh = oauth.refreshIfNeeded(
+                            vault.get(selected.id) ?: error("MCP-Profil entfernt")
+                        )
+                        require(fresh.endpoint == selected.endpoint &&
+                            fresh.auth == selected.auth) {
+                            "MCP-Profil wurde während der Auswahl verändert"
+                        }
+                        val info = McpConnection.inspect(fresh)
+                        activity.runOnUiThread {
+                            if (activity.isFinishing || activity.isDestroyed) {
+                                return@runOnUiThread
+                            }
+                            AlertDialog.Builder(activity)
+                                .setTitle("MCP Serverhinweise · " + info.title.take(70))
+                                .setMessage(McpServerGuidance.preview(info))
+                                .setPositiveButton("Schließen", null).show()
+                        }
+                    }
+                }
             }.setNegativeButton("Abbrechen", null).show()
     }
 

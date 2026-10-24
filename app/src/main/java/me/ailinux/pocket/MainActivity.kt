@@ -2,6 +2,8 @@ package me.ailinux.pocket
 
 import android.content.res.ColorStateList
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -20,6 +22,7 @@ import me.ailinux.pocket.mcp.McpHealthCheck
 import me.ailinux.pocket.mcp.McpLogCheck
 import me.ailinux.pocket.mcp.McpQuickActions
 import me.ailinux.pocket.mcp.McpToolFeedback
+import me.ailinux.pocket.mcp.McpServerGuidance
 import me.ailinux.pocket.mcp.McpProgressiveBridge
 import me.ailinux.pocket.mcp.McpTool
 import me.ailinux.pocket.mcp.McpVault
@@ -83,6 +86,18 @@ class MainActivity : AppCompatActivity() {
     private var activeExportFileName: String? = null
     private var currentPage = 0
     private val prefs by lazy { getSharedPreferences("pocket_settings", MODE_PRIVATE) }
+
+    // In-memory main-looper response measurement, foreground-only.
+    private val uiResponsiveness = UiResponsiveness()
+    private val uiPulseHandler = Handler(Looper.getMainLooper())
+    private var uiPulseEnabled = false
+    private val uiPulse = object : Runnable {
+        override fun run() {
+            if (!uiPulseEnabled) return
+            uiResponsiveness.pulse(SystemClock.uptimeMillis())
+            uiPulseHandler.postDelayed(this, UiResponsiveness.INTERVAL_MS)
+        }
+    }
 
     private val modelPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { importModel(it) }
@@ -175,6 +190,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.mcpToolListSettingsButton).setOnClickListener {
             if (busy) toast("Pocket AI arbeitet bereits.")
             else mcpUi.showToolsChooser()
+        }
+        findViewById<MaterialButton>(R.id.mcpServerInstructionsButton).setOnClickListener {
+            if (busy) toast("Pocket AI arbeitet bereits.")
+            else mcpUi.showServerGuidanceChooser()
         }
         findViewById<MaterialButton>(R.id.importButton).setOnClickListener {
             if (!transferBusy) modelPicker.launch(arrayOf("*/*"))
@@ -478,9 +497,12 @@ class MainActivity : AppCompatActivity() {
                 val inspection = withContext(Dispatchers.IO) { ModelCompatibility.inspect(file) }
                 inspection.incompatibleReason?.let { throw IllegalArgumentException(it) }
                 setStatus("Lade " + (inspection.architecture ?: "GGUF") + " …")
-                // commit(), not apply(): we want the marker durable before JNI starts.
-                prefs.edit().putString(PREF_LOADING_MODEL, file.name).commit()
+                // Persist before JNI starts, but commit() fsync can take
+                // hundreds of ms on a busy device: do it off the UI thread.
                 withContext(Dispatchers.IO) {
+                    check(prefs.edit().putString(PREF_LOADING_MODEL, file.name).commit()) {
+                        "Prozessdiagnose-Marker konnte nicht gespeichert werden."
+                    }
                     when (engine.state.value) {
                         is InferenceEngine.State.ModelReady,
                         is InferenceEngine.State.Error -> {
@@ -563,31 +585,13 @@ class MainActivity : AppCompatActivity() {
             "ein echtes Werkzeugresultat ihren Erfolg bestätigt. " +
             "Eine reine Modellantwort beweist niemals Discord- oder Serverzugriff."
         if (active == null) return root
-        if (active.progressiveSources.isNotEmpty()) {
-            return root + "\n" +
-                "Du hast genau DREI lokale Meta-Werkzeuge: " +
-                "mcp_search_tools, mcp_get_tool_details und mcp_call_tool. " +
-                "Wenn Nutzer nach tatsächlichen MCP-Tools, Serverstatus, Discord, " +
-                "Suche oder anderen aktuellen externen Informationen fragen, " +
-                "rufe ZUERST mcp_search_tools mit einem passenden Suchwort auf. " +
-                "Nutze danach mcp_get_tool_details mit einem echten tool_id-Treffer. " +
-                "Erst dann darfst du mcp_call_tool mit der exakten tool_id und " +
-                "arguments_json als JSON-Objekt-STRING vorschlagen, z.B. {}. " +
-                "Suche und Details führen KEINE externen Aktionen aus. " +
-                "Jeder reale Aufruf braucht eine separate Nutzerbestätigung. " +
-                "Es ist höchstens EIN echter Aufruf pro Anfrage erlaubt. " +
-                "Antworte nach der Toolantwort auf Basis der echten Daten. " +
-                "Behaupte niemals einen Servererfolg ohne Werkzeugbeleg."
-        }
-        // Spark's Jinja template supplies the REAL function declarations in
-        // its SYSTEM block. This text is policy only, not the tool catalogue.
+        // Trusted client-owned behaviour is separate from REMOTE,
+        // optionally quoted server guidance. No server may change the
+        // app-controlled tools/list, approvals or execution limits.
         return root + "\n" +
-            "Die Pocket-AI-App hat dir genau " + active.tools.size +
-            " ausgewählte Funktionen im nativen GGUF-Tool-Template bereitgestellt. " +
-            "Wenn du aktuelle externe Informationen oder Aktionen brauchst, " +
-            "verwende den nativen Werkzeugaufruf. Bei fehlendem Werkzeug sage " +
-            "ausdrücklich, dass du es nicht ausführen kannst. " +
-            "Gib niemals erfundene Toolergebnisse aus."
+            McpServerGuidance.trustedDiscoveryContract(
+                autoBridge = active.progressiveSources.isNotEmpty()
+            ) + McpServerGuidance.optionalPromptBlock(active)
     }
 
     /** Reset a denied, failed or incomplete native tool turn without
@@ -624,6 +628,10 @@ class MainActivity : AppCompatActivity() {
         }
         button.text = if (active == null) "MCP" else "MCP ✓"
         chip.setTextColor(getColor(if (active == null) R.color.muted else R.color.secondary))
+        val effectiveHints = McpServerGuidance.effectiveHintCount(active)
+        val hintStatus = if (effectiveHints > 0)
+            " · " + effectiveHints + " sichere Serverhinweise"
+        else " · Pocket-AI-Discovery-Regeln"
         findViewById<TextView>(R.id.mcpAgentSettingsStatus).text = when {
             active == null ->
                 "AGENT AUS · Unter KI + MCP / AUTO-BRIDGE konfigurieren aktivieren."
@@ -633,11 +641,11 @@ class MainActivity : AppCompatActivity() {
             active.progressiveSources.isNotEmpty() ->
                 "MCP AUTO " + active.thinkingMode.uppercase() + " · " +
                 active.progressiveSources.size + " ausgewählte Server · " +
-                "echte Toolaufrufe nur nach Freigabe."
+                "echte Toolaufrufe nur nach Freigabe." + hintStatus
             else ->
                 "MCP " + active.thinkingMode.uppercase() + " · " +
                 active.tools.size + " ausgewählte Werkzeuge · " +
-                "echte Toolaufrufe nur nach Freigabe."
+                "echte Toolaufrufe nur nach Freigabe." + hintStatus
         }
     }
 
@@ -1899,6 +1907,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showProcessExitInfo() {
         val button = findViewById<MaterialButton>(R.id.crashDiagnosticsButton)
+        val uiDelayReport = uiResponsiveness.report()
         button.isEnabled = false
         button.text = "Analysiere Android-Tombstones …"
         lifecycleScope.launch {
@@ -1957,12 +1966,11 @@ class MainActivity : AppCompatActivity() {
                         }
                         entry.toString()
                     }
-                    if (entries.isEmpty()) {
+                    val historical = if (entries.isEmpty()) {
                         "Android hat keine früheren Prozessabbrüche für Pocket AI erfasst."
-                    } else {
-                        "ANDROID-PROZESSDIAGNOSE – normale Updates sind keine Abstürze; keine Übertragung\n\n" +
-                            entries.joinToString("\n\n---\n\n")
-                    }
+                    } else entries.joinToString("\n\n---\n\n")
+                    "ANDROID-PROZESSDIAGNOSE – normale Updates sind keine Abstürze; keine Übertragung\n\n" +
+                        uiDelayReport + "\n\n---\n\n" + historical
                 }
                 if (!isFinishing && !isDestroyed) {
                     showError("Android-Prozessdiagnose", IllegalStateException(report))
@@ -2023,7 +2031,18 @@ class MainActivity : AppCompatActivity() {
     }
     private fun dp(value: Int) = (resources.displayMetrics.density * value + 0.5f).toInt()
 
+    override fun onStart() {
+        super.onStart()
+        uiPulseHandler.removeCallbacks(uiPulse)
+        uiPulseEnabled = true
+        uiResponsiveness.arm(SystemClock.uptimeMillis())
+        uiPulseHandler.postDelayed(uiPulse, UiResponsiveness.INTERVAL_MS)
+    }
+
     override fun onStop() {
+        uiPulseEnabled = false
+        uiPulseHandler.removeCallbacks(uiPulse)
+        uiResponsiveness.disarm()
         generationJob?.cancel()
         super.onStop()
     }

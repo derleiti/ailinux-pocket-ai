@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 1.0.0-rc.12.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.13.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -756,3 +756,75 @@ The Spark model weights are NOT bundled in the APK. The currently
 verified official release family is Spark-X2.6-4B (2026-10-21).
 Different Hugging Face quantizations are not necessarily newer
 base models. No download is initiated by the settings UI changes.
+
+
+## RC13 - MCP standard server instructions and tool discovery
+
+The MCP protocol has an optional server instructions field which helps
+clients explain HOW to use the available tools. Pocket AI through RC12
+discarded that field, preserving only the tool catalogue. The local
+Spark model therefore never received this source of guidance.
+
+RC13 introduces TWO strictly separate sources of model guidance:
+
+1. Trusted Pocket AI client contract: when a manual/Auto agent is
+   activated, the app appends its own discovery rules to the system
+   prompt: authenticated tool search, real tool feedback, separate
+   human approval and at most one external tools/call per request.
+   Auto-Bridge uses mcp_search_tools -> mcp_get_tool_details ->
+   mcp_call_tool. A plain inventory query never needs an external
+   server action. These rules remain active with NO optional server
+   instructions present.
+
+2. OPTIONAL untrusted hints: Pocket AI reads the actual
+   server/discover.result.instructions for MCP 2026-07-28 and
+   initialize.result.instructions on legacy MCP (including HTTP+SSE).
+   Only a short sanitized, quote-delimited reference excerpt can enter
+   Spark's model context, only with EXPLICIT user opt-in while choosing
+   the authenticated MCP profile. OFF by default and session-scoped.
+   Credentials, role tags and obvious attempts to override app policy
+   are excluded. The UI shows how many safe hints were included.
+   No server instructions are trusted policies or authorization grants.
+
+### Settings
+
+SETUP -> MCP VERBINDUNGEN -> MCP Server-Instructions anzeigen:
+- Pocket AI - Standard Tool-Discovery-Regeln (lokal) previews the
+  app-owned rules WITHOUT a GGUF or authenticated server.
+- Choosing a configured server reads its true discovery metadata using
+  that server's existing account credentials and reports absence
+  honestly, rather than synthesizing fake server instructions.
+- A separate OFF-by-default checkbox in AUTO-BRIDGE or manual tool
+  selection can include bounded remote guidance as untrusted reference.
+
+The previously installed GGUF files and Keystore-backed profiles are
+retained by an in-place signed update. Nothing in this fix changes the
+OAuth/consent or actual tools/call enforcement.
+
+References:
+- https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts
+- https://blog.modelcontextprotocol.io/posts/2025-11-03-using-server-instructions/
+
+
+### RC13: GUI responsiveness and offline diagnostics
+
+The Pixel process-exit entry at 09:35:36 contained
+killDueToPackageUpdate, exit status 0; this is a NORMAL app update
+termination, not evidence of a crash or Android ANR. The user
+also reported intermittent GUI delays, a separate symptom.
+
+To reduce possible main-thread blocking:
+- MCP Keystore-backed profile list rendering executes on Dispatchers.IO
+  and uses a generation guard to discard stale results.
+- Manual MCP, Auto-Bridge, live tools/list and server-instructions
+  chooser dialogs also decrypt the vault on background dispatchers.
+- Durable SharedPreferences.commit() for the GGUF model-loading
+  phase still completes BEFORE llama.cpp starts loading, but runs
+  on IO rather than blocking the main thread.
+
+A foreground-only local main-looper callback delay meter
+is appended to SETUP -> Letzte App-Abstuerze pruefen. It counts
+delayed UI callback dispatches >=650 ms during this app process.
+This is NOT an ANR diagnosis. It records no prompts, tokens,
+screenshots, device files or network data. Actual root cause
+requires an on-device Android trace.
