@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
+import java.nio.file.Files
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -67,7 +68,9 @@ class ModelStore(private val context: Context) {
                 }
             }
             validate(temp, name)
-            check(temp.renameTo(target)) { "Modell konnte nicht gespeichert werden." }
+            // Import target was picked with a unique filename, but still
+            // avoid overwrite if concurrent import took that name.
+            AtomicModelInstall.publish(temp, target)
             return target
         } finally {
             temp.delete()
@@ -85,26 +88,71 @@ class ModelStore(private val context: Context) {
         val target = File(dir, name)
         require(!target.exists()) { "Das Modell ist bereits installiert." }
         val temp = File(dir, "$name.part")
+        // Strong ETag or Last-Modified protects HTTP Range resume from a
+        // replaced remote object. Legacy .part files without a validator
+        // remain usable, but only an expected SHA can authenticate them.
+        val validatorFile = File(dir, "$name.part.validator")
         var connection: HttpURLConnection? = null
         try {
             var offset = temp.length()
+            val validator = validatorFile.takeIf { offset > 0 && it.isFile }
+                ?.readText()?.trim()?.takeIf { it.length in 4..220 &&
+                    !it.contains('\n') && !it.contains('\r') }
             connection = (url.openConnection() as HttpURLConnection).apply {
                 connectTimeout = 15_000
                 readTimeout = 30_000
                 instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "AILinux-Pocket-AI/0.1")
+                setRequestProperty("User-Agent", "AILinux-Pocket-AI/2.1")
                 setRequestProperty("Accept-Encoding", "identity")
-                if (offset > 0) setRequestProperty("Range", "bytes=$offset-")
+                if (offset > 0) {
+                    setRequestProperty("Range", "bytes=$offset-")
+                    if (validator != null) setRequestProperty("If-Range", validator)
+                }
             }
             val code = connection.responseCode
+            require(connection.url.protocol.equals("https", ignoreCase = true)) {
+                "Unsicheres Download-Redirect auf HTTP verweigert"
+            }
             require(code == 200 || code == 206) { "HTTP $code – Download nicht verfügbar." }
             if (code == 206) {
+                // Without a stable remote validator or an expected file hash,
+                // resuming an old partial could quietly join two different models.
+                require(validator != null || sha256?.matches(
+                    Regex("[a-fA-F0-9]{64}")) == true) {
+                    "Partial-Download ohne ETag/If-Range oder SHA-256 kann nicht sicher fortgesetzt werden"
+                }
                 val range = connection.getHeaderField("Content-Range")
-                require(range?.startsWith("bytes $offset-") == true) {
+                require(offset > 0 && range?.startsWith("bytes $offset-") == true) {
                     "Server liefert einen unerwarteten Download-Bereich."
                 }
+                val newTag = connection.getHeaderField("ETag")
+                if (validator?.startsWith('"') == true && newTag != null) {
+                    require(validator == newTag) {
+                        "Remote-Modell wurde geändert. Alte Teildatei nicht überschrieben."
+                    }
+                } else if (validator != null && !validator.startsWith('"')) {
+                    val newer = connection.getHeaderField("Last-Modified")
+                    require(newer == null || newer == validator) {
+                        "Remote-Modell hat anderes Last-Modified; alte Teildatei bewahrt."
+                    }
+                }
             } else if (offset > 0) {
-                offset = 0L  // The server did not honor the resume Range header.
+                offset = 0L // A 200 reply replaces the old incomplete .part, never a model.
+            }
+            val newValidator = connection.getHeaderField("ETag")
+                ?.takeIf { it.startsWith('"') && it.endsWith('"') && it.length < 200 }
+                ?: connection.getHeaderField("Last-Modified")?.takeIf { it.length in 4..180 }
+            if (newValidator != null && (offset == 0L || validator == null)) {
+                val marker = File(dir, "$name.part.validator.new")
+                marker.writeText(newValidator)
+                check(marker.renameTo(validatorFile)) {
+                    "Downloadvalidator konnte nicht gespeichert werden"
+                }
+            } else if (offset == 0L && newValidator == null) {
+                // A server that sends HTTP 200 after If-Range restarted the
+                // incomplete download. Never reuse an old validator with the
+                // new bytes after a later network interruption.
+                validatorFile.delete()
             }
             val total = connection.contentLengthLong.let { if (it >= 0) offset + it else -1L }
             if (total > 0) checkStorage((total - offset).coerceAtLeast(0))
@@ -139,7 +187,11 @@ class ModelStore(private val context: Context) {
                 temp.delete()  // Never offer to resume corrupt content or a checksum mismatch.
                 throw error
             }
-            check(temp.renameTo(target)) { "Datei konnte nicht fertiggestellt werden." }
+            // A normal POSIX rename may REPLACE an existing complete model.
+            // Hard-link creation is atomic and fails if another writer created
+            // the target since the initial exists() check. Same app-private FS.
+            AtomicModelInstall.publish(temp, target)
+            validatorFile.delete() // A complete model no longer needs Range metadata.
             progress(TransferProgress(target.length(), target.length()))
             return target
         } finally {
@@ -181,6 +233,9 @@ class ModelStore(private val context: Context) {
         require(isModelName(file.name) || file.name.endsWith(".gguf.part", true) ||
             file.name.endsWith(".litertlm.part", true))
         check(file.delete()) { "Datei konnte nicht gelöscht werden." }
+        // Never let a stale Range validator attach to a future download.
+        if (file.name.endsWith(".part", true))
+            File(dir, file.name + ".validator").delete()
     }
 
     private fun uniqueTarget(input: String): File {

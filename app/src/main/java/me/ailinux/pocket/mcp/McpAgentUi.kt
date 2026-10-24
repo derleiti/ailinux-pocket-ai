@@ -218,14 +218,18 @@ class McpAgentUi(
                                     profileId = fresh.id,
                                     endpoint = fresh.endpoint,
                                     title = fresh.title,
-                                    tools = live.tools.distinctBy { it.name }.take(250),
+                                    tools = live.tools.distinctBy { it.name }.take(McpProgressiveBridge.MAX_CATALOG_TOOLS_PER_SERVER),
                                     auth = fresh.auth,
                                     publicOauthClientId = fresh.oauthClientId,
                                     instructions = live.instructions
                                 )
                             }
                         }
-                        val runtime = McpProgressiveBridge.Run(sources)
+                        // A 1,000+ tool authenticated catalogue can take time
+                        // to index; never block the Android UI thread.
+                        val runtime = withContext(Dispatchers.Default) {
+                            McpProgressiveBridge.Run(sources)
+                        }
                         require(runtime.totalTools > 0) {
                             "Keine geeigneten, aktuell zugelassenen MCP-Werkzeuge gefunden."
                         }
@@ -296,7 +300,7 @@ class McpAgentUi(
         // tool identities when the visible list is filtered or re-ordered.
         val allowed = info.tools
             .filter { it.name.matches(Regex("^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")) }
-            .distinctBy { it.name }.take(250)
+            .distinctBy { it.name }.take(McpProgressiveBridge.MAX_CATALOG_TOOLS_PER_SERVER)
         if (allowed.isEmpty()) {
             error("MCP-Server hat keine geeigneten Tools", IllegalStateException(info.protocol))
             return
