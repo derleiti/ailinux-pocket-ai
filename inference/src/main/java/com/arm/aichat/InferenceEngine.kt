@@ -42,6 +42,10 @@ interface InferenceEngine {
      */
     suspend fun setThinkingMode(enabled: Boolean, effort: String = "high")
 
+    /** Configure sampling for the next generation; dispatcher-serialized. */
+    suspend fun setSampling(temperature: Float, topK: Int, topP: Float,
+        minP: Float, repeatPenalty: Float, repeatLastN: Int)
+
     /**
      * Sends a user prompt to the loaded model and returns a Flow of generated tokens.
      */
