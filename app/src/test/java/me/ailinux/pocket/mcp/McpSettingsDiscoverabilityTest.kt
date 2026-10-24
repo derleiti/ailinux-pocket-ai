@@ -79,10 +79,15 @@ class McpSettingsDiscoverabilityTest {
             .substringBefore("private fun showQuickMcpAction(")
         assertTrue(quick.contains(".setItems(actions.map"))
         assertFalse(quick.contains(".setMessage("))
+        // RC1 now fetches small-model suggestions from the live HF catalogue.
         val starter = activity.substringAfter("private fun quickStart()")
             .substringBefore("private fun promptDirectUrl()")
-        assertTrue(starter.contains(".setItems(models.map"))
-        assertFalse(starter.contains(".setMessage("))
+        assertTrue(starter.contains("HuggingFaceDiscovery.recommended()"))
+        assertTrue(starter.contains("showHuggingFaceResults(models"))
+        val results = activity.substringAfter("private fun showHuggingFaceResults(")
+            .substringBefore("private fun quickStart()")
+        assertTrue(results.contains(".setItems(descriptions)"))
+        assertFalse(results.contains(".setMessage("))
     }
 
     @Test fun noAutoNetworkCallOrPermissionsGrantedJustByOpeningSetup() {

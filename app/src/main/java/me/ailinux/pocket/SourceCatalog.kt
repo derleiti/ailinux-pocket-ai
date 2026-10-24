@@ -64,7 +64,7 @@ object SourceCatalog {
             for (i in 0 until assets.length()) {
                 val asset = assets.getJSONObject(i)
                 val name = asset.optString("name")
-                if (!name.endsWith(".gguf", true)) continue
+                if (!ModelStore.isModelName(name)) continue
                 val address = asset.optString("browser_download_url")
                 if (!address.startsWith("https://")) continue
                 val digest = asset.optString("digest").removePrefix("sha256:")
@@ -82,7 +82,7 @@ object SourceCatalog {
         for (i in 0 until files.length()) {
             val file = files.getJSONObject(i)
             val path = file.optString("rfilename")
-            if (!path.endsWith(".gguf", true)) continue
+            if (!ModelStore.isModelName(path)) continue
             val lfs = file.optJSONObject("lfs")
             val hash = lfs?.optString("sha256")?.takeIf { it.matches(Regex("[a-fA-F0-9]{64}")) }
             val bytes = lfs?.optLong("size", -1) ?: file.optLong("size", -1)
@@ -114,7 +114,7 @@ object SourceCatalog {
                 parsed.pathSegments.drop(3).joinToString("/")
         }
         val file = Uri.parse(url).lastPathSegment ?: error("Kein Dateiname in der URL.")
-        require(file.endsWith(".gguf", true)) { "Bitte einen direkten .gguf-Downloadlink angeben." }
+        require(ModelStore.isModelName(file)) { "Bitte einen direkten GGUF- oder .litertlm-Downloadlink angeben." }
         return RemoteModel(ModelStore.sanitize(file), url)
     }
 

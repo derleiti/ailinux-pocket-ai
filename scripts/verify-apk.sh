@@ -18,6 +18,14 @@ trap 'rm -f "$ZIPLIST"' EXIT
 unzip -Z1 "$APK" > "$ZIPLIST"
 grep -qx 'lib/arm64-v8a/libai-chat.so' "$ZIPLIST"
 grep -qx 'lib/arm64-v8a/libllama.so' "$ZIPLIST"
+# A Tensor G5 backend requires the real vendor dispatch native library.
+grep -qx 'lib/arm64-v8a/libLiteRtDispatch_GoogleTensor.so' "$ZIPLIST"
+DISPATCH_SHA="$(unzip -p "$APK" lib/arm64-v8a/libLiteRtDispatch_GoogleTensor.so | sha256sum | cut -d' ' -f1)"
+EXPECTED_DISPATCH_SHA="75d637c4de3cf60b464daf7ba85176f856779f3d2d6cc091c0392bb3776064ed"
+if [ "$DISPATCH_SHA" != "$EXPECTED_DISPATCH_SHA" ]; then
+    echo "Google Tensor dispatcher digest mismatch; refusing APK" >&2
+    exit 1
+fi
 # GGML_BACKEND_DL needs extracted .so files; simply shipping libraries in
 # the APK with extractNativeLibs=false reproduces the original failure.
 grep -Eq '^lib/arm64-v8a/libggml-cpu-android_armv8.*\.so$' "$ZIPLIST"

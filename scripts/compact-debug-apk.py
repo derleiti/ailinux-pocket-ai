@@ -18,7 +18,7 @@ TOOLS = SDK / "build-tools" / "35.0.0"
 STRIP = SDK / "ndk" / "29.0.13113456" / "toolchains" / "llvm" / "prebuilt" / "linux-x86_64" / "bin" / "llvm-strip"
 DEBUG_KEY = pathlib.Path.home() / ".android" / "debug.keystore"
 SOURCE = ROOT / "app/build/outputs/apk/debug/app-debug.apk"
-OUTPUT = ROOT / "dist/AILinux-Pocket-AI-1.0.0-rc.14-arm64-debug.apk"
+OUTPUT = ROOT / "dist/AILinux-Pocket-AI-0.2.0-rc.1-arm64-debug.apk"
 
 def run(*args):
     subprocess.run([str(v) for v in args], check=True, stdout=subprocess.DEVNULL)
@@ -42,8 +42,12 @@ def build():
                     native = temp / "native.so"
                     stripped = temp / "stripped.so"
                     native.write_bytes(data)
-                    run(STRIP, "--strip-unneeded", "-o", stripped, native)
-                    data = stripped.read_bytes()
+                    # The Google Tensor dispatcher is an upstream binary.
+                    # Preserve its audited SHA256 exactly (and its symbols)
+                    # rather than rewriting it during generic ELF stripping.
+                    if not info.filename.endswith("/libLiteRtDispatch_GoogleTensor.so"):
+                        run(STRIP, "--strip-unneeded", "-o", stripped, native)
+                        data = stripped.read_bytes()
                     compression = zipfile.ZIP_STORED
                 packed.writestr(info, data, compress_type=compression)
         run(TOOLS / "zipalign", "-P", "16", "-f", "4", archive, aligned)

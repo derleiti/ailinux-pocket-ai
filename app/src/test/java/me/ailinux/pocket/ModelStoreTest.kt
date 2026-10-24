@@ -29,6 +29,20 @@ class ModelStoreTest {
             }
         } finally { file.delete() }
     }
+    @Test fun litertlmMagicAndExtensionAreChecked() {
+        val file = File.createTempFile("pocket", ".litertlm")
+        try {
+            file.writeBytes("LITERTLM".toByteArray() + ByteArray(128))
+            ModelStore.validate(file)
+            assertTrue(ModelStore.isModelName("gemma-4-E2B-G5.litertlm"))
+            assertFalse(ModelStore.isModelName("download.sh"))
+            file.writeBytes("INVALID!".toByteArray() + ByteArray(128))
+            assertThrows(IllegalArgumentException::class.java) {
+                ModelStore.validate(file)
+            }
+        } finally { file.delete() }
+    }
+
     @Test fun sha256OfFileIsCorrect() {
         val file = File.createTempFile("pocket", ".txt")
         try {

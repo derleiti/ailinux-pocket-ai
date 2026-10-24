@@ -4,6 +4,7 @@ import android.content.Context
 import android.app.ActivityManager
 import android.util.Log
 import com.arm.aichat.InferenceEngine
+import com.arm.aichat.IncompleteThinkingTurnException
 import com.arm.aichat.internal.InferenceEngineImpl.Companion.getInstance
 import dalvik.annotation.optimization.FastNative
 import kotlinx.coroutines.CancellationException
@@ -123,6 +124,20 @@ internal class InferenceEngineImpl private constructor(
 
     /** Idempotently close a native assistant turn if generation was stopped. */
     private external fun finalizeGenerationNative()
+    private external fun recoverIncompleteThinkingNative(): Int
+    private external fun clearConversationNative(): Int
+
+    /** Native rollback preserves expensive SYSTEM/MCP prefill; never retries tools. */
+    private fun finishAndRecoverThinking(): Boolean {
+        finalizeGenerationNative()
+        return when (recoverIncompleteThinkingNative()) {
+            0 -> false
+            1 -> true
+            else -> throw IOException(
+                "Spark Thinking rollback fehlgeschlagen; Modell neu laden. Kein Tool-Retry."
+            )
+        }
+    }
 
     private external fun unload()
 
@@ -323,6 +338,25 @@ internal class InferenceEngineImpl private constructor(
         Unit
     }
 
+    override suspend fun clearConversationKeepingSystem() =
+        withContext(llamaDispatcher) {
+            check(_state.value is InferenceEngine.State.ModelReady) {
+                "Lokaler Chat-Reset nur bei vollständig geladenem Modell"
+            }
+            val code = clearConversationNative()
+            if (code != 0) {
+                val detail = lastLoadError().trim().takeLast(800)
+                throw IOException(
+                    "Schneller Chat-Reset fehlgeschlagen (Code $code): $detail. " +
+                        "Keine automatische CPU-Neuberechnung."
+                )
+            }
+            _cancelGeneration = false
+            _readyForSystemPrompt = false
+            recordNativeStage("chat_reset_cached")
+            Unit
+        }
+
     /**
      * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]
      */
@@ -357,8 +391,13 @@ internal class InferenceEngineImpl private constructor(
                     if (utf8token.isNotEmpty()) emit(utf8token)
                 } ?: break
             }
-            // Idempotent after EOG/token budget, required after a stop flag.
-            finalizeGenerationNative()
+            // Incomplete <think> must not poison another USER or TOOL turn.
+            if (finishAndRecoverThinking()) {
+                throw IncompleteThinkingTurnException(
+                    "Spark Thinking nicht abgeschlossen. Lokalen Turn verworfen, " +
+                        "SYSTEM/MCP-Kontext erhalten. Frage erneut stellen oder Thinking OFF wählen."
+                )
+            }
             if (_cancelGeneration) {
                 Log.i(TAG, "Assistant generation aborted per requested.")
             } else {
@@ -371,8 +410,9 @@ internal class InferenceEngineImpl private constructor(
             // cache when the user presses Stop. This runs on the same dispatcher.
             withContext(NonCancellable + llamaDispatcher) {
                 try {
-                    finalizeGenerationNative()
+                    val recovered = finishAndRecoverThinking()
                     _state.value = InferenceEngine.State.ModelReady
+                    recordNativeStage(if (recovered) "thinking_recovered" else "prompt_ready")
                 } catch (error: Exception) {
                     Log.e(TAG, "Native assistant finalization failed", error)
                     _state.value = InferenceEngine.State.Error(error)
@@ -384,10 +424,13 @@ internal class InferenceEngineImpl private constructor(
             // A native std::exception from token generation is translated to a
             // Java IOException. Expose the last safe diagnostics to the user.
             val detail = runCatching { lastLoadError().trim().takeLast(2500) }.getOrNull().orEmpty()
-            val error = if (e is IOException && detail.isNotEmpty()) {
+            val error = if (e is IncompleteThinkingTurnException) e else if (e is IOException && detail.isNotEmpty()) {
                 IOException((e.message ?: "Native Generierung fehlgeschlagen") + "\n" + detail, e)
             } else e
-            _state.value = InferenceEngine.State.Error(error)
+            _state.value = if (e is IncompleteThinkingTurnException)
+                InferenceEngine.State.ModelReady else InferenceEngine.State.Error(error)
+            recordNativeStage(if (e is IncompleteThinkingTurnException)
+                "thinking_recovered" else "generation_failed")
             throw error
         }
     }.flowOn(llamaDispatcher)
@@ -432,22 +475,30 @@ internal class InferenceEngineImpl private constructor(
                     if (next.isNotEmpty()) emit(next)
                 } ?: break
             }
-            finalizeGenerationNative()
+            if (finishAndRecoverThinking()) {
+                throw IncompleteThinkingTurnException(
+                    "Spark Thinking nach MCP-Ergebnis unvollständig. Lokale Antwort verworfen, " +
+                        "bereits ausgeführte Serveraktion bleibt gültig, kein Retry."
+                )
+            }
             _state.value = InferenceEngine.State.ModelReady
             recordNativeStage("prompt_ready")
         } catch (e: CancellationException) {
             withContext(NonCancellable + llamaDispatcher) {
                 try {
-                    finalizeGenerationNative()
+                    val recovered = finishAndRecoverThinking()
                     _state.value = InferenceEngine.State.ModelReady
+                    recordNativeStage(if (recovered) "thinking_recovered" else "prompt_ready")
                 } catch (problem: Exception) {
                     _state.value = InferenceEngine.State.Error(problem)
                 }
             }
             throw e
         } catch (e: Exception) {
-            _state.value = InferenceEngine.State.Error(e)
-            recordNativeStage("mcp_result_failed")
+            _state.value = if (e is IncompleteThinkingTurnException)
+                InferenceEngine.State.ModelReady else InferenceEngine.State.Error(e)
+            recordNativeStage(if (e is IncompleteThinkingTurnException)
+                "thinking_recovered" else "mcp_result_failed")
             throw e
         }
     }.flowOn(llamaDispatcher)

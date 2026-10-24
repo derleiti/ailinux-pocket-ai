@@ -169,6 +169,15 @@
                         android:textColor="@color/background" app:backgroundTint="@color/primary"
                         app:cornerRadius="13dp"/>
                     <com.google.android.material.button.MaterialButton
+                    android:id="@+id/hfSearchButton"
+                    android:layout_width="match_parent" android:layout_height="48dp"
+                    android:layout_marginTop="12dp"
+                    android:text="Hugging Face · Modelle suchen"
+                    android:textAllCaps="false"
+                    android:textColor="@color/ink"
+                    app:backgroundTint="@color/surface_raised"
+                    app:cornerRadius="14dp"/>
+                <com.google.android.material.button.MaterialButton
                         android:id="@+id/browseButton" android:layout_width="match_parent"
                         android:layout_height="49dp" android:layout_marginTop="5dp"
                         android:text="⌕   GitHub / Hugging Face durchsuchen" android:textAllCaps="false"
@@ -346,8 +355,17 @@
                     app:cornerRadius="14dp"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="15dp"
-                    android:text="Sicherer CPU-Modus · 2.048 Kontext-Tokens · Batch 128"
+                    android:text="GGUF: CPU · LiteRT-LM: TPU/GPU/CPU mit Fallback"
                     android:textColor="@color/muted" android:textSize="12sp"/>
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/hardwareProbeButton"
+                    android:layout_width="match_parent" android:layout_height="48dp"
+                    android:layout_marginTop="12dp"
+                    android:text="KI-Hardware / NPU / GPU prüfen"
+                    android:textAllCaps="false"
+                    android:textColor="@color/ink"
+                    app:backgroundTint="@color/surface_raised"
+                    app:cornerRadius="14dp"/>
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/crashDiagnosticsButton"
                     android:layout_width="match_parent" android:layout_height="48dp"

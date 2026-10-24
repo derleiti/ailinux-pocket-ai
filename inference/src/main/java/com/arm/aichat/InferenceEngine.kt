@@ -34,6 +34,13 @@ interface InferenceEngine {
         systemPrompt: String, toolsJson: String, thinkingMode: String = "off"
     )
 
+    /** Discard non-system conversation turns, retain the already decoded
+     * native SYSTEM/MCP KV prefix and all active tool/Thinking selections.
+     * Does not reload the GGUF, does not re-prefill and cannot execute tools.
+     * Settings changed since the last successful bind will NOT be applied.
+     */
+    suspend fun clearConversationKeepingSystem()
+
     /**
      * Non-blocking native SYSTEM-prefill progress, packed as unsigned
      * total-token count in the upper 32 bits and decoded in the lower

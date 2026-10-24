@@ -32,5 +32,5 @@ internal object McpPrefillStatus {
             (if (completed) "abgeschlossen" else "unterbrochen/unbestätigt") +
             "; " + state.decoded + "/" + state.total + " Systemtokens; " +
             (elapsedMs.coerceAtLeast(0) / 1000L) + "s gemessen. " +
-            "Kein Hinweis auf Netzwerktests oder einen Android-Crash."
+            "Dies ist eine Prefill-Messung, kein Android-Prozessabbruch- oder Netzwerktest."
 }

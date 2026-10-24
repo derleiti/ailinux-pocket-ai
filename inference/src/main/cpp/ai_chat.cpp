@@ -693,6 +693,71 @@ static void reset_short_term_states() {
     g_pending_assistant = false;
 }
 
+/** Return to the pinned SYSTEM/MCP KV after a truncated Spark reasoning turn.
+ * 0=not needed, 1=recovered, -1=unsafe/unsupported; requires reload.
+ * Serialized llama dispatcher only. No tool/network call and no fabricated
+ * assistant answer; previous non-system conversation is intentionally dropped.
+ */
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_recoverIncompleteThinkingNative(
+        JNIEnv * /*env*/, jobject /*unused*/) {
+    if (!g_incomplete_thinking_turn) return 0;
+    if (!g_context || system_prompt_position <= 0 ||
+        current_position < system_prompt_position || g_pending_assistant ||
+        chat_msgs.empty() || chat_msgs.front().role != ROLE_SYSTEM) {
+        set_native_error("thinking_recovery", "Cannot safely restore SYSTEM/MCP KV");
+        return -1;
+    }
+    if (!llama_memory_seq_rm(llama_get_memory(g_context), 0,
+                             system_prompt_position, -1)) {
+        set_native_error("thinking_recovery", "KV rollback failed; reload model");
+        return -1;
+    }
+    chat_msgs.resize(1);
+    current_position = system_prompt_position;
+    g_incomplete_thinking_turn = false;
+    reset_short_term_states();
+    if (g_sampler) common_sampler_reset(g_sampler);
+    LOGw("Incomplete Spark thinking discarded, retained SYSTEM KV prefix: %d tokens",
+         static_cast<int>(system_prompt_position));
+    return 1;
+}
+
+/** Fast user-requested chat reset: preserve EXACT current system/tool/Thinking
+ * KV tokens. No re-tokenization, no model reload, no remote MCP execution.
+ * If an incomplete context cannot be safely trimmed, fail closed.
+ */
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_clearConversationNative(
+        JNIEnv * /*env*/, jobject /*unused*/) {
+    if (!g_context || system_prompt_position <= 0 ||
+            current_position < system_prompt_position ||
+            chat_msgs.empty() || chat_msgs.front().role != ROLE_SYSTEM ||
+            g_pending_assistant) {
+        set_native_error("chat_reset", "SYSTEM/MCP KV prefix unavailable or generation active");
+        return 1;
+    }
+    if (!llama_memory_seq_rm(llama_get_memory(g_context), 0,
+                             system_prompt_position, -1)) {
+        set_native_error("chat_reset", "KV tail rollback not supported");
+        return 2;
+    }
+    chat_msgs.resize(1);
+    current_position = system_prompt_position;
+    g_incomplete_thinking_turn = false;
+    reset_short_term_states();
+    if (g_sampler) common_sampler_reset(g_sampler);
+    g_system_prefill_total.store(
+        static_cast<uint32_t>(system_prompt_position), std::memory_order_relaxed);
+    g_system_prefill_done.store(
+        static_cast<uint32_t>(system_prompt_position), std::memory_order_relaxed);
+    LOGi("Conversation cleared without model reload / MCP prefill: %d pinned tokens",
+         static_cast<int>(system_prompt_position));
+    return 0;
+}
+
 static int decode_tokens_in_batches(
         llama_context *context,
         common_batch &batch,
