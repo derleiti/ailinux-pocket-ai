@@ -23,6 +23,8 @@ class McpToolCatalogTest {
             "Welche Tools sind im MCP verfügbar?" to "",
             "Wie viele MCP Tools gibt es?" to "",
             "/mcp tools" to "",
+            "MCP Tools" to "",
+            "mcp werkzeuge" to "",
             "/mcp tools discord" to "discord",
             "show available Discord MCP tools" to "discord",
             "mcp tool check" to "",
