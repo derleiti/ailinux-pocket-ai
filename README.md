@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 1.0.0-rc.7.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.8.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -644,3 +644,41 @@ recovered from the Git history if explicitly reinstalled.
 worker token. Reinstalling the bot via Discord does not rotate its token
 on the Hetzner host. The worker's token must be securely provisioned on
 the server (never shared over chat) before actual bot actions resume.
+
+
+## RC8 - no fake TriForce log analyses when Spark Thinking is enabled
+
+In RC7, a Pixel screenshot showed that a direct TriForce server MCP status
+check worked (real server/discover / tools/list), but the separate question
+"versuche die triforce server logs zu durchsuchen" was answered by the local
+Spark-X2.6 4B model with unsupported assertions that all logs had been
+reviewed and were clean.
+
+Verified live through the public online https://api.ailinux.me/v1/mcp
+tools/list: 91 tools were advertised, but NO logs, logs_errors,
+log_viewer, journal, journal_viewer or read_logs tool. The status
+tool is available but is NOT an equivalent log-read capability.
+
+New fail-closed direct route:
+- Natural TriForce log-audit questions and /mcp logs triforce now bypass
+  the small GGUF entirely.
+- Pocket AI performs an actual online tools/list on ONLY the configured
+  https://api.ailinux.me/v1/mcp, and reports whether explicit
+  log-reading tools are even advertised.
+- If none exists, the app explicitly reports that zero log lines have been
+  read and does not claim the logs are healthy or error-free.
+- If a known log-reader becomes available later, Pocket AI lists its name
+  but does NOT auto-invoke it: tool schema, rights and one-time user consent
+  must first be verified independently.
+- The MCP menu offers "TriForce: echten Log-Zugriff prüfen (ohne Spark)".
+- Offline-model fallback detects and rejects the exact false log claim,
+  while preserving truthful "cannot inspect logs" statements.
+- SETUP explicitly explains that local Thinking ON/OFF has no authority
+  to enable MCP tools. For genuine tool calls enable CHAT > MCP >
+  KI + MCP aktivieren, select tools and approve each action separately.
+- /mcp quick triforce-status remains available as a real read-only
+  system status call, not a log audit.
+
+RC8 still requires on-device QA for the original Pixel browser OAuth
+callback; the tests and desktop host cannot claim otherwise. The separate
+remote Discord MCP OAuth fix from RC7 is unaffected.

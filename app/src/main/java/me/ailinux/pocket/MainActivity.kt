@@ -17,6 +17,7 @@ import me.ailinux.pocket.mcp.McpAgentUi
 import me.ailinux.pocket.mcp.McpAgentSession
 import me.ailinux.pocket.mcp.McpToolCatalog
 import me.ailinux.pocket.mcp.McpHealthCheck
+import me.ailinux.pocket.mcp.McpLogCheck
 import me.ailinux.pocket.mcp.McpQuickActions
 import me.ailinux.pocket.mcp.McpVault
 import me.ailinux.pocket.mcp.McpProfile
@@ -181,7 +182,7 @@ class MainActivity : AppCompatActivity() {
                 .putInt("max_tokens", count)
                 .putBoolean(PREF_ENABLE_THINKING, thinkingModeSwitch.isChecked)
                 .apply()
-            toast("Gespeichert. Denkmodus und System-Prompt gelten beim nächsten Modell-Laden.")
+            toast("Gespeichert. Thinking wirkt nach Modell-Neuladen; MCP-Agent separat aktivieren.")
         }
         findViewById<MaterialButton>(R.id.clearChatButton).setOnClickListener {
             if (!busy) {
@@ -643,6 +644,87 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Read-only capability probe for TriForce logs. This does NOT access host
+     * logs: when tools/list contains no log reader, stop before Spark can
+     * pretend it inspected anything. A real log reader requires a separately
+     * verified server tool and explicit user approval.
+     */
+    private fun showLiveMcpLogCapability(question: String) {
+        val profiles = try {
+            McpVault(applicationContext).list()
+        } catch (problem: Exception) {
+            showError("MCP-Tresor konnte nicht gelesen werden", problem)
+            return
+        }
+        val choices = profiles.filter { McpLogCheck.relevantProfile(it) }
+        if (choices.isEmpty()) {
+            messageInput.setText("")
+            appendReadOnlyChat(question, McpLogCheck.missingProfile())
+            return
+        }
+        val activeId = mcpAgent.current()?.profileId
+        val preferred = choices.firstOrNull { it.id == activeId }
+        if (preferred != null || choices.size == 1) {
+            runMcpLogCapability(question, preferred ?: choices.single())
+        } else {
+            AlertDialog.Builder(this)
+                .setTitle("TriForce-Logzugriff · Online-MCP wählen")
+                .setItems(choices.map { it.title + " · " + it.endpoint }.toTypedArray()) { _, i ->
+                    runMcpLogCapability(question, choices[i])
+                }
+                .setNegativeButton("Abbrechen", null).show()
+        }
+    }
+
+    private fun runMcpLogCapability(question: String, profile: McpProfile) {
+        if (busy) { toast("Pocket AI arbeitet bereits."); return }
+        messageInput.setText("")
+        messages.add(ChatMessage(true, question))
+        messages.add(ChatMessage(false, "🔎 Prüfe reale Log-Werkzeugfreigaben mit tools/list …"))
+        val index = messages.lastIndex
+        chatAdapter.notifyItemRangeInserted(index - 1, 2)
+        findViewById<View>(R.id.emptyState).visibility = View.GONE
+        showPage(0)
+        messagesView.scrollToPosition(index)
+        busy = true
+        renderChatState()
+        setStatus("● LOG-ZUGRIFF PRÜFEN …")
+        lifecycleScope.launch {
+            try {
+                val reply = withContext(Dispatchers.IO) {
+                    val vault = McpVault(applicationContext)
+                    val fresh = vault.get(profile.id)
+                        ?: error("MCP-Profil wurde entfernt")
+                    require(McpLogCheck.relevantProfile(fresh) &&
+                        fresh.endpoint == profile.endpoint && fresh.auth == profile.auth) {
+                        "MCP-Profil hat sich geändert; bitte neu auswählen."
+                    }
+                    if (fresh.auth == McpAuth.OAUTH &&
+                        fresh.oauthAccessToken.isBlank() && fresh.oauthRefreshToken.isBlank()
+                    ) {
+                        McpLogCheck.failure(fresh,
+                            IllegalStateException("OAuth-Anmeldung fehlt"))
+                    } else {
+                        val authorized = McpOAuth(vault).refreshIfNeeded(fresh)
+                        val info = McpConnection.inspect(authorized)
+                        McpLogCheck.capabilityReport(authorized, info)
+                    }
+                }
+                messages[index].content = reply
+                setStatus("● LOG-TOOLLISTE BESTÄTIGT")
+            } catch (problem: Exception) {
+                messages[index].content = McpLogCheck.failure(profile, problem)
+                setStatus("● LOG-ZUGRIFF UNBESTÄTIGT")
+            } finally {
+                chatAdapter.notifyItemChanged(index)
+                messagesView.scrollToPosition(index)
+                busy = false
+                renderChatState()
+            }
+        }
+    }
+
     /** A tool inventory is a real authenticated tools/list call, never LLM prose. */
     private fun showLiveMcpCatalog(question: String, filter: String) {
         val profiles = try {
@@ -741,6 +823,7 @@ class MainActivity : AppCompatActivity() {
             "Discord: freigegebene Server" to "/mcp quick discord-guilds",
             "Discord: Nova-Voice-Status" to "/mcp quick discord-voice",
             "TriForce: tatsächlicher Systemstatus" to "/mcp quick triforce-status",
+            "TriForce: echten Log-Zugriff prüfen (ohne Spark)" to "/mcp logs triforce",
             "TriForce: Benachrichtigungen lesen" to "/mcp quick notifications",
             "TriForce: Websuche" to "/mcp search ",
             "TriForce: Code durchsuchen" to "/mcp code-search ",
@@ -906,6 +989,12 @@ class MainActivity : AppCompatActivity() {
         if (busy) { toast("Pocket AI ist beschäftigt."); return }
         val text = messageInput.text.toString().trim()
         if (text.isEmpty()) return
+        // Log inspection is NOT a health-check and must be handled before
+        // generic TriForce status detection or ungrounded model generation.
+        if (McpLogCheck.requested(text)) {
+            showLiveMcpLogCapability(text)
+            return
+        }
         McpHealthCheck.requestedTarget(text)?.let {
             showLiveMcpHealth(text, it)
             return
@@ -967,9 +1056,13 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
-                if (agentSession == null && McpHealthCheck.modelOnlyClaim(answer.content)) {
-                    answer.content = McpHealthCheck.unverifiedModelClaim()
-                    chatAdapter.notifyItemChanged(index)
+                if (agentSession == null) {
+                    val logClaim = McpLogCheck.modelOnlyAuditClaim(request, answer.content)
+                    if (logClaim || McpHealthCheck.modelOnlyClaim(answer.content)) {
+                        answer.content = if (logClaim) McpLogCheck.unverifiedModelClaim()
+                            else McpHealthCheck.unverifiedModelClaim()
+                        chatAdapter.notifyItemChanged(index)
+                    }
                 }
                 if (agentSession != null) {
                     when (val proposal = McpAgentBridge.parse(
@@ -979,7 +1072,10 @@ class MainActivity : AppCompatActivity() {
                         is McpAgentBridge.Decision.Answer -> {
                             // Explicitly refuse to present an unsupported health
                             // check or claimed external change as a successful action.
-                            answer.content = if (McpHealthCheck.modelOnlyClaim(proposal.text)) {
+                            val logClaim = McpLogCheck.modelOnlyAuditClaim(request, proposal.text)
+                            answer.content = if (logClaim) {
+                                McpLogCheck.unverifiedModelClaim()
+                            } else if (McpHealthCheck.modelOnlyClaim(proposal.text)) {
                                 McpHealthCheck.unverifiedModelClaim()
                             } else {
                                 "ⓘ Nur Modellantwort · kein MCP-Aufruf ausgeführt.\n\n" +

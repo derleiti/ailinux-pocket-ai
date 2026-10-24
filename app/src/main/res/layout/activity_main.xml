@@ -248,7 +248,7 @@
                 <TextView android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="5dp"
-                    android:text="Standard: AUS. Direkte Antworten ohne langes Nachdenken. Wirkt nach Modell-Neuladen."
+                    android:text="Standard: AUS. Thinking wirkt nach Modell-Neuladen und beeinflusst nur die lokale Modellausgabe. Es aktiviert weder MCP-Zugriff noch Werkzeuge. Für Toolaufrufe: CHAT → MCP → KI + MCP aktivieren; jede Ausführung einzeln bestätigen."
                     android:textSize="12sp"
                     android:textColor="@color/muted"/>
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"

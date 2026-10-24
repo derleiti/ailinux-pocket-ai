@@ -111,3 +111,28 @@ should be advertised as completed just because the ARM64 CPU RC build passes.
 Do not expose OAuth authorization codes, tokens or secret credentials in
 chat or logs. Pixel browser callback completion has not yet been verified
 by the host-side automated tests.
+
+
+## RC8: local Spark Thinking vs actual TriForce log access
+
+Reproduce the original two-prompt Pixel scenario:
+
+1. Thinking may be enabled in SETUP, but after saving you must reload the
+   GGUF for the local inference mode to change.
+2. With CHAT showing AGENT AUS, ask check triforce server mcp status.
+   Expect genuine MCP protocol/tools-list health data; never interpret this
+   as log validation.
+3. Ask versuche die triforce server logs zu durchsuchen. RC8 must bypass
+   Spark and request live tools/list from https://api.ailinux.me/v1/mcp.
+4. If no authorized log reader is advertised, it MUST say no log data were
+   read. It must not display any invented all logs clean assertion.
+5. Run /mcp logs triforce with no GGUF loaded: expect the same capability
+   report. No tool execution or direct host-file access is performed.
+6. /mcp quick triforce-status is a separate explicit, approved status tool.
+   Its result does not prove the machine's logs are clean.
+7. To let a GGUF propose genuine MCP tools: CHAT > MCP > KI + MCP aktivieren,
+   choose specific tools and a planning mode (LOW is recommended), and
+   approve the exact tool/arguments before one real tools/call.
+
+The desktop regression includes the literal screenshot claim and negative
+cases (examples, hypothetical statements and honest lack-of-access replies).
