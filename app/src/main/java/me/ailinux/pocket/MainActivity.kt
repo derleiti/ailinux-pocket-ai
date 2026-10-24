@@ -1964,9 +1964,13 @@ class MainActivity : AppCompatActivity() {
                     (lastServerResult?.let {
                         McpToolFeedback.misleadingSummary(it, summary)
                     } == true)
-                if (!hadRealCall && (catalog?.searchCount ?: 0) == 0 &&
-                    McpRequestRouting.expectsToolEvidence(request)) {
-                    setAnswer("⚠️ LiteRT hat keinen nativen MCP-ToolCall angefordert. " +
+                if (!hadRealCall && McpRequestRouting.expectsToolEvidence(request)) {
+                    val searched = (catalog?.searchCount ?: 0) > 0
+                    setAnswer(if (searched)
+                        "⚠️ LiteRT hat MCP-Werkzeuge gesucht, aber keinen echten " +
+                            "tools/call ausgeführt. Kein externer Status bestätigt. " +
+                            "Die Werkzeugliste oben beweist keine Ausführung."
+                    else "⚠️ LiteRT hat keinen nativen MCP-ToolCall angefordert. " +
                         "Kein externes Werkzeug ausgeführt und kein Systemstatus bestätigt. " +
                         "Bitte KI + MCP / AUTO-BRIDGE und die Modellkompatibilität prüfen.")
                 } else if (invalidClaim) {

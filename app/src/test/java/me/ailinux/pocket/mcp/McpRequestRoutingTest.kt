@@ -34,6 +34,30 @@ class McpRequestRoutingTest {
         }
     }
 
+    @Test fun negatedHealthCheckDoesNotBypassNativeToolPlanner() {
+        val request = "Prüfe den Systemstatus von TriForce, nicht nur einen Health-Check"
+        assertTrue(McpRequestRouting.useModelAgent(request, true))
+        assertTrue(McpRequestRouting.expectsToolEvidence(request))
+        assertFalse(McpRequestRouting.useModelAgent("Bitte einen MCP-Health-Check machen", true))
+    }
+
+    @Test fun explanatoryMcpQuestionsDoNotNeedExternalAction() {
+        for (text in listOf(
+            "Erkläre mir, was Status im Discord-Server bedeutet",
+            "Was bedeutet ein MCP-Tool?",
+            "Brumo, erkläre mir die MCP-Tools",
+            "Wie funktioniert TriForce MCP?"
+        )) assertFalse(text, McpRequestRouting.expectsToolEvidence(text))
+        assertTrue(McpRequestRouting.expectsToolEvidence("Was ist der Status des TriForce Servers?"))
+    }
+
+    @Test fun searchIsNotEvidenceOfRemoteToolsCall() {
+        val activity = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        assertTrue(activity.contains("if (!hadRealCall && McpRequestRouting.expectsToolEvidence(request))"))
+        assertTrue(activity.contains("Die Werkzeugliste oben beweist keine Ausführung"))
+        assertFalse(activity.contains("!hadRealCall && (catalog?.searchCount ?: 0) == 0"))
+    }
+
     @Test fun ordinaryChatDoesNotRequireMcpTool() {
         val chat = "Servus Brumo, wie geht's?"
         assertTrue(McpRequestRouting.useModelAgent(chat, true))

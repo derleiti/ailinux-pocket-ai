@@ -14,6 +14,18 @@ object McpRequestRouting {
         "(?:health[\\s_-]*check|gesundheitscheck|verbindungs[\\s_-]*(?:check|test|pruefung|prüfung)|" +
             "mcp[\\s_-]*ping)", RegexOption.IGNORE_CASE
     )
+    private val negatedHealthOnly = Regex(
+        "\\b(?:nicht\\s+nur|kein(?:e|en|er|es)?|ohne)\\s+" +
+            "(?:ein(?:e|en|em|er|es)?\\s+)?" +
+            "(?:health[\\s_-]*check|gesundheitscheck|verbindungs[\\s_-]*(?:check|test|pruefung|prüfung))",
+        RegexOption.IGNORE_CASE
+    )
+    private val explanation = Regex(
+        "^\\s*(?:brumo[,!]?[\\s]+)?(?:erklär\\w*|erklaer\\w*|" +
+            "was\\s+bedeutet|was\\s+ist\\s+(?:ein|eine)\\b|" +
+            "wie\\s+funktioniert|what\\s+(?:is|does)|explain\\b|describe\\b)",
+        RegexOption.IGNORE_CASE
+    )
     private val inventoryOnly = Regex(
         "^(?:(?:mcp|discord)\\s+)?(?:tools?|werkzeuge?|funktionen?)" +
             "(?:\\s+(?:mcp|discord))?$", RegexOption.IGNORE_CASE
@@ -39,7 +51,8 @@ object McpRequestRouting {
         val normalized = message.trim().replace(Regex("\\s+"), " ")
         if (normalized.isBlank() || normalized.startsWith("/mcp", ignoreCase = true)) return false
         // An explicit MCP health check is still a direct app protocol probe.
-        if (directHealth.containsMatchIn(normalized)) return false
+        if (directHealth.containsMatchIn(normalized) &&
+            !negatedHealthOnly.containsMatchIn(normalized)) return false
         val catalogue = McpToolCatalog.requestedFilter(normalized)
         if (catalogue != null &&
             (inventoryOnly.matches(normalized) ||
@@ -51,6 +64,8 @@ object McpRequestRouting {
     /** A status/action request without native ToolCall must never look checked. */
     fun expectsToolEvidence(message: String): Boolean {
         val normalized = message.lowercase(Locale.ROOT)
+        // Explaining a concept is not evidence that an external action ran.
+        if (explanation.containsMatchIn(normalized)) return false
         return McpHealthCheck.requestedTarget(message) != null ||
             McpLogCheck.requested(message) ||
             McpQuickActions.requestedAction(message) is McpQuickActions.Selection.Request ||
