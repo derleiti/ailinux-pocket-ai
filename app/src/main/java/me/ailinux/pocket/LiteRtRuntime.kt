@@ -7,6 +7,13 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.OpenApiTool
+import com.google.ai.edge.litertlm.ToolCall
+import com.google.ai.edge.litertlm.Message
+import com.google.ai.edge.litertlm.Content
+import com.google.ai.edge.litertlm.tool
+import me.ailinux.pocket.mcp.McpAgentSession
+import me.ailinux.pocket.mcp.McpAgentBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.NonCancellable
@@ -38,6 +45,73 @@ internal class LiteRtRuntime private constructor(
     private val nativeDispatcher: ExecutorCoroutineDispatcher
 ) {
     private var disposed = false
+    private var activeBridgeKey = ""
+    private var currentInstruction = systemPrompt
+    private var currentToolProviders: List<com.google.ai.edge.litertlm.ToolProvider> = emptyList()
+    data class ToolTurn(val text: String, val calls: List<ToolCall>)
+
+    /** No provider executes a tool. The host intercepts ToolCalls and must
+     * explicitly approve and validate any actual remote tools/call.
+     */
+    suspend fun bindMcp(session: McpAgentSession?) = withContext(nativeDispatcher) {
+        check(!disposed)
+        val currentKey = session?.let {
+            McpAgentBridge.nativeToolsJson(it.tools) + "|" + it.profileId +
+                "|" + it.progressiveSources.joinToString { src -> src.id + src.endpoint } +
+                "|" + me.ailinux.pocket.mcp.McpServerGuidance.optionalPromptBlock(it)
+        }.orEmpty()
+        if (currentKey != activeBridgeKey) {
+            val safeJson = session?.let { McpAgentBridge.nativeToolsJson(it.tools) }
+            val definitions = if (safeJson == null) emptyList() else
+                (0 until org.json.JSONArray(safeJson).length()).map { index ->
+                    val item = org.json.JSONArray(safeJson).getJSONObject(index).getJSONObject("function")
+                    val description = item.toString()
+                    tool(object : OpenApiTool {
+                        override fun getToolDescriptionJsonString(): String = description
+                        override fun execute(paramsJsonString: String): String {
+                            throw SecurityException("MCP tools may execute only after explicit user consent")
+                        }
+                    })
+                }
+            val instructions = if (session == null) systemPrompt else
+                systemPrompt + "\n" + LiteRtMcpProtocol.shortInstructions(
+                    session.progressiveSources.isNotEmpty()) +
+                me.ailinux.pocket.mcp.McpServerGuidance.optionalPromptBlock(session)
+            // LiteRT permits only one conversation per engine; invalidate
+            // the old handle before attempting replacement.
+            val previous = conversation
+            conversation = null
+            previous?.close()
+            val fresh = engine.createConversation(ConversationConfig(
+                systemInstruction = Contents.of(instructions),
+                tools = definitions,
+                automaticToolCalling = false
+            ))
+            conversation = fresh
+            currentInstruction = instructions
+            currentToolProviders = definitions
+            activeBridgeKey = currentKey
+        }
+        Unit
+    }
+
+    suspend fun askMcp(text: String): ToolTurn = withContext(nativeDispatcher) {
+        check(!disposed)
+        val answer = checkNotNull(conversation).sendMessage(text)
+        val plain = answer.contents.contents.filterIsInstance<Content.Text>()
+            .joinToString("") { it.text }
+        ToolTurn(plain, answer.toolCalls)
+    }
+
+    suspend fun toolFeedback(name: String, payload: String): ToolTurn =
+        withContext(nativeDispatcher) {
+            check(!disposed)
+            val response = Message.tool(Contents.of(Content.ToolResponse(name, payload)))
+            val reply = checkNotNull(conversation).sendMessage(response)
+            val text = reply.contents.contents.filterIsInstance<Content.Text>()
+                .joinToString("") { it.text }
+            ToolTurn(text, reply.toolCalls)
+        }
 
     fun send(text: String): Flow<String> = flow {
         require(text.isNotBlank()) { "Leere Modellanfrage" }
@@ -58,7 +132,11 @@ internal class LiteRtRuntime private constructor(
         conversation = null
         old?.close()
         conversation = engine.createConversation(
-            ConversationConfig(systemInstruction = Contents.of(systemPrompt))
+            ConversationConfig(
+                systemInstruction = Contents.of(currentInstruction),
+                tools = currentToolProviders,
+                automaticToolCalling = false
+            )
         )
         Unit
     }

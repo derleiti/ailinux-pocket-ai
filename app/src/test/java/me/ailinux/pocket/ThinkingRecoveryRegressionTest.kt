@@ -52,6 +52,8 @@ class ThinkingRecoveryRegressionTest {
             .substringBefore("val hasConversation:")
         assertTrue(reset.indexOf("old?.close()") < reset.indexOf("engine.createConversation("))
         assertTrue(reset.contains("conversation = null"))
+        assertTrue(reset.contains("tools = currentToolProviders"))
+        assertTrue(source.contains("automaticToolCalling = false"))
         assertTrue(source.contains("checkNotNull(conversation)"))
         assertTrue(source.contains("Executors.newSingleThreadExecutor"))
         assertTrue(source.contains("session.sendMessageAsync(text).collect"))

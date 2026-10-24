@@ -46,7 +46,8 @@ class McpSettingsDiscoverabilityTest {
         assertTrue(activity.contains("val prepared = active != null && activeModel == null"))
         assertTrue(activity.contains("●  MCP VORBEREITET"))
         assertTrue(activity.contains("MCP-BRIDGE VORBEREITET"))
-        assertTrue(activity.contains("GGUF unter MODELLE laden"))
+        assertTrue(activity.contains("GGUF oder LiteRT-LM unter MODELLE laden"))
+        assertTrue(activity.contains("rebindLiteRtMcp(active)"))
         val modelLoad = activity.substringAfter("activeModel = file")
         assertTrue(modelLoad.contains("updateMcpBadge(mcpAgent.current())"))
         // Loading a GGUF with an opt-in selected bridge must still bind
