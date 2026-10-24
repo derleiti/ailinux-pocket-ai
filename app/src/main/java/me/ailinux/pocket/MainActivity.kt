@@ -1971,7 +1971,14 @@ class MainActivity : AppCompatActivity() {
             require(turn.calls.size == 1) {
                 "Mehrere gleichzeitige MCP-Toolaufrufe nicht erlaubt."
             }
-            check(!hadRealCall) { "Maximal ein echter MCP-Aufruf pro Frage" }
+            if (hadRealCall) {
+                // Never dispatch a second external call after a real receipt.
+                // Keep the first receipt visible instead of reporting a generic
+                // model exception or clearing the prior verified result.
+                setAnswer("🔧 MCP-Serverquittung oben. Weiterer Modell-Toolvorschlag " +
+                    "blockiert: maximal ein externer Aufruf pro Anfrage.")
+                return
+            }
             val (tool, args) = LiteRtMcpProtocol.validate(
                 turn.calls.single(), active.tools
             )
@@ -2078,7 +2085,7 @@ class MainActivity : AppCompatActivity() {
                 setAnswer("⚠️ Höchstzahl lokaler Tool-Planungsschritte erreicht.")
                 return
             }
-            turn = runtime.toolFeedback(tool.name, outcome.toString())
+            turn = runtime.toolFeedback(tool.name, outcome.toString().take(12_000))
         }
     }
 

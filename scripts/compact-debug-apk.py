@@ -18,7 +18,7 @@ TOOLS = SDK / "build-tools" / "35.0.0"
 STRIP = SDK / "ndk" / "29.0.13113456" / "toolchains" / "llvm" / "prebuilt" / "linux-x86_64" / "bin" / "llvm-strip"
 DEBUG_KEY = pathlib.Path.home() / ".android" / "debug.keystore"
 SOURCE = ROOT / "app/build/outputs/apk/debug/app-debug.apk"
-OUTPUT = ROOT / "dist/AILinux-Pocket-AI-2.1.0-RC2-arm64-debug.apk"
+OUTPUT = ROOT / "dist/AILinux-Pocket-AI-2.1.0-RC3-arm64-debug.apk"
 
 def run(*args):
     subprocess.run([str(v) for v in args], check=True, stdout=subprocess.DEVNULL)
