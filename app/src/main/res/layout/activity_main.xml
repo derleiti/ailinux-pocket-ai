@@ -258,6 +258,61 @@
                     android:layout_width="match_parent" android:layout_height="55dp"
                     android:layout_marginTop="10dp"
                     android:background="@drawable/bg_panel"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="25dp" android:text="SAMPLING · ANTWORTVERHALTEN"
+                    android:letterSpacing=".12" android:textStyle="bold"
+                    android:textColor="@color/primary" android:textSize="12sp"/>
+                <Spinner android:id="@+id/samplingPresetSpinner"
+                    android:layout_width="match_parent" android:layout_height="52dp"
+                    android:layout_marginTop="10dp" android:background="@drawable/bg_panel"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="13dp" android:text="Temperature" android:textStyle="bold"
+                    android:textColor="@color/ink" android:textSize="14sp"/>
+                <EditText android:id="@+id/temperatureInput" android:layout_width="match_parent"
+                    android:layout_height="48dp" android:layout_marginTop="5dp"
+                    android:inputType="numberDecimal" android:singleLine="true"
+                    android:hint="0.00 bis 2.00 · Kreativität" android:padding="12dp"
+                    android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="13dp" android:text="Top-K" android:textStyle="bold"
+                    android:textColor="@color/ink" android:textSize="14sp"/>
+                <EditText android:id="@+id/topKInput" android:layout_width="match_parent"
+                    android:layout_height="48dp" android:layout_marginTop="5dp"
+                    android:inputType="numberDecimal" android:singleLine="true"
+                    android:hint="1 bis 200 · Kandidatenauswahl" android:padding="12dp"
+                    android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="13dp" android:text="Top-P" android:textStyle="bold"
+                    android:textColor="@color/ink" android:textSize="14sp"/>
+                <EditText android:id="@+id/topPInput" android:layout_width="match_parent"
+                    android:layout_height="48dp" android:layout_marginTop="5dp"
+                    android:inputType="numberDecimal" android:singleLine="true"
+                    android:hint="0.05 bis 1.00 · Wahrscheinlichkeitsmasse" android:padding="12dp"
+                    android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="13dp" android:text="Min-P" android:textStyle="bold"
+                    android:textColor="@color/ink" android:textSize="14sp"/>
+                <EditText android:id="@+id/minPInput" android:layout_width="match_parent"
+                    android:layout_height="48dp" android:layout_marginTop="5dp"
+                    android:inputType="numberDecimal" android:singleLine="true"
+                    android:hint="0.00 bis 0.50 · Mindestwahrscheinlichkeit" android:padding="12dp"
+                    android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="13dp" android:text="Repeat Penalty" android:textStyle="bold"
+                    android:textColor="@color/ink" android:textSize="14sp"/>
+                <EditText android:id="@+id/repeatPenaltyInput" android:layout_width="match_parent"
+                    android:layout_height="48dp" android:layout_marginTop="5dp"
+                    android:inputType="numberDecimal" android:singleLine="true"
+                    android:hint="1.00 bis 2.00 · Wiederholungen bremsen" android:padding="12dp"
+                    android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="13dp" android:text="Repeat Last N" android:textStyle="bold"
+                    android:textColor="@color/ink" android:textSize="14sp"/>
+                <EditText android:id="@+id/repeatLastNInput" android:layout_width="match_parent"
+                    android:layout_height="48dp" android:layout_marginTop="5dp"
+                    android:inputType="numberDecimal" android:singleLine="true"
+                    android:hint="0 bis 512 · Verlauf in Tokens" android:padding="12dp"
+                    android:textColor="@color/ink" android:background="@drawable/bg_panel"/>
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/saveSettingsButton" android:layout_width="match_parent"
                     android:layout_height="48dp" android:layout_marginTop="18dp"
