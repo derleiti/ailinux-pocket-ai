@@ -39,6 +39,7 @@ class McpStreamableIntegrationTest {
                     .put("capabilities", JSONObject().put("tools", JSONObject()))
                 "tools/list" -> JSONObject().put("tools", JSONArray().put(JSONObject()
                     .put("name", "ping").put("description", "Ping")
+                    .put("annotations", JSONObject().put("readOnlyHint", true))
                     .put("inputSchema", JSONObject()
                         .put("type", "object").put("properties", JSONObject()
                             .put("region", JSONObject().put("type", "string")
@@ -66,6 +67,7 @@ class McpStreamableIntegrationTest {
         assertEquals("2025-11-25", info.protocol)
         assertEquals("Legacy tip: ping checks availability.", info.instructions)
         assertEquals("ping", info.tools.single().name)
+        assertTrue(info.tools.single().declaresReadOnly)
         val methods = transport.calls.map { it.first.getString("method") }
         assertEquals(listOf("server/discover", "initialize", "notifications/initialized",
             "tools/list"), methods)
@@ -78,6 +80,7 @@ class McpStreamableIntegrationTest {
         assertEquals("2026-07-28", info.protocol)
         assertEquals("Use ping for test connectivity. No action without consent.",
             info.instructions)
+        assertTrue(info.tools.single().declaresReadOnly)
         val headers = transport.calls[1].second
         assertEquals("tools/list", headers["Mcp-Method"])
         assertEquals("2026-07-28", headers["MCP-Protocol-Version"])

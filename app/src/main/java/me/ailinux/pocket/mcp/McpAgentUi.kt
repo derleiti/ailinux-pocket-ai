@@ -508,8 +508,19 @@ class McpAgentUi(
             .singleOrNull { it.name == plan.tool.name }
             ?: error("MCP-Werkzeug existiert nicht mehr")
         check(current.description == plan.tool.description &&
-            McpToolSchema.equivalent(current.schema, plan.tool.schema)) {
-            "MCP-Werkzeugdefinition geändert. Auto-Bridge bitte neu verbinden."
+            McpToolSchema.equivalent(current.schema, plan.tool.schema) &&
+            McpToolSchema.equivalent(current.annotations, plan.tool.annotations)) {
+            "MCP-Werkzeugdefinition oder Risikohinweis geändert. Auto-Bridge bitte neu verbinden."
+        }
+        // App-inferred tool selection must stay strictly read-only even if
+        // server annotations change between user approval and actual dispatch.
+        // Annotations are untrusted hints, so explicit consent is still required.
+        if (plan.hostFallback) {
+            check(current.declaresReadOnly &&
+                current.name in setOf("crawl", "status", "discord_connection_status",
+                    "current_time", "models", "device_info")) {
+                "Host-Fallback darf kein schreibendes oder unbekanntes Werkzeug aufrufen."
+            }
         }
         McpToolSchema.validate(current.schema, plan.arguments)?.let {
             throw IllegalArgumentException("Aktuelle MCP-Argumentprüfung: " + it)

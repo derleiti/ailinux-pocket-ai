@@ -7,7 +7,16 @@ import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
 
-data class McpTool(val name: String, val description: String, val schema: JSONObject)
+data class McpTool(
+    val name: String,
+    val description: String,
+    val schema: JSONObject,
+    /** Server-advertised risk hints, never an authorization or enforcement mechanism. */
+    val annotations: JSONObject = JSONObject()
+) {
+    /** Missing, malformed or string-valued hints are treated as NOT read-only. */
+    val declaresReadOnly: Boolean get() = annotations.opt("readOnlyHint") == true
+}
 data class McpServerInfo(
     val title: String,
     val protocol: String,
@@ -151,7 +160,8 @@ class McpClient(
                 if (toolName.isNotBlank() && toolName.length <= 200) {
                     val schema = tool.optJSONObject("inputSchema") ?: JSONObject()
                     if (runCatching { parameterHeaderAnnotations(schema) }.isSuccess) {
-                        tools.add(McpTool(toolName, tool.optString("description").take(650), schema))
+                        tools.add(McpTool(toolName, tool.optString("description").take(650),
+                            schema, tool.optJSONObject("annotations") ?: JSONObject()))
                     }
                 }
             }
