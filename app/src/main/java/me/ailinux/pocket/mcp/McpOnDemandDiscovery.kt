@@ -18,12 +18,34 @@ object McpOnDemandDiscovery {
     private val explicitTool = Regex("(?:tool|werkzeug|function)[\\s:='\"\\u0060]+([a-z][a-z0-9_.-]{2,})", RegexOption.IGNORE_CASE)
     private val mentionsExternal = Regex("\\b(?:mcp|tool|werkzeug|triforce|discord|crawl|status|api|server)\\b", RegexOption.IGNORE_CASE)
 
+    // The host knows only a small audited set of read-only contracts.
+    // This selects a candidate name, NOT a permission to execute it.
+    private fun intendedSafeTool(request: String): String? {
+        val lower = request.lowercase(Locale.ROOT)
+        return when {
+            Regex("\\b(?:crawl|crawle|crawlen)\\b").containsMatchIn(lower) &&
+                webUrl.containsMatchIn(request) -> "crawl"
+            Regex("\\bdiscord\\b").containsMatchIn(lower) &&
+                Regex("\\b(?:status|verbindung|connection)\\b")
+                    .containsMatchIn(lower) -> "discord_connection_status"
+            Regex("\\b(?:status|systemstatus|serverzustand)\\b")
+                .containsMatchIn(lower) &&
+                Regex("\\b(?:mcp|triforce|tri-force|ailinux|server)\\b")
+                    .containsMatchIn(lower) -> "status"
+            else -> null
+        }
+    }
+
     fun propose(request: String, run: McpProgressiveBridge.Run): McpProgressiveBridge.RemoteCall? {
+        // Pure explanation is never an instruction to query a server.
+        if (Regex("(?i)^\\s*(?:brumo[,!]?\\s+)?(?:erklär\\w*|erklaer\\w*|was\\s+(?:ist|bedeutet)|wie\\s+funktioniert|explain\\b)")
+                .containsMatchIn(request)) return null
         if (!mentionsExternal.containsMatchIn(request)) return null
         val terms = words.findAll(request.lowercase(Locale.ROOT)).map { it.value }
             .filter { it !in stop && !it.all(Char::isDigit) }.distinct().take(10).toList()
         val requestedName = explicitTool.find(request)?.groupValues?.get(1)
             ?.takeUnless { it in setOf("https", "http", "url", "website") }
+            ?: intendedSafeTool(request)
         val query = requestedName ?: terms.joinToString(" ").take(120)
         if (query.isBlank()) return null
         val response = run.search(query)
