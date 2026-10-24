@@ -224,7 +224,7 @@ class MainActivity : AppCompatActivity() {
             } else false
         }
 
-        systemPrompt.setText(prefs.getString("system_prompt", DEFAULT_SYSTEM_PROMPT))
+        systemPrompt.setText(BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null)))
         thinkingModeSwitch.isChecked = prefs.getBoolean(PREF_ENABLE_THINKING, false)
         val choices = listOf("128 Tokens", "256 Tokens", "512 Tokens", "1024 Tokens")
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, choices)
@@ -584,7 +584,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun groundedSystemPrompt(active: McpAgentSession?): String {
-        val configured = prefs.getString("system_prompt", DEFAULT_SYSTEM_PROMPT).orEmpty()
+        val configured = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
         val root = configured.trim() + "\n" +
             "Du darfst externe Aktionen nur als abgeschlossen bezeichnen, wenn " +
             "ein echtes Werkzeugresultat ihren Erfolg bestätigt. " +
@@ -2125,7 +2125,5 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREF_ENABLE_THINKING = "enable_thinking"
         private const val PREF_LOADING_MODEL = "pocket_loading_model"
-        private const val DEFAULT_SYSTEM_PROMPT =
-            "Du bist Pocket AI, ein hilfreicher, direkter, datenschutzfreundlicher Offline-Assistent. Antworte in der Sprache des Benutzers."
     }
 }
