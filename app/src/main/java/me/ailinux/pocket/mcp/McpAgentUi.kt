@@ -568,12 +568,9 @@ class McpAgentUi(
             diagTrace(), current.name)
         try {
             val result = McpConnection.callTool(authorized, current, plan.arguments)
-            diag(if (result.optBoolean("isError", false))
-                    PocketDiagnostics.Step.REMOTE_ERROR
-                 else PocketDiagnostics.Step.SERVER_RESULT,
-                if (result.optBoolean("isError", false))
-                    PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK,
-                tool = current.name, durationMs = SystemClock.elapsedRealtime() - started)
+            val phase = PocketDiagnostics.resultPhase(result)
+            diag(phase.first, phase.second, tool = current.name,
+                durationMs = SystemClock.elapsedRealtime() - started)
             result
         } catch (error: Exception) {
             PocketDiagnostics.failure(activity.applicationContext, diagTrace(),
@@ -705,12 +702,9 @@ class McpAgentUi(
             diagTrace(), current.name)
         try {
             val result = McpConnection.callTool(authorized, current, proposal.args)
-            diag(if (result.optBoolean("isError", false))
-                    PocketDiagnostics.Step.REMOTE_ERROR
-                 else PocketDiagnostics.Step.SERVER_RESULT,
-                if (result.optBoolean("isError", false))
-                    PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK,
-                tool = current.name, durationMs = SystemClock.elapsedRealtime() - started)
+            val phase = PocketDiagnostics.resultPhase(result)
+            diag(phase.first, phase.second, tool = current.name,
+                durationMs = SystemClock.elapsedRealtime() - started)
             result
         } catch (error: Exception) {
             PocketDiagnostics.failure(activity.applicationContext, diagTrace(),

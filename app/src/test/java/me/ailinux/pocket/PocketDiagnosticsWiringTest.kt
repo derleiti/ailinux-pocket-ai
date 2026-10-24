@@ -16,9 +16,9 @@ class PocketDiagnosticsWiringTest {
         assertTrue(main.contains("PocketDiagnostics.Step.DETAILS"))
         assertTrue(main.contains("PocketDiagnostics.Step.DISCOVERY_DONE"))
         assertTrue(main.contains("PocketDiagnostics.Step.PROPOSAL"))
-        assertTrue(agent.contains("PocketDiagnostics.Step.SERVER_RESULT"))
+        assertTrue(agent.contains("PocketDiagnostics.resultPhase(result)"))
         assertTrue(agent.contains("McpConnection.callTool(authorized, current, plan.arguments)"))
-        assertTrue(agent.contains("result.optBoolean(\"isError\", false)"))
+        assertTrue(diag.contains("result.optBoolean(\"isError\", false)"))
         assertTrue(diag.contains("UNCONFIRMED"))
     }
 

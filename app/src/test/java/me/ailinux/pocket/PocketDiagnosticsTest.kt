@@ -52,6 +52,23 @@ class PocketDiagnosticsTest {
             PocketDiagnostics.classify(Exception("HTTP 401 unauthorized")))
     }
 
+    @Test fun toolErrorsInputRequiredAndSuccessAreDifferentStates() {
+        val complete = JSONObject().put("resultType","complete").put("isError",false)
+        val denied = JSONObject().put("resultType","complete").put("isError",true)
+        val pending = JSONObject().put("resultType","input_required")
+        val unsupported = JSONObject().put("resultType","future_unknown")
+        assertEquals(PocketDiagnostics.Step.SERVER_RESULT,
+            PocketDiagnostics.resultPhase(complete).first)
+        assertEquals(PocketDiagnostics.Step.REMOTE_ERROR,
+            PocketDiagnostics.resultPhase(denied).first)
+        assertEquals(PocketDiagnostics.Step.INPUT_REQUIRED,
+            PocketDiagnostics.resultPhase(pending).first)
+        assertEquals(PocketDiagnostics.State.INFO,
+            PocketDiagnostics.resultPhase(pending).second)
+        assertEquals(PocketDiagnostics.State.FAIL,
+            PocketDiagnostics.resultPhase(unsupported).second)
+    }
+
     @Test fun discoveryIsNotAConfirmedMcpServerReceipt() {
         val search = PocketDiagnostics.Event(1780000000L,"aabbccdd","ddccbbaa",
             PocketDiagnostics.Domain.MCP,PocketDiagnostics.Step.SEARCH,PocketDiagnostics.State.OK)

@@ -1829,12 +1829,8 @@ class MainActivity : AppCompatActivity() {
                                     throw McpExecutionUncertain(error)
                                 }
                             }
-                            trace(PocketDiagnostics.Domain.MCP,
-                                if (result.optBoolean("isError", false))
-                                    PocketDiagnostics.Step.REMOTE_ERROR
-                                else PocketDiagnostics.Step.SERVER_RESULT,
-                                if (result.optBoolean("isError", false))
-                                    PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK,
+                            val phase = PocketDiagnostics.resultPhase(result)
+                            trace(PocketDiagnostics.Domain.MCP, phase.first, phase.second,
                                 tool = proposal.tool.name,
                                 durationMs = SystemClock.elapsedRealtime() - started)
                             messages[answerIndex].content =

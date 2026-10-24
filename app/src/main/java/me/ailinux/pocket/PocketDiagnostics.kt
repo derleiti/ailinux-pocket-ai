@@ -29,7 +29,7 @@ internal object PocketDiagnostics {
         DISCOVERY_START, DISCOVERY_DONE, SEARCH, DETAILS, PLAN, PROPOSAL,
         APPROVAL_REQUEST, APPROVAL_ACCEPT, APPROVAL_DENY,
         AUTH_CHECK, SCHEMA_CHECK, DISPATCH, SERVER_RESULT, REMOTE_ERROR,
-        MODEL_FOLLOWUP, CANCELLED, ENGINE_ERROR, DIAGNOSTIC
+        MODEL_FOLLOWUP, INPUT_REQUIRED, CANCELLED, ENGINE_ERROR, DIAGNOSTIC
     }
     enum class State { START, OK, INFO, REJECTED, FAIL, UNCONFIRMED }
     enum class ErrorCode {
@@ -104,6 +104,17 @@ internal object PocketDiagnostics {
             "litert" in message || "inference" in message ||
                 "generate" in message -> ErrorCode.MODEL_RUNTIME
             else -> ErrorCode.UNKNOWN
+        }
+    }
+
+    /** Modern MCP resultType=complete/input_required, legacy isError. */
+    fun resultPhase(result: JSONObject): Pair<Step, State> {
+        val type = result.optString("resultType")
+        return when {
+            type == "input_required" -> Step.INPUT_REQUIRED to State.INFO
+            type.isNotBlank() && type != "complete" -> Step.REMOTE_ERROR to State.FAIL
+            result.optBoolean("isError", false) -> Step.REMOTE_ERROR to State.FAIL
+            else -> Step.SERVER_RESULT to State.OK
         }
     }
 

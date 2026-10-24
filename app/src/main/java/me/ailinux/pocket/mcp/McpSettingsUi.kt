@@ -610,13 +610,8 @@ class McpSettingsUi(
                                 diagTrace, actual.name)
                             try {
                                 val response = McpConnection.callTool(p, actual, arguments)
-                                diag(if (response.optBoolean("isError", false))
-                                        PocketDiagnostics.Step.REMOTE_ERROR
-                                     else PocketDiagnostics.Step.SERVER_RESULT,
-                                    if (response.optBoolean("isError", false))
-                                        PocketDiagnostics.State.FAIL
-                                    else PocketDiagnostics.State.OK,
-                                    tool = actual.name,
+                                val phase = PocketDiagnostics.resultPhase(response)
+                                diag(phase.first, phase.second, tool = actual.name,
                                     durationMs = SystemClock.elapsedRealtime() - started)
                                 activity.runOnUiThread {
                                     showResult(tool.name, response.toString(2))
