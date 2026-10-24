@@ -83,6 +83,7 @@ class MainActivity : AppCompatActivity() {
     private var lastMcpBindingReport = "MCP-BINDUNG: Noch keine Einbindung in diesem App-Prozess."
     private val messages = mutableListOf<ChatMessage>()
     private val chatAdapter = ChatAdapter(messages)
+    private lateinit var history: ChatHistoryController
     private var activeModel: File? = null
     /** Alternative LiteRT-LM runtime, only for .litertlm models. */
     private var liteRtRuntime: LiteRtRuntime? = null
@@ -186,6 +187,27 @@ class MainActivity : AppCompatActivity() {
 
         messagesView.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
         messagesView.adapter = chatAdapter
+        history = ChatHistoryController(
+            activity = this,
+            items = messages,
+            adapter = chatAdapter,
+            currentModel = { activeModel?.name.orEmpty() },
+            canSwitch = { !busy && !mcpDispatchInFlight && !mcpBindingInProgress &&
+                generationJob?.isActive != true },
+            resetNative = {
+                if (activeModel?.name?.endsWith(".litertlm", true) == true) {
+                    liteRtRuntime?.clearConversation()
+                } else if (activeModel != null && ::engine.isInitialized) {
+                    engine.clearConversationKeepingSystem()
+                }
+            },
+            onNewChat = { resetLocalConversation() },
+            onOpenChat = {
+                showPage(0)
+                setStatus("● VERLAUF GELADEN · NATIVER KONTEXT NEU")
+            }
+        )
+        history.start()
 
         findViewById<TextView>(R.id.navChat).setOnClickListener { showPage(0) }
         findViewById<TextView>(R.id.navModels).setOnClickListener { showPage(1) }
@@ -577,6 +599,7 @@ class MainActivity : AppCompatActivity() {
                 // A bridge configured in SETUP before model download is now
                 // actually bound to the loaded GGUF; update the visible badge.
                 updateMcpBadge(mcpAgent.current())
+                history.beginNew()
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -673,6 +696,7 @@ class MainActivity : AppCompatActivity() {
                 // LiteRT has its own native function declarations; NEVER
                 // invoke these directly without Pocket's existing approval.
                 updateMcpBadge(mcpAgent.current())
+                history.beginNew()
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -730,6 +754,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 runtime.bindMcp(active)
+                history.beginNew()
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -756,6 +781,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (activeModel == null) {
+            history.beginNew()
             messages.clear()
             chatAdapter.notifyDataSetChanged()
             findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -776,6 +802,7 @@ class MainActivity : AppCompatActivity() {
                     engine.clearConversationKeepingSystem()
                     setStatus("● BEREIT · MCP-SYSTEMKONTEXT ERHALTEN")
                 }
+                history.beginNew()
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -963,6 +990,7 @@ class MainActivity : AppCompatActivity() {
                 engine.resetConversationWithTools(
                     groundedSystemPrompt(active), json, thinkingMode
                 )
+                history.beginNew()
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -2747,6 +2775,7 @@ class MainActivity : AppCompatActivity() {
         uiPulseEnabled = false
         uiPulseHandler.removeCallbacks(uiPulse)
         uiResponsiveness.disarm()
+        if (::history.isInitialized) history.save(true)
         generationJob?.cancel()
         super.onStop()
     }

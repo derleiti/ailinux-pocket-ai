@@ -60,6 +60,15 @@
                         android:ellipsize="middle"/>
                 </LinearLayout>
                 <com.google.android.material.button.MaterialButton
+                    android:id="@+id/chatHistoryButton"
+                    android:layout_width="48dp" android:layout_height="40dp"
+                    android:layout_marginStart="7dp"
+                    android:text="☰" android:contentDescription="Chatverläufe öffnen"
+                    android:textAllCaps="false" android:textSize="19sp"
+                    android:textColor="@color/ink"
+                    app:backgroundTint="@color/surface_raised"
+                    app:cornerRadius="12dp"/>
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/chatMcpButton"
                     android:layout_width="wrap_content" android:layout_height="40dp"
                     android:layout_marginStart="7dp"
@@ -476,6 +485,49 @@
                     android:textColor="@color/muted" android:textSize="12sp"/>
             </LinearLayout>
         </ScrollView>
+
+        <!-- End-side history drawer: reachable by button and swipe, never
+             intercepts ordinary navigation when hidden. Mirrors in RTL. -->
+        <View android:id="@+id/historyScrim"
+            android:layout_width="match_parent" android:layout_height="match_parent"
+            android:background="#99000000" android:visibility="gone"
+            android:clickable="true" android:contentDescription="Verlauf schließen"/>
+        <LinearLayout android:id="@+id/historyDrawer"
+            android:layout_width="320dp" android:layout_height="match_parent"
+            android:layout_gravity="end" android:orientation="vertical"
+            android:background="@color/surface" android:elevation="12dp"
+            android:paddingStart="16dp" android:paddingEnd="16dp"
+            android:paddingTop="18dp" android:paddingBottom="18dp"
+            android:visibility="gone">
+            <TextView android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="Chatverläufe"
+                android:textColor="@color/ink" android:textSize="22sp"
+                android:textStyle="bold"/>
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/newHistoryChatButton"
+                android:layout_width="match_parent" android:layout_height="48dp"
+                android:layout_marginTop="14dp" android:text="＋ Neuer Chat"
+                android:textAllCaps="false" android:textColor="@color/background"
+                app:backgroundTint="@color/primary"/>
+            <EditText android:id="@+id/historySearch"
+                android:layout_width="match_parent" android:layout_height="48dp"
+                android:layout_marginTop="9dp" android:hint="Chats durchsuchen"
+                android:singleLine="true" android:inputType="text"
+                android:textColor="@color/ink" android:textColorHint="@color/muted"
+                android:padding="12dp" android:background="@drawable/bg_panel"/>
+            <ScrollView android:layout_width="match_parent"
+                android:layout_height="0dp" android:layout_weight="1"
+                android:fillViewport="false">
+                <LinearLayout android:id="@+id/historyList"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical" android:paddingTop="9dp"/>
+            </ScrollView>
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/closeHistoryButton"
+                android:layout_width="match_parent" android:layout_height="44dp"
+                android:text="Schließen" android:textAllCaps="false"
+                android:textColor="@color/ink" app:backgroundTint="@color/surface_raised"/>
+        </LinearLayout>
     </FrameLayout>
 
     <LinearLayout android:layout_width="match_parent" android:layout_height="67dp"
