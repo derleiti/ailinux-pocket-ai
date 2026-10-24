@@ -17,6 +17,7 @@ import me.ailinux.pocket.mcp.McpAgentUi
 import me.ailinux.pocket.mcp.McpAgentSession
 import me.ailinux.pocket.mcp.McpToolCatalog
 import me.ailinux.pocket.mcp.McpHealthCheck
+import me.ailinux.pocket.mcp.McpQuickActions
 import me.ailinux.pocket.mcp.McpVault
 import me.ailinux.pocket.mcp.McpProfile
 import me.ailinux.pocket.mcp.McpAuth
@@ -71,11 +72,21 @@ class MainActivity : AppCompatActivity() {
     private var activeTransferName: String? = null
     private var activePartialLabel: TextView? = null
     private var cancelTransfer = AtomicBoolean(false)
+    private var pendingExportModel: File? = null
+    private var activeExportFileName: String? = null
     private var currentPage = 0
     private val prefs by lazy { getSharedPreferences("pocket_settings", MODE_PRIVATE) }
 
     private val modelPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { importModel(it) }
+    }
+
+    private val modelExportPicker = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { destination ->
+        val source = pendingExportModel
+        pendingExportModel = null
+        if (destination != null && source != null) exportModel(source, destination)
     }
 
     private val chatPage by lazy { findViewById<View>(R.id.chatPage) }
@@ -101,6 +112,9 @@ class MainActivity : AppCompatActivity() {
         val installedVersion = packageManager.getPackageInfo(packageName, 0).versionName ?: "unbekannt"
         findViewById<TextView>(R.id.appVersion).text = "AILinux Pocket AI  •  $installedVersion"
         store = ModelStore(this)
+        pendingExportModel = savedInstanceState
+            ?.getString("pocket_pending_export_model")
+            ?.let { File(store.dir, it) }
         mcpUi = McpSettingsUi(this,
             findViewById(R.id.mcpServerList),
             findViewById(R.id.addMcpServerButton)) { result ->
@@ -125,7 +139,8 @@ class MainActivity : AppCompatActivity() {
             if (busy) toast("MCP-Modus erst nach der aktuellen Aktion wechseln.")
             else mcpAgent.showMenu(
                 openManualTools = { mcpUi.showToolsChooser() },
-                openHealthCheck = { showLiveMcpHealth("/mcp health", "") }
+                openHealthCheck = { showLiveMcpHealth("/mcp health", "") },
+                openQuickHelp = { showQuickActionPicker() }
             )
         }
         findViewById<MaterialButton>(R.id.importButton).setOnClickListener {
@@ -266,6 +281,15 @@ class MainActivity : AppCompatActivity() {
         sendButton.isEnabled = canInteract || generationJob?.isActive == true
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        // Android SAF may recreate the Activity while CreateDocument is open.
+        // Persist only the private GGUF filename, never a URI/token/credential.
+        pendingExportModel?.let {
+            outState.putString("pocket_pending_export_model", it.name)
+        }
+        super.onSaveInstanceState(outState)
+    }
+
     private fun refreshLibrary() {
         activePartialLabel = null
         modelsContainer.removeAllViews()
@@ -303,11 +327,20 @@ class MainActivity : AppCompatActivity() {
             ))
             val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             val load = smallButton(if (isActive) "✓ Aktiv" else "▶ Laden", isActive)
-            load.isEnabled = !busy && !isActive
+            load.isEnabled = !busy && !transferBusy && !isActive
             load.setOnClickListener { loadModel(file) }
             buttons.addView(load)
+            val export = smallButton("Export", false)
+            export.isEnabled = !busy && !transferBusy
+            export.setOnClickListener {
+                if (!busy && !transferBusy) {
+                    pendingExportModel = file
+                    modelExportPicker.launch(file.name)
+                }
+            }
+            buttons.addView(export)
             val remove = smallButton("Löschen", false)
-            remove.isEnabled = !busy && !isActive
+            remove.isEnabled = !busy && !transferBusy && !isActive
             remove.setOnClickListener {
                 AlertDialog.Builder(this)
                     .setTitle("Modell löschen?")
@@ -698,6 +731,177 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Expose discoverable quick actions in the MCP menu. Picking a command
+     * only fills the composer; user presses Send and approves the tool once.
+     */
+    private fun showQuickActionPicker() {
+        val actions = listOf(
+            "Discord: Kontoverbindung prüfen" to "/mcp quick discord-status",
+            "Discord: freigegebene Server" to "/mcp quick discord-guilds",
+            "Discord: Nova-Voice-Status" to "/mcp quick discord-voice",
+            "TriForce: tatsächlicher Systemstatus" to "/mcp quick triforce-status",
+            "TriForce: Benachrichtigungen lesen" to "/mcp quick notifications",
+            "TriForce: Websuche" to "/mcp search ",
+            "TriForce: Code durchsuchen" to "/mcp code-search ",
+            "TriForce: Speicher durchsuchen" to "/mcp memory-search "
+        )
+        AlertDialog.Builder(this)
+            .setTitle("MCP-Schnellbefehle · ohne Spark")
+            .setMessage("Jeder Befehl nutzt ein echtes, vorher am Server geprüftes Werkzeug. " +
+                "Zum Ausführen bestätigen und danach den Toolaufruf einmal erlauben.")
+            .setItems(actions.map { it.first }.toTypedArray()) { _, index ->
+                messageInput.setText(actions[index].second)
+                messageInput.setSelection(messageInput.text.length)
+                showPage(0)
+            }
+            .setNegativeButton("Schließen", null).show()
+    }
+
+    /** Direct, one-shot read tools bypass Spark and never infer tool names. */
+    private fun showQuickMcpAction(
+        question: String, request: McpQuickActions.Selection.Request
+    ) {
+        val profiles = try {
+            McpVault(applicationContext).list()
+        } catch (problem: Exception) {
+            showError("MCP-Tresor konnte nicht gelesen werden", problem)
+            return
+        }
+        val candidates = profiles.filter {
+            McpQuickActions.matchesProfile(it, request.target)
+        }
+        if (candidates.isEmpty()) {
+            messageInput.setText("")
+            appendReadOnlyChat(question, McpQuickActions.unavailable(request.target))
+            return
+        }
+        val current = mcpAgent.current()?.profileId
+        val preferred = candidates.firstOrNull { it.id == current }
+        if (preferred != null || candidates.size == 1) {
+            runQuickMcpAction(question, request, preferred ?: candidates.single())
+        } else {
+            AlertDialog.Builder(this)
+                .setTitle("Direkte MCP-Leseabfrage: Server auswählen")
+                .setItems(candidates.map { it.title + " · " + it.endpoint }.toTypedArray()) { _, index ->
+                    runQuickMcpAction(question, request, candidates[index])
+                }
+                .setNegativeButton("Abbrechen", null).show()
+        }
+    }
+
+    /**
+     * Discover -> validate -> ask consent -> single tool call -> raw receipt.
+     * OAuth refresh and all MCP traffic stay off the Android UI thread.
+     * No retry is safe after a possibly executed call.
+     */
+    private fun runQuickMcpAction(
+        question: String,
+        request: McpQuickActions.Selection.Request,
+        profile: McpProfile
+    ) {
+        if (busy) { toast("Pocket AI arbeitet bereits."); return }
+        messageInput.setText("")
+        messages.add(ChatMessage(true, question))
+        messages.add(ChatMessage(false, "🔎 Prüfe verfügbares MCP-Lesewerkzeug direkt am Server …"))
+        val answerIndex = messages.lastIndex
+        chatAdapter.notifyItemRangeInserted(answerIndex - 1, 2)
+        findViewById<View>(R.id.emptyState).visibility = View.GONE
+        showPage(0)
+        messagesView.scrollToPosition(answerIndex)
+        busy = true
+        renderChatState()
+        setStatus("● MCP WERKZEUG PRÜFEN …")
+        lifecycleScope.launch {
+            try {
+                val prepared = withContext(Dispatchers.IO) {
+                    val vault = McpVault(applicationContext)
+                    val fresh = vault.get(profile.id)
+                        ?: error("MCP-Profil wurde entfernt")
+                    require(
+                        fresh.endpoint == profile.endpoint &&
+                        fresh.auth == profile.auth &&
+                        McpQuickActions.matchesProfile(fresh, request.target)
+                    ) { "MCP-Profil hat sich geändert. Bitte erneut auswählen." }
+                    if (fresh.auth == McpAuth.OAUTH &&
+                        fresh.oauthAccessToken.isBlank() &&
+                        fresh.oauthRefreshToken.isBlank()) {
+                        null
+                    } else {
+                        val authorized = McpOAuth(vault).refreshIfNeeded(fresh)
+                        val info = McpConnection.inspect(authorized)
+                        val proposal = McpQuickActions.validatedProposal(request, info)
+                        Pair(authorized, proposal)
+                    }
+                }
+                if (prepared == null) {
+                    messages[answerIndex].content = McpQuickActions.noOAuth(profile)
+                    setStatus("● MCP LOGIN NÖTIG")
+                } else {
+                    val (authorized, proposal) = prepared
+                    messages[answerIndex].content =
+                        "🔎 Werkzeug bestätigt: " + proposal.tool.name +
+                        "\nServer: " + authorized.title +
+                        "\nAufruf benötigt deine ausdrückliche Freigabe."
+                    chatAdapter.notifyItemChanged(answerIndex)
+                    setStatus("● MCP FREIGABE …")
+                    val approved = mcpAgent.requestQuickReadApproval(authorized, proposal)
+                    if (!approved) {
+                        messages[answerIndex].content =
+                            "⛔ MCP-Leseabfrage abgelehnt. Kein Werkzeug aufgerufen."
+                        setStatus("● MCP ABGELEHNT")
+                    } else {
+                        messages[answerIndex].content =
+                            "🔧 Freigegeben: Anfrage an den echten MCP-Server wird gesendet …"
+                        chatAdapter.notifyItemChanged(answerIndex)
+                        setStatus("● MCP LESEABFRAGE …")
+                        mcpDispatchInFlight = true
+                        try {
+                            val result = withContext(Dispatchers.IO) {
+                                val latest = McpVault(applicationContext).get(profile.id)
+                                    ?: error("MCP-Profil wurde entfernt")
+                                check(latest.endpoint == authorized.endpoint &&
+                                      latest.auth == authorized.auth) {
+                                    "MCP-Profil wurde während der Freigabe geändert"
+                                }
+                                McpConnection.callTool(authorized, proposal.tool, proposal.args)
+                            }
+                            messages[answerIndex].content =
+                                McpQuickActions.displayReceipt(proposal.tool, result)
+                            setStatus("● MCP SERVERANTWORT")
+                        } catch (problem: Exception) {
+                            messages[answerIndex].content =
+                                "⚠️ MCP-Leseabfrage fehlgeschlagen / Ergebnis unbekannt.\n" +
+                                "Werkzeug: " + proposal.tool.name + "\n" +
+                                (problem.message ?: "Netzwerk- oder Serverfehler").take(550) +
+                                "\nKein automatischer Wiederholungsversuch."
+                            setStatus("● MCP UNBESTÄTIGT")
+                        } finally {
+                            mcpDispatchInFlight = false
+                        }
+                    }
+                }
+            } catch (problem: Exception) {
+                val detail = if (problem is McpHttpFailure &&
+                    problem.code in setOf(401, 403)) {
+                    "HTTP " + problem.code + ": Zugriff verweigert oder Login erforderlich."
+                } else {
+                    (problem.message ?: "Keine MCP-Serverantwort").take(550)
+                }
+                messages[answerIndex].content =
+                    "⚠️ MCP-Werkzeug nicht ausgeführt.\n" +
+                    "Profil: " + profile.title + "\nGrund: " + detail +
+                    "\nKein Erfolg bestätigt."
+                setStatus("● MCP UNBESTÄTIGT")
+            } finally {
+                chatAdapter.notifyItemChanged(answerIndex)
+                messagesView.scrollToPosition(answerIndex)
+                busy = false
+                renderChatState()
+            }
+        }
+    }
+
     private fun sendMessage() {
         if (busy) { toast("Pocket AI ist beschäftigt."); return }
         val text = messageInput.text.toString().trim()
@@ -709,6 +913,18 @@ class MainActivity : AppCompatActivity() {
         McpToolCatalog.requestedFilter(text)?.let {
             showLiveMcpCatalog(text, it)
             return
+        }
+        when (val direct = McpQuickActions.requestedAction(text)) {
+            is McpQuickActions.Selection.Request -> {
+                showQuickMcpAction(text, direct)
+                return
+            }
+            is McpQuickActions.Selection.Invalid -> {
+                messageInput.setText("")
+                appendReadOnlyChat(text, "⚠️ " + direct.reason)
+                return
+            }
+            null -> Unit
         }
         if (!::engine.isInitialized || activeModel == null) {
             toast("Bitte zuerst ein Modell laden. Für MCP geht auch /mcp tools.")
@@ -869,6 +1085,63 @@ class MainActivity : AppCompatActivity() {
                 busy = false
                 sendButton.text = "➤"
                 renderChatState()
+            }
+        }
+    }
+
+    /**
+     * Stream GGUF to a document the user explicitly created with Android's
+     * Storage Access Framework. Progress and cancellation share the existing
+     * model transfer controls; no broad storage permission is requested.
+     */
+    private fun exportModel(file: File, destination: Uri) {
+        if (busy || transferBusy) {
+            toast("Bitte die laufende Aufgabe zuerst abschließen.")
+            return
+        }
+        transferBusy = true
+        activeExportFileName = file.name
+        cancelTransfer = AtomicBoolean(false)
+        setDownloadUi("Exportiere " + file.name + " …", true)
+        showPage(1)
+        lifecycleScope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    store.export(file, destination, cancelTransfer) { progress ->
+                        runOnUiThread {
+                            if (transferBusy && activeExportFileName == file.name) {
+                                downloadProgress.isIndeterminate = progress.percent < 0
+                                if (progress.percent >= 0) {
+                                    downloadProgress.progress = progress.percent
+                                }
+                                downloadStatus.text = "Exportiere " + file.name +
+                                    " · " + ModelStore.displaySize(progress.done) +
+                                    " / " + ModelStore.displaySize(progress.total)
+                            }
+                        }
+                    }
+                }
+                setDownloadUi(
+                    "✓ GGUF exportiert: " + file.name + " · " +
+                        ModelStore.displaySize(bytes) +
+                        ". Vor dem Löschen der App die Zieldatei prüfen.", false
+                )
+                toast("GGUF in ausgewählten Ordner exportiert.")
+            } catch (_: TransferCancelled) {
+                setDownloadUi(
+                    "Export abgebrochen. Eine unvollständige Datei kann im Zielordner liegen.",
+                    false
+                )
+            } catch (problem: Exception) {
+                setDownloadUi(
+                    "Export fehlgeschlagen. Möglicherweise liegt eine unvollständige Zieldatei vor.",
+                    false
+                )
+                showError("GGUF konnte nicht exportiert werden", problem)
+            } finally {
+                activeExportFileName = null
+                transferBusy = false
+                refreshLibrary()
             }
         }
     }

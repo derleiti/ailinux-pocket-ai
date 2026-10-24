@@ -2,6 +2,20 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
 }
+// Production signing is opt-in. The private keystore comes from a protected
+// local environment or protected GitHub Environment secrets, never source.
+val releaseEnvKeys = listOf(
+    "AILINUX_RELEASE_KEYSTORE_FILE",
+    "AILINUX_RELEASE_STORE_PASSWORD",
+    "AILINUX_RELEASE_KEY_ALIAS",
+    "AILINUX_RELEASE_KEY_PASSWORD"
+)
+val releaseEnv = releaseEnvKeys.associateWith { System.getenv(it) }
+val releaseSigningPresent = releaseEnv.values.count { !it.isNullOrBlank() }
+if (releaseSigningPresent in 1..3) {
+    throw GradleException("Incomplete protected release signing configuration")
+}
+
 android {
     namespace = "me.ailinux.pocket"
     compileSdk = 36
@@ -9,14 +23,27 @@ android {
         applicationId = "me.ailinux.pocket"
         minSdk = 33
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.0.0-rc.5"
+        versionCode = 16
+        versionName = "1.0.0-rc.6"
         ndk { abiFilters += "arm64-v8a" }
+    }
+    signingConfigs {
+        if (releaseSigningPresent == releaseEnvKeys.size) {
+            create("ailinuxRelease") {
+                storeFile = file(releaseEnv.getValue("AILINUX_RELEASE_KEYSTORE_FILE")!!)
+                storePassword = releaseEnv.getValue("AILINUX_RELEASE_STORE_PASSWORD")!!
+                keyAlias = releaseEnv.getValue("AILINUX_RELEASE_KEY_ALIAS")!!
+                keyPassword = releaseEnv.getValue("AILINUX_RELEASE_KEY_PASSWORD")!!
+            }
+        }
     }
     buildTypes {
         debug { isMinifyEnabled = false }
         release {
             isMinifyEnabled = false
+            if (releaseSigningPresent == releaseEnvKeys.size) {
+                signingConfig = signingConfigs.getByName("ailinuxRelease")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

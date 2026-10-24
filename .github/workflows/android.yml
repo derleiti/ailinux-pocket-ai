@@ -27,7 +27,7 @@ jobs:
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "platforms;android-36" "build-tools;35.0.0" "ndk;29.0.13113456" "cmake;3.31.6"
       - uses: gradle/actions/setup-gradle@v4
       - name: Build and tests
-        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
       - name: Create temporary CI-only debug signing key
         run: |
           mkdir -p "$HOME/.android"
@@ -39,10 +39,10 @@ jobs:
       - name: Compact and verify test APK
         run: |
           python3 scripts/compact-debug-apk.py
-          ./scripts/verify-apk.sh dist/AILinux-Pocket-AI-1.0.0-rc.5-arm64-debug.apk
+          ./scripts/verify-apk.sh dist/AILinux-Pocket-AI-1.0.0-rc.6-arm64-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: AILinux-Pocket-AI-debug-arm64
-          path: dist/AILinux-Pocket-AI-1.0.0-rc.5-arm64-debug.apk
+          path: dist/AILinux-Pocket-AI-1.0.0-rc.6-arm64-debug.apk
           if-no-files-found: error
           retention-days: 14

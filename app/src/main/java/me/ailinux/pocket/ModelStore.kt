@@ -147,6 +147,34 @@ class ModelStore(private val context: Context) {
         }
     }
 
+    /**
+     * Export an existing private GGUF to a user-created Android SAF document.
+     * No broad filesystem permission and no temporary copy are required.
+     * The destination is chosen by the user; an interrupted external document
+     * may be partial and must not be used as a migration backup.
+     */
+    fun export(
+        source: File,
+        destination: Uri,
+        cancelled: AtomicBoolean,
+        progress: (TransferProgress) -> Unit
+    ): Long {
+        val canonical = source.canonicalFile
+        require(canonical.parentFile == dir.canonicalFile &&
+            canonical.isFile && canonical.name.endsWith(".gguf", true)) {
+            "Nur eigene GGUF-Modelle dürfen exportiert werden."
+        }
+        validate(canonical)
+        val length = canonical.length()
+        val output = context.contentResolver.openOutputStream(destination, "w")
+            ?: error("Gewählte Zieldatei kann nicht beschrieben werden.")
+        return canonical.inputStream().buffered().use { input ->
+            output.use { target ->
+                ModelExportCopy.copy(input, target, length, cancelled, progress)
+            }
+        }
+    }
+
     fun delete(file: File) {
         require(file.parentFile?.canonicalFile == dir.canonicalFile) { "Ungültiger Modellpfad." }
         require(file.name.endsWith(".gguf", true) || file.name.endsWith(".gguf.part", true))

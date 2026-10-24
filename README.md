@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 1.0.0-rc.5.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.6.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -558,3 +558,43 @@ and HIGH, including tool parameters and multi-turn reasoning reconstruction.
 Android JVM tests also cover the actual observed misleading screenshot
 request and malformed Thinking output. On-device sampling behavior must
 still be tested: these checks do not imply guaranteed 4B tool selection.
+
+
+## RC6 - Model-independent MCP quick actions and GGUF backup export
+
+The tiny Spark 4B model should not need to reason about every simple tool
+request. RC6 adds a direct, explicitly approved read-only path:
+
+- CHAT > MCP > MCP Schnellbefehle (ohne Spark) offers simple account,
+  grants, voice-state, TriForce system status, notifications and search
+  commands. The chooser fills the input; nothing executes until Send.
+- The direct path works even without loading a local GGUF. It uses the
+  Android profile's actual authenticated endpoint and live tools/list,
+  validates the exact tool and current input schema, asks for one-time
+  explicit approval and shows the true raw tools/call server response.
+- Fixed allowlists and exact HTTPS host/path checks prevent users' natural
+  chat text from invoking arbitrary write-capable tools. Unrecognized
+  commands or unexpected arguments fail closed, never fall back to a fake
+  LLM result. There are no automatic retries after a dispatched tool.
+- Discord's linked-account state is distinct from server-specific read
+  grants. A voice-status result of server_read_grant_required is explained
+  as missing permission, not a down server.
+- Tests simulate HTTP 401/403, timeouts, altered tool schemas, server tool
+  disappearance, consent denial and a request possibly completed before an
+  HTTP error; none is counted as a verified action without its receipt.
+- MODELS > Export creates a user-selected external GGUF backup with
+  Android Storage Access Framework. Large files copy using a bounded
+  128 KiB buffer with progress and cancel controls; no broad filesystem
+  permission is required. Failed/cancelled exports may leave partial
+  external files and are not valid backups.
+- A manual, protected production Android-signing CI workflow is prepared
+  with secret-only private signing inputs and a pinned certificate. No
+  long-term production signing key has been configured or published.
+  Development RC debug signing remains unchanged for in-place RC updates.
+
+Documentation: docs/PIXEL_MCP_QA.md, docs/RELEASE_SIGNING.md.
+
+Remaining external dependencies: an actual Pixel A/B tool-choice test,
+account-specific Discord server grants, production signing secrets and QA of
+the debug-to-production GGUF data migration. Android foreground downloads,
+GPU acceleration and other untested GGUF architectures remain future work.

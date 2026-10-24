@@ -1,0 +1,65 @@
+name: Android Production Signing (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: 'Stable versionName (e.g. 1.0.0, not a release candidate)'
+        required: true
+        type: string
+
+# Production keys MUST live in the protected GitHub "production"
+# Environment. This workflow never creates a key or publishes automatically.
+jobs:
+  signed_build:
+    name: Protected signed Android release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android SDK and NDK
+        run: |
+          test -d "$ANDROID_HOME" || exit 1
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "platforms;android-36" "build-tools;35.0.0" "ndk;29.0.13113456" "cmake;3.31.6"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Load release keystore from protected environment
+        env:
+          KEYSTORE_BASE64: ${{ secrets.AILINUX_RELEASE_KEYSTORE_B64 }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo "Production keystore secret is missing"; exit 1; }
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/ailinux-release.jks"
+          test -s "$RUNNER_TEMP/ailinux-release.jks"
+      - name: Test, build and verify production certificate
+        env:
+          AILINUX_RELEASE_KEYSTORE_FILE: ${{ runner.temp }}/ailinux-release.jks
+          AILINUX_RELEASE_STORE_PASSWORD: ${{ secrets.AILINUX_RELEASE_STORE_PASSWORD }}
+          AILINUX_RELEASE_KEY_ALIAS: ${{ secrets.AILINUX_RELEASE_KEY_ALIAS }}
+          AILINUX_RELEASE_KEY_PASSWORD: ${{ secrets.AILINUX_RELEASE_KEY_PASSWORD }}
+          AILINUX_RELEASE_CERT_SHA256: ${{ vars.AILINUX_RELEASE_CERT_SHA256 }}
+          AILINUX_EXPECTED_VERSION_NAME: ${{ inputs.expected_version }}
+        run: |
+          ./gradlew --no-daemon --max-workers=1 \
+            :app:testDebugUnitTest :app:lintRelease :app:assembleRelease
+          ./scripts/verify-production-apk.sh \
+            app/build/outputs/apk/release/app-release.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AILinux-Pocket-AI-production-signed-arm64
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove temporary private release keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/ailinux-release.jks"

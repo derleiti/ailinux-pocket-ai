@@ -46,12 +46,18 @@ class McpAgentUi(
      * be represented as having active tool access in the Android chat UI. */
     fun clearSessionSilently() { session = null }
 
-    fun showMenu(openManualTools: () -> Unit, openHealthCheck: () -> Unit) {
+    fun showMenu(
+        openManualTools: () -> Unit,
+        openHealthCheck: () -> Unit,
+        openQuickHelp: () -> Unit
+    ) {
         val options = if (session != null)
             arrayOf("KI + MCP neu verbinden", "MCP-Tools manuell",
-                "MCP Health-Check (echte Serverprüfung)", "KI + MCP ausschalten")
+                "MCP Health-Check (echte Serverprüfung)",
+                "MCP Schnellbefehle (ohne Spark)", "KI + MCP ausschalten")
         else arrayOf("KI + MCP aktivieren", "MCP-Tools manuell",
-            "MCP Health-Check (echte Serverprüfung)")
+            "MCP Health-Check (echte Serverprüfung)",
+            "MCP Schnellbefehle (ohne Spark)")
         val name = session?.let { "\nAktiv: " + it.serverName + " · " + it.tools.size + " Tools" }
             ?: "\nDein Modell arbeitet aktuell ohne automatisches MCP-Planning."
         AlertDialog.Builder(activity)
@@ -62,7 +68,8 @@ class McpAgentUi(
                     0 -> chooseServer()
                     1 -> openManualTools()
                     2 -> openHealthCheck()
-                    3 -> {
+                    3 -> openQuickHelp()
+                    4 -> {
                         session = null
                         onActiveChanged(null)
                         toast("KI + MCP ausgeschaltet")
@@ -270,6 +277,46 @@ class McpAgentUi(
                 dialog.show()
             }
         }
+
+    /**
+     * Direct quick actions have NO model agent session, so they cannot reuse
+     * a fake McpAgentSession. Confirm the exact live-discovered tool and args
+     * on their own. Read-only is a local allowlist claim, not a server grant.
+     */
+    suspend fun requestQuickReadApproval(
+        profile: McpProfile,
+        proposal: McpAgentBridge.Decision.Proposed
+    ): Boolean = withContext(Dispatchers.Main) {
+        suspendCancellableCoroutine { continuation ->
+            if (activity.isFinishing || activity.isDestroyed) {
+                continuation.resume(false)
+                return@suspendCancellableCoroutine
+            }
+            val dialog = AlertDialog.Builder(activity)
+                .setTitle("MCP-Leseabfrage einmal erlauben?")
+                .setMessage(
+                    "Profil: " + profile.title +
+                    "\nEndpunkt: " + profile.endpoint +
+                    "\nWerkzeug: " + proposal.tool.name +
+                    "\nParameter: " + proposal.args.toString() +
+                    "\n\nPocket AI hält dieses Werkzeug lokal für lesend. " +
+                    "Welche Daten wirklich zurückgegeben werden, bestimmt der " +
+                    "Server und dein Konto. Ohne diese Freigabe erfolgt kein Aufruf."
+                )
+                .setNegativeButton("Ablehnen") { _, _ ->
+                    if (continuation.isActive) continuation.resume(false)
+                }
+                .setPositiveButton("Einmal lesen") { _, _ ->
+                    if (continuation.isActive) continuation.resume(true)
+                }
+                .setOnCancelListener {
+                    if (continuation.isActive) continuation.resume(false)
+                }
+                .create()
+            continuation.invokeOnCancellation { dialog.dismiss() }
+            dialog.show()
+        }
+    }
 
     suspend fun execute(
         active: McpAgentSession,
