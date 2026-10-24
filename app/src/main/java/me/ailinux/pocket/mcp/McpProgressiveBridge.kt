@@ -20,6 +20,9 @@ object McpProgressiveBridge {
     const val MAX_STEPS = 5
     const val MAX_SERVERS = 4
     const val MAX_RESULTS = 6
+    /** Large authenticated catalogues stay on the host, never in the model prompt. */
+    const val MAX_CATALOG_TOOLS_PER_SERVER = 4000
+    const val MAX_CATALOG_PAGES = 80
     const val CATALOG_LIFETIME_MS = 10 * 60 * 1000L
     private val toolName = Regex("^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
     private val word = Regex("[\\p{L}\\p{N}_-]{2,}")
@@ -119,7 +122,7 @@ object McpProgressiveBridge {
             val all = linkedMapOf<String, RemoteCall>()
             for (source in this.sources) {
                 require(source.endpoint.startsWith("https://"))
-                for (tool in source.tools.take(250)) {
+                for (tool in source.tools.take(MAX_CATALOG_TOOLS_PER_SERVER)) {
                     if (!toolName.matches(tool.name)) continue
                     if (McpToolSchema.supported(tool.schema) != null) continue
                     if (runCatching {
