@@ -25,6 +25,7 @@ import me.ailinux.pocket.mcp.McpQuickActions
 import me.ailinux.pocket.mcp.McpToolFeedback
 import me.ailinux.pocket.mcp.McpServerGuidance
 import me.ailinux.pocket.mcp.McpProgressiveBridge
+import me.ailinux.pocket.mcp.McpOnDemandDiscovery
 import me.ailinux.pocket.mcp.McpTool
 import me.ailinux.pocket.mcp.McpVault
 import me.ailinux.pocket.mcp.McpProfile
@@ -1463,6 +1464,10 @@ class MainActivity : AppCompatActivity() {
                     return false
                 }
                 is McpAgentBridge.Decision.Answer -> {
+                    if (!hadRealCall && !hadSearch &&
+                        tryHostDiscovery(active, request, runtime, answer, answerIndex)) {
+                        return true
+                    }
                     val response = decision.text.ifBlank { "Keine Modellantwort erzeugt." }
                     val unverifiedLogs = McpLogCheck.modelOnlyAuditClaim(request, response)
                     val unverifiedHealth = McpHealthCheck.modelOnlyClaim(response)
@@ -1928,6 +1933,48 @@ class MainActivity : AppCompatActivity() {
      * server receipt -> genuine role=tool message. Same auth and schema
      * revalidation as the existing GGUF progressive bridge.
      */
+    /** Shared for GGUF and LiteRT: model-independent, fail-closed fallback.
+     * Never fabricates a native model tool call or forwards remote output as user text.
+     */
+    private suspend fun tryHostDiscovery(
+        active: McpAgentSession,
+        request: String,
+        run: McpProgressiveBridge.Run,
+        answer: ChatMessage,
+        answerIndex: Int
+    ): Boolean {
+        val plan = runCatching { McpOnDemandDiscovery.propose(request, run) }.getOrNull()
+            ?: return false
+        if (mcpAgent.current() != active) return false
+        answer.content = "🔎 App-gestützter Werkzeugvorschlag (kein Modell-ToolCall): " +
+            plan.source.title + " / " + plan.tool.name + "\nNoch nicht ausgeführt."
+        chatAdapter.notifyItemChanged(answerIndex)
+        if (!mcpAgent.requestAutoApproval(active, plan)) {
+            answer.content = "⛔ MCP-Aufruf abgelehnt. Keine Serveraktion."
+            chatAdapter.notifyItemChanged(answerIndex)
+            return true
+        }
+        // Mark before dispatch; unknown execution is never retried.
+        run.markDispatched(plan)
+        mcpDispatchInFlight = true
+        try {
+            val result = withContext(Dispatchers.IO) {
+                mcpAgent.executeAuto(active, plan)
+            }
+            answer.content = "🔧 ECHTE MCP-SERVERANTWORT (App-gestützt):\n" +
+                McpAgentBridge.receipt(plan.tool, result) +
+                "\nKeine native Modell-Toolfortsetzung behauptet."
+        } catch (error: Exception) {
+            answer.content = "⚠️ MCP-Ausführung unklar: " +
+                (error.message ?: "Netzwerkfehler").take(260) +
+                "\nKein automatischer Wiederholungsversuch."
+        } finally {
+            mcpDispatchInFlight = false
+            chatAdapter.notifyItemChanged(answerIndex)
+        }
+        return true
+    }
+
     private suspend fun runLiteRtToolbridge(
         active: McpAgentSession,
         runtime: LiteRtRuntime,
@@ -1962,6 +2009,10 @@ class MainActivity : AppCompatActivity() {
                     (lastServerResult?.let {
                         McpToolFeedback.misleadingSummary(it, summary)
                     } == true)
+                if (!hadRealCall && progressive && (catalog?.searchCount ?: 0) == 0) {
+                    if (tryHostDiscovery(active, request, checkNotNull(catalog),
+                            answer, answerIndex)) return
+                }
                 if (!hadRealCall && McpRequestRouting.expectsToolEvidence(request)) {
                     val searched = (catalog?.searchCount ?: 0) > 0
                     setAnswer(if (searched)
