@@ -1633,11 +1633,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
         McpToolCatalog.requestedFilter(text)?.let {
-            val autoActive = mcpAgent.current()?.progressiveSources?.isNotEmpty() == true
-            if (!autoActive || text.startsWith("/mcp", ignoreCase = true)) {
-                showLiveMcpCatalog(text, it)
-                return
-            }
+            // User requested the actual catalogue: prefer authenticated
+            // tools/list over small-model prose, even with AUTO-BRIDGE on.
+            showLiveMcpCatalog(text, it)
+            return
         }
         when (val direct = McpQuickActions.requestedAction(text)) {
             is McpQuickActions.Selection.Request -> {

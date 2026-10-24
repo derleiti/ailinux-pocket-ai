@@ -16,6 +16,7 @@ class LiteRtMcpProtocolTest {
         assertTrue(s.contains("mcp_get_tool_details"))
         assertTrue(s.contains("mcp_call_tool"))
         assertTrue(s.contains("At most one remote action"))
+        assertTrue(s.contains("DO NOT explain MCP"))
         assertTrue(s.length < 510)
         assertFalse(s.contains("Bearer"))
     }

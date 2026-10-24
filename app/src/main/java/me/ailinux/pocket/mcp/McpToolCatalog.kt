@@ -31,6 +31,10 @@ object McpToolCatalog {
             .replace(Regex("\\s+"), " ")
         if (text.length !in 3..250) return null
         explicit.matchEntire(text)?.let { return it.groupValues[1].trim() }
+        // A short explicit catalogue request must not become a generic
+        // LLM conversation, even when AUTO-BRIDGE is active.
+        if (text.matches(Regex("(?:mcp\\s+)?(?:tools?|werkzeuge?|funktionen?)\\s+(?:mcp)?")) ||
+            text.matches(Regex("mcp\\s+(?:tools?|werkzeuge?|funktionen?)"))) return ""
         val mentionsTools = subject.containsMatchIn(text) &&
             tools.containsMatchIn(text) && listing.containsMatchIn(text)
         val askingCapability = "mcp" in text && "discord" in text &&
