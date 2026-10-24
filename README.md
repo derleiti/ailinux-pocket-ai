@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 1.0.0-rc.13.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.14.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -828,3 +828,52 @@ delayed UI callback dispatches >=650 ms during this app process.
 This is NOT an ANR diagnosis. It records no prompts, tokens,
 screenshots, device files or network data. Actual root cause
 requires an on-device Android trace.
+
+
+## RC14 - Native MCP prefill progress and responsive Auto-Bridge
+
+The Pixel showed long MCP tools binding with intermittent GUI
+unresponsiveness. Android's process exits were user-initiated during
+phase=system_prompt with 3-4 GB RSS: NOT evidence of an app crash.
+Only one UI-lag sample was available after restarting the app, so
+that result was too limited to establish responsiveness.
+
+The expensive part after authorized MCP tools/list discovery is the
+local llama.cpp CPU decode of a new Jinja SYSTEM+tools prefix.
+
+Changes:
+- Exact native C++ progress counters for SYSTEM tokens, accessible
+  through a lock-free atomic JNI query. The GUI shows decoded/total
+  tokens, percent and elapsed seconds with a real progress bar,
+  sampled every 350 ms without waiting on the llama dispatcher.
+- The MCP chip says MCP STARTET during decoding, and switches to
+  MCP AUTO LOW only after real successful native ModelReady.
+- The chat input stays editable and navigation remains usable
+  while binding; sending is disabled until the model is ready.
+- Status/progress has its own full-width row. The POCKET AI title
+  no longer wraps behind the model/MCP status labels.
+- Batch prefill threads capped at 3 to reduce competition with
+  Android's main UI thread. Generation thread limit unchanged.
+- Exact system prompt, tool JSON and Thinking mode reuse the
+  already decoded SYSTEM KV prefix when the same MCP bridge is
+  selected again. Only the old conversation tail is removed.
+  Any changed tool, prompt or mode forces normal full re-prefill;
+  failed KV trimming safely falls back to the full reset path.
+- More compact app-owned discovery instructions and the three
+  local tool descriptions reduce first-bind model prefill tokens.
+  Schema validation and per-remote-call approval remain enforced.
+- Existing offline process diagnostics show the last bind token
+  count and elapsed seconds for this same running app process.
+- Model-side MCP search output still uses genuine structured
+  results from authenticated tools/list, while the separate human
+  display renders complete names instead of truncating 1250 bytes
+  of raw JSON. A real RC13 Pixel check discovered 100 tools on
+  two selected MCP servers; actual tools/call remains separately
+  gated by owner confirmation.
+
+This update does NOT change remote TriForce/Discord credentials,
+user grants, tools/list transport, or the one-real-call limit.
+
+The initial new system prefix may still require substantial CPU
+time. Android unit tests and ARM64 native build do not prove
+real device performance: a physical Pixel test is still needed.

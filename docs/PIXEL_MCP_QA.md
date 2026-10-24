@@ -256,3 +256,48 @@ JVM and host simulation cannot confirm those on-device interactions.
    REASON_ANR record is a distinct event.
 7. A real Pixel Perfetto trace is required to attribute causes
    of persistent UI freezes. Host unit tests cannot prove performance.
+
+
+## RC14 - Native prefill progress and Pixel GUI validation
+
+1. Install RC14 OVER RC13 without clearing App Data or uninstalling.
+2. Load the already downloaded Spark-X2.6 GGUF, select MCP AUTO-BRIDGE
+   and the signed-in TriForce/Discord server profiles.
+3. While binding, top chip must show MCP STARTET. Chat status
+   should display true MCP-PREFILL decoded/total token counts,
+   percent, seconds, plus a horizontal progress bar.
+4. While binding, navigate CHAT/MODELLE/SETUP and type in composer.
+   These operations must remain usable, but send is disabled.
+5. Once the real ModelReady is confirmed, progress bar vanishes,
+   chat send is enabled, and chip changes to MCP AUTO LOW.
+6. Repeat the same AUTO selection/Thinking mode: identical native
+   system prefix should be reused without full CPU prefill.
+7. Change Thinking, native tools or system prompt: this must
+   trigger a full secure native prefill and not reuse the old prefix.
+8. Ask Spark to check real MCP tools and execute a read-only tool
+   using the normal search -> details -> per-call consent -> real
+   server receipt chain. No hidden network action or retry.
+9. Under SETUP -> Letzte App-Abstürze prüfen read the local
+   MCP-BINDUNG duration/decoded SYSTEM tokens and the UI delay
+   sample count while the app is still in the same running process.
+10. This does not prove an ANR from user-initiated REMOVE TASK or
+    killDueToPackageUpdate. Real device CPU, RAM and UI latency
+    must be verified with the Pixel.
+11. To avoid two system prefill passes, an alternate workflow is
+    configuring AUTO-BRIDGE BEFORE loading the GGUF model.
+
+
+## RC14 - Real 100-tool Pixel discovery confirmation
+
+A reported RC13 local mcp_search_tools result contained total_tools=100
+and connected_servers=2 (TriForce + Discord) with legitimate IDs
+such as s2/discord_connection_status. This confirms actual catalog
+discovery. It does NOT establish a successful tools/call or a native
+assistant's correct remote result interpretation.
+
+Under RC14, repeat the same query. The user-facing receipt should
+show six full readable names and complete server IDs, while the
+native GGUF continues receiving the original structured result.
+Next, request a real read-only Discord status, confirm the exact
+tool consent, and capture the actual remote receipt. Never label a
+plain model summary as proof of server access.

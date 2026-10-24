@@ -54,9 +54,8 @@ object McpProgressiveBridge {
     /** Model-visible definitions; argument schemas remain tiny and predictable. */
     fun functions(): List<McpTool> = listOf(
         McpTool(SEARCH,
-            "Suche in echten MCP-Toolslisten. ZUERST aufrufen, bevor du ein externes " +
-            "Werkzeug verwendest. query: Suchbegriffe wie 'discord status' oder 'server logs'. " +
-            "Ergebnis enthält reale tool_id-Bezeichner, KEINE ausgeführten Aktionen.",
+            "Suche reale tool_id in angemeldeten MCP tools/list: " +
+            "query z.B. 'discord status'. Max. 6 Treffer; keine Serveraktion.",
             JSONObject().put("type", "object")
                 .put("properties", JSONObject()
                     .put("query", JSONObject().put("type", "string")
@@ -68,9 +67,8 @@ object McpProgressiveBridge {
                 .put("required", JSONArray().put("query"))
                 .put("additionalProperties", false)),
         McpTool(DETAILS,
-            "Lade die echte Parameterbeschreibung eines zuvor durch " + SEARCH +
-            " gefundenen tool_id. Vor " + CALL + " erforderlich. " +
-            "Dies führt keine Serveraktion aus.",
+            "Lade das echte Schema einer zuvor gefundenen tool_id. " +
+            "Vor mcp_call_tool erforderlich, ohne Serveraktion.",
             JSONObject().put("type", "object")
                 .put("properties", JSONObject()
                     .put("tool_id", JSONObject().put("type", "string")
@@ -78,10 +76,9 @@ object McpProgressiveBridge {
                 .put("required", JSONArray().put("tool_id"))
                 .put("additionalProperties", false)),
         McpTool(CALL,
-            "NUR nach " + SEARCH + " und " + DETAILS + " ein echtes MCP-Werkzeug " +
-            "vorschlagen. tool_id aus Suche/Details; arguments_json: valides JSON-Objekt " +
-            "als Zeichenkette, z.B. '{}'. Vor JEDEM echten Aufruf fragt die App " +
-            "den Nutzer und prüft das Schema erneut. KEINE versteckten Aufrufe.",
+            "NUR nach Suche + Details einen echten MCP-Aufruf vorschlagen: " +
+            "tool_id, arguments_json als JSON-Objekt-STRING (z.B. '{}'). " +
+            "App prüft erneut und holt einmalige Nutzerfreigabe.",
             JSONObject().put("type", "object")
                 .put("properties", JSONObject()
                     .put("tool_id", JSONObject().put("type", "string")
@@ -265,6 +262,45 @@ object McpProgressiveBridge {
 
         fun listForUser(): String = sources.joinToString(" · ") {
             clean(it.title, 48) + " (" + it.tools.size + ")"
+        }
+    }
+
+    /**
+     * Short, human-readable evidence display for the user. The GGUF
+     * receives the UNMODIFIED structured JSON tool result, while this
+     * display never cuts JSON in the middle of a tool_id or schema.
+     * Keep all six names complete and separate "catalogue" from "call".
+     */
+    fun displaySearchResult(result: JSONObject): String {
+        val payload = result.optJSONArray("content")
+            ?.optJSONObject(0)?.optString("text").orEmpty()
+        if (result.optBoolean("isError", false)) {
+            return "⚠️ Lokale MCP-Werkzeugsuche fehlgeschlagen: " +
+                (runCatching { JSONObject(payload).optString("error") }
+                    .getOrNull() ?: "Kein Ergebnis").take(180) +
+                "\nKeine Serveraktion ausgeführt."
+        }
+        val data = runCatching { JSONObject(payload) }.getOrElse {
+            return "⚠️ MCP-Werkzeugliste konnte nicht gelesen werden. " +
+                "Keine Serveraktion ausgeführt."
+        }
+        val count = data.optInt("total_tools", 0)
+        val servers = data.optInt("connected_servers", 0)
+        val matches = data.optJSONArray("matches") ?: JSONArray()
+        return buildString {
+            append("🔎 MCP-Katalog: ")
+            append(count).append(" echte Tools auf ")
+                .append(servers).append(" verbundenen Servern")
+            append("\nGezeigt: ").append(matches.length())
+                .append(" Treffer (nur Suche, kein Tool ausgeführt)")
+            for (i in 0 until matches.length()) {
+                val item = matches.optJSONObject(i) ?: continue
+                append("\n").append(i + 1).append(". ")
+                    .append(item.optString("tool_id").take(170))
+                append(" · ").append(item.optString("server").take(44))
+                append("\n   ").append(item.optString("description").take(95))
+            }
+            append("\nFür einen echten Aufruf: Details laden und bestätigen.")
         }
     }
 

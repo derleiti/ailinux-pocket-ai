@@ -102,6 +102,13 @@ internal class InferenceEngineImpl private constructor(
 
     private external fun processSystemPrompt(systemPrompt: String, toolsJson: String): Int
 
+    /** Atomic count query on calling thread; NEVER wait for llamaDispatcher. */
+    @FastNative
+    private external fun systemPromptPrefillCountsNative(): Long
+
+    override fun systemPromptPrefillCounts(): Long = systemPromptPrefillCountsNative()
+
+
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
     /** True tool-role continuation; never feeds server data as user text. */
     private external fun processToolResult(

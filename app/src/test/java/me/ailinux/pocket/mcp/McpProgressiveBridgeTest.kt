@@ -105,6 +105,42 @@ class McpProgressiveBridgeTest {
         assertTrue(r.getString("next_step").contains("mcp_get_tool_details"))
     }
 
+    @Test fun userVisibleSearchResultShowsCompleteNamesWithoutTruncatedJson() {
+        val source = McpProgressiveBridge.Source(
+            "s1", "big-100", "https://api.ailinux.me/v1/mcp", "TriForce",
+            List(97) { i -> McpTool(
+                "long_valid_tool_name_number_$i",
+                "Read system telemetry available on demand, without taking any action.",
+                JSONObject().put("type", "object")
+            ) }
+        )
+        val discordSource = discord()
+        val state = McpProgressiveBridge.Run(listOf(source, discordSource))
+        assertEquals(100, state.totalTools)
+        val original = state.search("mcp tools", 6)
+        val textForModel = original.getJSONArray("content")
+            .getJSONObject(0).getString("text")
+        val parsed = JSONObject(textForModel)
+        assertEquals(6, parsed.getJSONArray("matches").length())
+        val forUser = McpProgressiveBridge.displaySearchResult(original)
+        assertTrue(forUser.contains("100 echte Tools"))
+        assertTrue(forUser.contains("2 verbundenen Servern"))
+        assertTrue(forUser.contains("6 Treffer"))
+        assertTrue(forUser.contains("s2/discord_connection_status"))
+        assertTrue(forUser.contains("s1/long_valid_tool_name_number_"))
+        assertTrue(forUser.contains("kein Tool ausgeführt"))
+        assertFalse(forUser.contains("{\"origin\""))
+        assertFalse(forUser.contains("Tool successfully called"))
+    }
+
+    @Test fun failedDiscoveryShowsNoAccidentalToolSuccess() {
+        val display = McpProgressiveBridge.displaySearchResult(
+            McpProgressiveBridge.localFailure("OAuth ist abgelaufen")
+        )
+        assertTrue(display.contains("OAuth ist abgelaufen"))
+        assertTrue(display.contains("Keine Serveraktion ausgeführt"))
+    }
+
     @Test fun noMatchingToolReturnsEmptyResultsRatherThanFabrication() {
         val out = report(run().search("missile-language-with-no-mcp-match"))
         assertEquals(0, out.getJSONArray("matches").length())

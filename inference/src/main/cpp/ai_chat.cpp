@@ -5,6 +5,7 @@
 #include <cctype>
 #include <string>
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <exception>
 #include <stdexcept>
@@ -33,6 +34,8 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
 constexpr int   N_THREADS_MIN           = 2;
 constexpr int   N_THREADS_MAX           = 4;
 constexpr int   N_THREADS_HEADROOM      = 2;
+// Preserve an extra CPU slot for Android UI while prefilling GGUF context.
+constexpr int   N_THREADS_BATCH_MAX     = 3;
 
 // Conservative Android default: memory is shared with the system and other apps.
 constexpr int   DEFAULT_CONTEXT_SIZE    = 2048;
@@ -242,7 +245,7 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
     ctx_params.n_batch = BATCH_SIZE;
     ctx_params.n_ubatch = BATCH_SIZE;
     ctx_params.n_threads = n_threads;
-    ctx_params.n_threads_batch = n_threads;
+    ctx_params.n_threads_batch = std::min(n_threads, N_THREADS_BATCH_MAX);
     auto *context = llama_init_from_model(g_model, ctx_params);
     if (context == nullptr) {
         LOGe("%s: llama_new_context_with_model() returned null)", __func__);
@@ -506,11 +509,32 @@ static bool g_incomplete_thinking_turn = false;
 static llama_pos system_prompt_position;
 static llama_pos current_position;
 
+// Visible to a tiny atomic JNI progress query while the single llama
+// dispatcher synchronously decodes the system prompt. No model data,
+// secrets or KV memory are ever accessed from the Android UI thread.
+static std::atomic<uint32_t> g_system_prefill_done{0};
+static std::atomic<uint32_t> g_system_prefill_total{0};
+static std::string g_last_bound_tools;
+static bool g_last_bound_thinking = false;
+static std::string g_last_bound_effort;
+
+extern "C"
+JNIEXPORT jlong JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_systemPromptPrefillCountsNative(
+        JNIEnv * /*env*/, jobject /*unused*/) {
+    const auto total = g_system_prefill_total.load(std::memory_order_relaxed);
+    const auto done = g_system_prefill_done.load(std::memory_order_relaxed);
+    return static_cast<jlong>((static_cast<uint64_t>(total) << 32) | done);
+}
+
 static void reset_long_term_states(const bool clear_kv_cache = true) {
     chat_msgs.clear();
     g_incomplete_thinking_turn = false;
     system_prompt_position = 0;
     current_position = 0;
+    // Any whole-KV reset invalidates a cached native system/tool signature.
+    g_last_bound_tools.clear();
+    g_last_bound_effort.clear();
 
     if (clear_kv_cache && g_context)
         llama_memory_clear(llama_get_memory(g_context), false);
@@ -674,7 +698,8 @@ static int decode_tokens_in_batches(
         common_batch &batch,
         const llama_tokens &tokens,
         const llama_pos start_pos,
-        const bool compute_last_logit = false) {
+        const bool compute_last_logit = false,
+        std::atomic<uint32_t> *decoded_progress = nullptr) {
     // Track actual KV position per processed batch. A context shift changes
     // this position, so the old start_pos+i arithmetic was unsafe.
     LOGd("%s: Decode %d tokens from position %d", __func__, (int) tokens.size(), start_pos);
@@ -705,6 +730,10 @@ static int decode_tokens_in_batches(
             return 1;
         }
         current_position += cur_batch_size;
+        if (decoded_progress) {
+            decoded_progress->store(static_cast<uint32_t>(i + cur_batch_size),
+                                    std::memory_order_relaxed);
+        }
     }
     return 0;
 }
@@ -719,6 +748,8 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
 ) {
     try {
     reset_load_diagnostics();
+    g_system_prefill_done.store(0, std::memory_order_relaxed);
+    g_system_prefill_total.store(0, std::memory_order_relaxed);
     // Parse the exact, validated, user-selected MCP function definitions.
     // Nothing here carries credentials or authorizes actual tool execution.
     const std::string raw_tools = java_string(env, jtools_json);
@@ -736,6 +767,38 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
             throw std::invalid_argument("Invalid MCP function definition limits");
         }
     }
+    const std::string system_prompt = java_string(env, jsystem_prompt);
+
+    // Repeated selection with exactly the SAME system/tool/Thinking prefix:
+    // clear only the prior user/tool/assistant KV tail. The pinned SYSTEM
+    // prefix is already fully decoded and must NOT be prefetched again.
+    // On changed input or unsupported KV truncation, do full prefill.
+    if (g_context && system_prompt_position > 0 && !chat_msgs.empty() &&
+            chat_msgs.front().role == ROLE_SYSTEM &&
+            chat_msgs.front().content == system_prompt &&
+            raw_tools == g_last_bound_tools &&
+            g_enable_thinking == g_last_bound_thinking &&
+            g_reasoning_effort == g_last_bound_effort) {
+        if (llama_memory_seq_rm(llama_get_memory(g_context), 0,
+                                system_prompt_position, -1)) {
+            chat_msgs.resize(1);
+            g_incomplete_thinking_turn = false;
+            current_position = system_prompt_position;
+            reset_short_term_states();
+            g_chat_tools = parsed_tools;
+            g_system_prefill_total.store(
+                static_cast<uint32_t>(system_prompt_position),
+                std::memory_order_relaxed);
+            g_system_prefill_done.store(
+                static_cast<uint32_t>(system_prompt_position),
+                std::memory_order_relaxed);
+            LOGi("Reused identical MCP SYSTEM KV prefix (%d tokens)",
+                 static_cast<int>(system_prompt_position));
+            return 0;
+        }
+        LOGw("MCP native KV tail cannot be trimmed; full prefill required");
+    }
+
     // Reset long-term & short-term states BEFORE adding tools to the
     // system block: Jinja prefixes MUST stay identical throughout the chat.
     reset_long_term_states();
@@ -745,8 +808,6 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
          g_chat_tools.size(), g_enable_thinking ? "on" : "off");
     reset_short_term_states();
 
-    // Obtain system prompt from JEnv
-    const std::string system_prompt = java_string(env, jsystem_prompt);
     LOGd("%s: System prompt length: %zu bytes", __func__, system_prompt.size());
     std::string formatted_system_prompt(system_prompt);
 
@@ -773,14 +834,24 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
         return 1;
     }
 
+    // Publish exact token counts. JNI reads these atomics without taking
+    // the inference mutex or waiting for llama's CPU-bound decode.
+    g_system_prefill_total.store(
+        static_cast<uint32_t>(system_tokens.size()), std::memory_order_relaxed);
+    g_system_prefill_done.store(0, std::memory_order_relaxed);
     // Decode system tokens in batches
-    if (decode_tokens_in_batches(g_context, g_batch, system_tokens, current_position)) {
+    if (decode_tokens_in_batches(g_context, g_batch, system_tokens,
+                                 current_position, false,
+                                 &g_system_prefill_done)) {
         LOGe("%s: llama_decode() failed!", __func__);
         return 2;
     }
 
     // decode_tokens_in_batches advanced the real KV position.
     system_prompt_position = current_position;
+    g_last_bound_tools = raw_tools;
+    g_last_bound_thinking = g_enable_thinking;
+    g_last_bound_effort = g_reasoning_effort;
     return 0;
     } catch (const std::exception &e) {
         set_native_error("system_prompt", e.what());
@@ -1084,6 +1155,8 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_unload(JNIEnv * /*unused*/, job
     reset_long_term_states();
     reset_short_term_states();
     g_chat_tools.clear();
+    g_system_prefill_done.store(0, std::memory_order_relaxed);
+    g_system_prefill_total.store(0, std::memory_order_relaxed);
 
     // This must be safe even after a partially failed model/context allocation.
     // The original bridge only cleaned up a fully ready model and leaked memory

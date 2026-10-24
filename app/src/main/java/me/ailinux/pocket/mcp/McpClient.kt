@@ -46,7 +46,7 @@ class McpClient(
             params.put("_meta", JSONObject()
                 .put("io.modelcontextprotocol/protocolVersion", version)
                 .put("io.modelcontextprotocol/clientInfo", JSONObject()
-                    .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.13"))
+                    .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.14"))
                 .put("io.modelcontextprotocol/clientCapabilities", JSONObject()))
         }
         if (modern || rawParams != null) body.put("params", params)
@@ -112,7 +112,7 @@ class McpClient(
             .put("protocolVersion", version)
             .put("capabilities", JSONObject())
             .put("clientInfo", JSONObject()
-                .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.13")))
+                .put("name", "AILinux Pocket AI").put("version", "1.0.0-rc.14")))
         version = result.optString("protocolVersion", version)
         require(version in setOf("2025-11-25", "2025-06-18", "2025-03-26")) {
             "Nicht unterstützte alte MCP-Version: " + version

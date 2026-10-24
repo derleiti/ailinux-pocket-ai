@@ -167,7 +167,7 @@ class McpLegacySseClient(private val profile: McpProfile) : Closeable {
             .put("protocolVersion", "2024-11-05")
             .put("capabilities", JSONObject())
             .put("clientInfo", JSONObject().put("name", "AILinux Pocket AI")
-                .put("version", "1.0.0-rc.13")))
+                .put("version", "1.0.0-rc.14")))
         post(JSONObject().put("jsonrpc", "2.0").put("method", "notifications/initialized"))
         return result
     }

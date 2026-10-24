@@ -73,6 +73,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mcpUi: McpSettingsUi
     private lateinit var mcpAgent: McpAgentUi
     @Volatile private var mcpDispatchInFlight = false
+    private var mcpBindingInProgress = false
+    private var mcpBindPoll: Runnable? = null
+    private var mcpBindStartedAtMs = 0L
+    private var mcpBindLastState = McpPrefillStatus.State(0, 0)
+    private var lastMcpBindingReport = "MCP-BINDUNG: Noch keine Einbindung in diesem App-Prozess."
     private val messages = mutableListOf<ChatMessage>()
     private val chatAdapter = ChatAdapter(messages)
     private var activeModel: File? = null
@@ -164,8 +169,8 @@ class MainActivity : AppCompatActivity() {
             displayMcpToolResult(result)
         }
         mcpAgent = McpAgentUi(this) { active ->
-            updateMcpBadge(active)
             if (activeModel != null) rebindNativeMcpTools(active)
+            else updateMcpBadge(active)
         }
         // No agent session does not mean the device, its saved MCP profiles,
         // or the remote server is offline. Show exactly what is disabled.
@@ -346,10 +351,10 @@ class MainActivity : AppCompatActivity() {
         chatModelName.text = ChatPresentation.modelLabel(activeModel?.name)
         emptyHint.text = ChatPresentation.emptyHint(loaded)
         messageInput.hint = ChatPresentation.inputHint(loaded)
-        // During generation the send button must remain usable as STOP.
-        // A live MCP tools/list query is useful even when no GGUF was loaded.
+        // Native prefill can take time on 4B CPU models. Keep the text
+        // editor and navigation responsive while preventing a premature send.
         val canInteract = !busy
-        messageInput.isEnabled = canInteract
+        messageInput.isEnabled = canInteract || mcpBindingInProgress
         sendButton.isEnabled = canInteract || generationJob?.isActive == true
     }
 
@@ -615,7 +620,8 @@ class MainActivity : AppCompatActivity() {
         val chip = findViewById<TextView>(R.id.onlineChip)
         val button = findViewById<MaterialButton>(R.id.chatMcpButton)
         val prepared = active != null && activeModel == null
-        chip.text = if (active == null) "●  AGENT AUS" else
+        chip.text = if (mcpBindingInProgress) "● MCP STARTET" else
+            if (active == null) "●  AGENT AUS" else
             if (prepared) "●  MCP VORBEREITET"
             else if (active.progressiveSources.isNotEmpty())
                 "●  MCP AUTO " + active.thinkingMode.uppercase()
@@ -633,6 +639,9 @@ class MainActivity : AppCompatActivity() {
             " · " + effectiveHints + " sichere Serverhinweise"
         else " · Pocket-AI-Discovery-Regeln"
         findViewById<TextView>(R.id.mcpAgentSettingsStatus).text = when {
+            mcpBindingInProgress ->
+                "MCP-Systemprompt wird nativ verarbeitet. Werkzeuge sind " +
+                "NOCH NICHT aktiv. Fortschritt unter CHAT sichtbar."
             active == null ->
                 "AGENT AUS · Unter KI + MCP / AUTO-BRIDGE konfigurieren aktivieren."
             prepared ->
@@ -647,6 +656,62 @@ class MainActivity : AppCompatActivity() {
                 active.tools.size + " ausgewählte Werkzeuge · " +
                 "echte Toolaufrufe nur nach Freigabe." + hintStatus
         }
+    }
+
+    /**
+     * A system prompt is synchronously decoded by llama.cpp on its own
+     * dispatcher. Read-only JNI progress uses atomic counters and NEVER
+     * waits for the busy llama dispatcher. The Android UI remains free
+     * to navigate or type (sending is disabled until ModelReady).
+     */
+    private fun beginMcpBindingProgress() {
+        mcpBindingInProgress = true
+        mcpBindStartedAtMs = SystemClock.uptimeMillis()
+        mcpBindLastState = McpPrefillStatus.State(0, 0)
+        val progress = findViewById<ProgressBar>(R.id.mcpBindProgress)
+        progress.visibility = View.VISIBLE
+        progress.isIndeterminate = true
+        mcpBindPoll?.let { uiPulseHandler.removeCallbacks(it) }
+        val poll = object : Runnable {
+            override fun run() {
+                if (!mcpBindingInProgress || !::engine.isInitialized) return
+                mcpBindLastState = runCatching {
+                    McpPrefillStatus.unpack(engine.systemPromptPrefillCounts())
+                }.getOrElse { McpPrefillStatus.State(0, 0) }
+                val elapsed = SystemClock.uptimeMillis() - mcpBindStartedAtMs
+                setStatus(McpPrefillStatus.label(mcpBindLastState, elapsed))
+                if (mcpBindLastState.started) {
+                    progress.isIndeterminate = false
+                    progress.max = mcpBindLastState.total
+                    progress.progress = mcpBindLastState.decoded
+                } else progress.isIndeterminate = true
+                // Stop polling when Activity is in the background, resume
+                // when it is visible again. Never create extra UI work.
+                if (uiPulseEnabled) uiPulseHandler.postDelayed(this, 350L)
+            }
+        }
+        mcpBindPoll = poll
+        if (uiPulseEnabled) uiPulseHandler.post(poll)
+    }
+
+    private fun finishMcpBindingProgress(completed: Boolean) {
+        val elapsed = SystemClock.uptimeMillis() - mcpBindStartedAtMs
+        // Capture final native counters after the synchronous reset returns.
+        // Otherwise a fast batch might finish between 350ms UI samples.
+        if (::engine.isInitialized) {
+            mcpBindLastState = runCatching {
+                McpPrefillStatus.unpack(engine.systemPromptPrefillCounts())
+            }.getOrElse { mcpBindLastState }
+        }
+        if (mcpBindingInProgress) {
+            lastMcpBindingReport = McpPrefillStatus.report(
+                mcpBindLastState, elapsed, completed
+            )
+        }
+        mcpBindingInProgress = false
+        mcpBindPoll?.let { uiPulseHandler.removeCallbacks(it) }
+        mcpBindPoll = null
+        findViewById<ProgressBar>(R.id.mcpBindProgress).visibility = View.GONE
     }
 
     /**
@@ -670,8 +735,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
         busy = true
+        beginMcpBindingProgress()
+        updateMcpBadge(active)
         renderChatState()
-        setStatus("● MCP-WERKZEUGE WERDEN EINGEBUNDEN …")
+        setStatus("● MCP-PREFILL wird vorbereitet …")
         lifecycleScope.launch {
             try {
                 val thinkingMode = active?.thinkingMode ?:
@@ -682,6 +749,10 @@ class MainActivity : AppCompatActivity() {
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
+                // The MCP badge becomes ACTIVE only after the complete
+                // synchronous native KV prefill returns ModelReady.
+                finishMcpBindingProgress(completed = true)
+                updateMcpBadge(active)
                 setStatus("● BEREIT")
                 toast(
                     if (active == null) "MCP ausgeschaltet · Chatkontext neu gestartet"
@@ -691,10 +762,11 @@ class MainActivity : AppCompatActivity() {
                 )
             } catch (problem: Exception) {
                 mcpAgent.clearSessionSilently()
-                updateMcpBadge(null)
                 setStatus("MCP-Template-Fehler · Modell bitte neu laden")
                 showError("Native MCP-Funktionen konnten nicht eingebunden werden", problem)
             } finally {
+                if (mcpBindingInProgress) finishMcpBindingProgress(completed = false)
+                updateMcpBadge(mcpAgent.current())
                 busy = false
                 renderChatState()
             }
@@ -1237,10 +1309,7 @@ class MainActivity : AppCompatActivity() {
                             hadSearch = true
                         }
                         showEvidence(
-                            "🔎 Lokale Suche in echten MCP-Toolslisten " +
-                            "(keine externe Aktion):\n" +
-                            outcome.optJSONArray("content")
-                                ?.optJSONObject(0)?.optString("text")?.take(1250).orEmpty()
+                            McpProgressiveBridge.displaySearchResult(outcome)
                         )
                     } else if (meta == McpProgressiveBridge.DETAILS) {
                         outcome = try {
@@ -1908,6 +1977,7 @@ class MainActivity : AppCompatActivity() {
     private fun showProcessExitInfo() {
         val button = findViewById<MaterialButton>(R.id.crashDiagnosticsButton)
         val uiDelayReport = uiResponsiveness.report()
+        val bindReport = lastMcpBindingReport
         button.isEnabled = false
         button.text = "Analysiere Android-Tombstones …"
         lifecycleScope.launch {
@@ -1970,7 +2040,8 @@ class MainActivity : AppCompatActivity() {
                         "Android hat keine früheren Prozessabbrüche für Pocket AI erfasst."
                     } else entries.joinToString("\n\n---\n\n")
                     "ANDROID-PROZESSDIAGNOSE – normale Updates sind keine Abstürze; keine Übertragung\n\n" +
-                        uiDelayReport + "\n\n---\n\n" + historical
+                        uiDelayReport + "\n\n" + bindReport +
+                        "\n\n---\n\n" + historical
                 }
                 if (!isFinishing && !isDestroyed) {
                     showError("Android-Prozessdiagnose", IllegalStateException(report))
@@ -2037,9 +2108,13 @@ class MainActivity : AppCompatActivity() {
         uiPulseEnabled = true
         uiResponsiveness.arm(SystemClock.uptimeMillis())
         uiPulseHandler.postDelayed(uiPulse, UiResponsiveness.INTERVAL_MS)
+        if (mcpBindingInProgress) {
+            mcpBindPoll?.let { uiPulseHandler.post(it) }
+        }
     }
 
     override fun onStop() {
+        mcpBindPoll?.let { uiPulseHandler.removeCallbacks(it) }
         uiPulseEnabled = false
         uiPulseHandler.removeCallbacks(uiPulse)
         uiResponsiveness.disarm()

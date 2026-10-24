@@ -35,6 +35,14 @@ interface InferenceEngine {
     )
 
     /**
+     * Non-blocking native SYSTEM-prefill progress, packed as unsigned
+     * total-token count in the upper 32 bits and decoded in the lower
+     * 32 bits. May be queried while llamaDispatcher is decoding.
+     * This is diagnostic-only, not the authoritative ModelReady state.
+     */
+    fun systemPromptPrefillCounts(): Long
+
+    /**
      * Configure optional GGUF reasoning before the initial system prompt.
      * Use "low" for compact MCP reasoning, or "high" for full reasoning.
      * Changing modes within a chat is only safe through a full decoded
