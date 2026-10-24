@@ -18,6 +18,11 @@ class ModelLoadSafetyTest {
     @Test fun handlesUnknownSize() {
         assertFalse(ModelLoadSafety.requiresConfirmation(0, 7L * gib))
     }
+    @Test fun lowMemoryAfterUnloadBlocksOverlappingLargeModelTransition() {
+        assertTrue(ModelLoadSafety.insufficientAfterUnload(3L * gib, 1100L * 1024 * 1024))
+        assertTrue(ModelLoadSafety.insufficientAfterUnload(2L * gib, gib))
+        assertFalse(ModelLoadSafety.insufficientAfterUnload(gib, 4L * gib))
+    }
     @Test fun exposesReasonForWarning() {
         val explanation = ModelLoadSafety.explain(4L * gib, 8L * gib)
         assertTrue(explanation.contains("RAM"))

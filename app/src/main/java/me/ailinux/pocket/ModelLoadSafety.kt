@@ -16,6 +16,19 @@ object ModelLoadSafety {
         return modelSizeBytes > ((availableBytes - RESERVE) * 3L) / 4L
     }
 
+    /** After unloading the old engine, refuse a new multi-GB load if the
+     * device still has too little immediately available memory. File size
+     * is only a lower-bound proxy, not a native allocation prediction.
+     */
+    fun insufficientAfterUnload(modelSizeBytes: Long, availableBytes: Long): Boolean {
+        if (modelSizeBytes <= 0L) return availableBytes <= RESERVE
+        val conservativeMinimum = maxOf(
+            2L * GIB,
+            (modelSizeBytes / 2L) + RESERVE
+        )
+        return availableBytes < conservativeMinimum
+    }
+
     fun explain(modelSizeBytes: Long, availableBytes: Long): String {
         return "Das Modell belegt ${ModelStore.displaySize(modelSizeBytes)}. " +
             "Android meldet ${ModelStore.displaySize(availableBytes)} momentan verfügbaren RAM.\n\n" +
