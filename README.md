@@ -2,7 +2,7 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Status: 1.0.0-rc.11.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Status: 1.0.0-rc.12.** Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
@@ -723,3 +723,36 @@ https://github.com/ggml-org/llama.cpp/blob/master/docs/function-calling.md
 No Pixel Android debug device is connected in the build environment.
 Automated host/JVM tests cannot prove model latency or real on-device
 multi-step native tool calling or OAuth consent; see the QA guide.
+
+
+## RC12 - MCP Model Bridge controls in SETUP
+
+The complete RC11 Progressive MCP Auto-Bridge remains supported.
+RC12 fixes a UI discoverability gap reported after reinstalling Pocket AI:
+server profiles were visible under SETUP but the model-agent/auto-bridge
+controls existed only under CHAT -> MCP.
+
+- SETUP -> MCP VERBINDUNGEN now includes an explicit
+  "MCP MODELL-AGENT · AUTO-BRIDGE" section and live session status.
+- Both CHAT -> MCP and SETUP -> KI + MCP / AUTO-BRIDGE open the
+  SAME agent configuration and consent implementation.
+- Separate "MCP-Tools live prüfen (ohne Modell)" option gives access
+  to the real authenticated MCP catalogue even if GGUF is not loaded.
+- Users may opt in to a selected manual or progressive bridge while
+  a GGUF model is downloading. The badge reads "MCP VORBEREITET"
+  until the model is loaded. Actual JNI binding occurs only on
+  successful model startup.
+- Upon model load, the status reflects the active MCP AUTO LOW or
+  manual MCP mode; the source/permission checks from RC11 are unchanged.
+- Android MCP menus and server checkbox selection now really render their
+  choice lists (previous RC11 dialogs combined setMessage + setItems, hiding
+  options under a text-only AlertDialog). The MCP quick-command and small
+  offline-model pickers received the same fix.
+- SETUP explains that clearing App Data / uninstalling erases private
+  stored GGUFs and Keystore-protected MCP profiles, whereas installing
+  a properly signed update over the existing app preserves data.
+
+The Spark model weights are NOT bundled in the APK. The currently
+verified official release family is Spark-X2.6-4B (2026-10-21).
+Different Hugging Face quantizations are not necessarily newer
+base models. No download is initiated by the settings UI changes.

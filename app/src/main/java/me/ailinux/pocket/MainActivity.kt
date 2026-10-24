@@ -164,12 +164,17 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.navModels).setOnClickListener { showPage(1) }
         findViewById<TextView>(R.id.navSettings).setOnClickListener { showPage(2) }
         findViewById<MaterialButton>(R.id.chatMcpButton).setOnClickListener {
-            if (busy) toast("MCP-Modus erst nach der aktuellen Aktion wechseln.")
-            else mcpAgent.showMenu(
-                openManualTools = { mcpUi.showToolsChooser() },
-                openHealthCheck = { showLiveMcpHealth("/mcp health", "") },
-                openQuickHelp = { showQuickActionPicker() }
-            )
+            showMcpAgentMenu()
+        }
+        // RC12: make the model MCP agent discoverable from SETUP as well.
+        // The same menu is shared, so there is exactly one approval/agent
+        // implementation and no duplicate settings or auth handling.
+        findViewById<MaterialButton>(R.id.mcpAgentSettingsButton).setOnClickListener {
+            showMcpAgentMenu()
+        }
+        findViewById<MaterialButton>(R.id.mcpToolListSettingsButton).setOnClickListener {
+            if (busy) toast("Pocket AI arbeitet bereits.")
+            else mcpUi.showToolsChooser()
         }
         findViewById<MaterialButton>(R.id.importButton).setOnClickListener {
             if (!transferBusy) modelPicker.launch(arrayOf("*/*"))
@@ -513,6 +518,9 @@ class MainActivity : AppCompatActivity() {
                     applySampling()
                 }
                 activeModel = file
+                // A bridge configured in SETUP before model download is now
+                // actually bound to the loaded GGUF; update the visible badge.
+                updateMcpBadge(mcpAgent.current())
                 messages.clear()
                 chatAdapter.notifyDataSetChanged()
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
@@ -531,6 +539,21 @@ class MainActivity : AppCompatActivity() {
                 renderChatState()
             }
         }
+    }
+
+    /** Both CHAT and SETUP open the SAME model bridge configuration.
+     * A model does not need to be loaded yet: the optional agent session
+     * can be prepared and bound when the GGUF is next loaded. */
+    private fun showMcpAgentMenu() {
+        if (busy) {
+            toast("MCP-Modus erst nach der aktuellen Aktion wechseln.")
+            return
+        }
+        mcpAgent.showMenu(
+            openManualTools = { mcpUi.showToolsChooser() },
+            openHealthCheck = { showLiveMcpHealth("/mcp health", "") },
+            openQuickHelp = { showQuickActionPicker() }
+        )
     }
 
     private fun groundedSystemPrompt(active: McpAgentSession?): String {
@@ -587,8 +610,10 @@ class MainActivity : AppCompatActivity() {
     private fun updateMcpBadge(active: McpAgentSession?) {
         val chip = findViewById<TextView>(R.id.onlineChip)
         val button = findViewById<MaterialButton>(R.id.chatMcpButton)
+        val prepared = active != null && activeModel == null
         chip.text = if (active == null) "●  AGENT AUS" else
-            if (active.progressiveSources.isNotEmpty())
+            if (prepared) "●  MCP VORBEREITET"
+            else if (active.progressiveSources.isNotEmpty())
                 "●  MCP AUTO " + active.thinkingMode.uppercase()
             else "●  MCP " + active.thinkingMode.uppercase()
         chip.contentDescription = if (active == null) {
@@ -599,6 +624,21 @@ class MainActivity : AppCompatActivity() {
         }
         button.text = if (active == null) "MCP" else "MCP ✓"
         chip.setTextColor(getColor(if (active == null) R.color.muted else R.color.secondary))
+        findViewById<TextView>(R.id.mcpAgentSettingsStatus).text = when {
+            active == null ->
+                "AGENT AUS · Unter KI + MCP / AUTO-BRIDGE konfigurieren aktivieren."
+            prepared ->
+                "MCP-BRIDGE VORBEREITET · " + active.serverName +
+                " · GGUF unter MODELLE laden, danach wird die Bridge eingebunden."
+            active.progressiveSources.isNotEmpty() ->
+                "MCP AUTO " + active.thinkingMode.uppercase() + " · " +
+                active.progressiveSources.size + " ausgewählte Server · " +
+                "echte Toolaufrufe nur nach Freigabe."
+            else ->
+                "MCP " + active.thinkingMode.uppercase() + " · " +
+                active.tools.size + " ausgewählte Werkzeuge · " +
+                "echte Toolaufrufe nur nach Freigabe."
+        }
     }
 
     /**
@@ -916,9 +956,9 @@ class MainActivity : AppCompatActivity() {
             "TriForce: Speicher durchsuchen" to "/mcp memory-search "
         )
         AlertDialog.Builder(this)
-            .setTitle("MCP-Schnellbefehle · ohne Spark")
-            .setMessage("Jeder Befehl nutzt ein echtes, vorher am Server geprüftes Werkzeug. " +
-                "Zum Ausführen bestätigen und danach den Toolaufruf einmal erlauben.")
+            // Android AlertDialog cannot show setMessage and setItems
+            // together reliably. The list itself must be the content.
+            .setTitle("MCP-Schnellbefehle · vor Ausführung freigeben")
             .setItems(actions.map { it.first }.toTypedArray()) { _, index ->
                 messageInput.setText(actions[index].second)
                 messageInput.setSelection(messageInput.text.length)
@@ -1744,8 +1784,9 @@ class MainActivity : AppCompatActivity() {
             Starter("Gemma 3 · 1B · 769 MB", "unsloth/gemma-3-1b-it-GGUF", "gemma-3-1b-it-Q4_K_M.gguf")
         )
         AlertDialog.Builder(this)
-            .setTitle("Leichte Offline-Modelle")
-            .setMessage("Öffentliche GGUFs im Format Q4_K_M. Die echten Dateien werden vor dem Download beim Anbieter abgefragt.")
+            // Model choices disappeared on Android when a separate
+            // setMessage competed with the setItems list content.
+            .setTitle("Leichte Offline-Modelle · GGUF Q4_K_M")
             .setItems(models.map { it.title }.toTypedArray()) { _, index ->
                 val starter = models[index]
                 catalogStatus("Prüfe " + starter.title + " …")

@@ -186,3 +186,26 @@ cases (examples, hypothetical statements and honest lack-of-access replies).
 
 Real device, Chrome OAuth and live model multi-step QA are still required:
 JVM and host simulation cannot confirm those on-device interactions.
+
+
+## RC12 - MCP agent settings visible and preconfigurable
+
+1. Update RC11 to RC12 directly OVER the existing installation.
+   Do not clear App Data or uninstall; this destroys private GGUFs.
+2. Open SETUP and scroll to MCP VERBINDUNGEN. The subheading
+   "MCP MODELL-AGENT · AUTO-BRIDGE" and agent status must be visible.
+3. Press "KI + MCP / AUTO-BRIDGE konfigurieren". It must open the
+   SAME menu as CHAT -> MCP, including AUTO-BRIDGE discovery.
+4. Press "MCP-Tools live prüfen (ohne Modell)" and select a
+   configured account; real tools/list should work without loading GGUF.
+5. With no loaded model but an authenticated MCP profile, select
+   the optional Auto-Bridge. The badge should read "MCP VORBEREITET"
+   and SETUP explain that the GGUF must first be loaded.
+6. Finish model download, load GGUF and verify the badge becomes
+   "MCP AUTO LOW" with the existing source selection and separate
+   tool approval on each external operation.
+7. If the selected server requires OAuth, log in first under
+   SETUP -> MCP VERBINDUNGEN; an "Ohne Anmeldung" preset is not an
+   OAuth grant and does not bypass backend permissions.
+8. No model download or MCP network call must start simply from
+   opening the agent's SETUP page.

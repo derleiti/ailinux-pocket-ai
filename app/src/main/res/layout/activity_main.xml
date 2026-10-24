@@ -347,6 +347,47 @@
                     android:layout_marginTop="7dp"
                     android:text="Streamable HTTP: Ohne Auth, Bearer, API-Key, Basic und OAuth mit PKCE. Zugangsdaten werden mit Android Keystore verschlüsselt."
                     android:textColor="@color/muted" android:textSize="12sp"/>
+                <!-- RC12: MCP model-agent settings must be reachable from SETUP,
+                     not hidden exclusively in CHAT -> MCP. -->
+                <TextView android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="19dp"
+                    android:text="MCP MODELL-AGENT · AUTO-BRIDGE"
+                    android:textColor="@color/primary"
+                    android:letterSpacing=".12" android:textStyle="bold"
+                    android:textSize="12sp"/>
+                <TextView android:id="@+id/mcpAgentSettingsStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="MCP-Agent AUS · Werkzeug-Discovery noch nicht aktiviert"
+                    android:textColor="@color/ink" android:textSize="13sp"
+                    android:contentDescription="Aktueller MCP-Modell-Agentenstatus"/>
+                <TextView android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:text="MCP-Server hier anmelden, darunter den Modell-Agenten konfigurieren. AUTO-BRIDGE lässt das lokale GGUF echte Tools suchen. Für Ausführungen ist immer deine Freigabe nötig. Auch ohne geladenes Modell kannst du den Agenten vormerken und die Live-Toolliste ansehen."
+                    android:textColor="@color/muted" android:textSize="12sp"/>
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/mcpAgentSettingsButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="50dp"
+                    android:layout_marginTop="12dp"
+                    android:text="KI + MCP / AUTO-BRIDGE konfigurieren"
+                    android:textAllCaps="false"
+                    android:textColor="@color/background"
+                    app:backgroundTint="@color/primary"
+                    app:cornerRadius="14dp"/>
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/mcpToolListSettingsButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="10dp"
+                    android:text="MCP-Tools live prüfen (ohne Modell)"
+                    android:textAllCaps="false"
+                    android:textColor="@color/ink"
+                    app:backgroundTint="@color/surface_raised"
+                    app:cornerRadius="14dp"/>
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/addMcpServerButton"
                     android:layout_width="match_parent"
@@ -366,6 +407,11 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="5dp"
                     android:text="Tools werden nur nach deiner ausdrücklichen Bestätigung ausgeführt. OAuth-Anmeldung erfolgt im externen Browser."
+                    android:textColor="@color/muted" android:textSize="11sp"/>
+                <TextView android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="17dp"
+                    android:text="Wichtig: Normale App-Updates erhalten Modelle und Anmeldungen. Das Löschen der App-Daten oder eine Deinstallation entfernt dagegen die privaten GGUF-Dateien und den verschlüsselten MCP-Tresor."
                     android:textColor="@color/muted" android:textSize="11sp"/>
                 <TextView android:id="@+id/appVersion"
                     android:layout_width="match_parent" android:layout_height="wrap_content"

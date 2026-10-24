@@ -1,5 +1,6 @@
 package me.ailinux.pocket.mcp
 
+import android.graphics.Typeface
 import android.widget.Toast
 import android.widget.ArrayAdapter
 import android.widget.EditText
@@ -44,6 +45,31 @@ class McpAgentUi(
 
     fun current(): McpAgentSession? = session
 
+    /**
+     * On Android AppCompat AlertDialog, setMessage() and setItems() (or
+     * setMultiChoiceItems()) compete for the same content panel: if a message
+     * exists, the list can silently disappear. Put the short explanation
+     * in the custom header, leaving the dialog content panel for its list.
+     */
+    private fun listDialogHeader(title: String, explanation: String): LinearLayout {
+        val density = activity.resources.displayMetrics.density
+        fun dp(value: Int) = (value * density + 0.5f).toInt()
+        return LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(17), dp(22), dp(7))
+            addView(TextView(activity).apply {
+                text = title
+                textSize = 19f
+                setTypeface(null, Typeface.BOLD)
+            })
+            addView(TextView(activity).apply {
+                text = explanation
+                textSize = 13f
+                setPadding(0, dp(7), 0, dp(4))
+            })
+        }
+    }
+
     /** Called after a native Jinja binding error; a stale selection must not
      * be represented as having active tool access in the Android chat UI. */
     fun clearSessionSilently() { session = null }
@@ -69,8 +95,12 @@ class McpAgentUi(
                 else it.tools.size.toString() + " ausgewählte Tools"
         } ?: "\nDein Modell arbeitet aktuell ohne automatisches MCP-Planning."
         AlertDialog.Builder(activity)
-            .setTitle("Pocket AI · MCP-Bridge")
-            .setMessage("Das Modell darf ein Tool vorschlagen. Jeder Aufruf muss von dir bestätigt werden." + name)
+            .setCustomTitle(listDialogHeader(
+                "Pocket AI · MCP-Bridge",
+                "Das Modell darf nur nach deiner Freigabe echte MCP-Tools aufrufen." + name
+            ))
+            // Never combine setMessage with setItems: the latter would be
+            // hidden on Android (confirmed by Pixel RC11 screenshot).
             .setItems(options) { _, index ->
                 when (index) {
                     0 -> chooseServer()
@@ -111,13 +141,14 @@ class McpAgentUi(
                 p.oauthAccessToken.isNotBlank() || p.oauthRefreshToken.isNotBlank()
         }
         AlertDialog.Builder(activity)
-            .setTitle("Pocket AI · MCP AUTO-BRIDGE RC11")
-            .setMessage(
-                "Wähle bis zu 4 Server. Die App prüft deren echte tools/list " +
-                "und gibt Spark nur drei lokale Such-/Detail-/Aufruf-Werkzeuge. " +
-                "Alle echten MCP-Aktionen brauchen deine einmalige Freigabe. " +
-                "OAuth-Zugangsdaten bleiben ausschließlich im Android-Tresor."
-            )
+            .setCustomTitle(listDialogHeader(
+                "MCP AUTO-BRIDGE · Server",
+                "Bis zu 4 Server wählen. Spark bekommt 3 lokale Meta-Tools; " +
+                    "jede externe Aktion braucht deine Freigabe. " +
+                    "OAuth-Tokens bleiben im Android-Tresor."
+            ))
+            // setMessage + setMultiChoiceItems hides the server choices on
+            // many Android/AppCompat versions; customTitle preserves them.
             .setMultiChoiceItems(
                 profiles.map { it.title + " · " + it.endpoint }.toTypedArray(),
                 checked
