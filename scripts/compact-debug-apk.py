@@ -5,6 +5,7 @@ Produces an alpha/test APK only; NOT a production release signing workflow.
 """
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,13 @@ TOOLS = SDK / "build-tools" / "35.0.0"
 STRIP = SDK / "ndk" / "29.0.13113456" / "toolchains" / "llvm" / "prebuilt" / "linux-x86_64" / "bin" / "llvm-strip"
 DEBUG_KEY = pathlib.Path.home() / ".android" / "debug.keystore"
 SOURCE = ROOT / "app/build/outputs/apk/debug/app-debug.apk"
-OUTPUT = ROOT / "dist/AILinux-Pocket-AI-2.1.0-RC9-arm64-debug.apk"
+# Use the Gradle versionName, not a stale filename from an earlier RC.
+GRADLE = (ROOT / "app/build.gradle.kts").read_text()
+MATCH = re.search(r'^\s*versionName\s*=\s*"([A-Za-z0-9.-]+)"', GRADLE, re.MULTILINE)
+if not MATCH:
+    raise SystemExit("Cannot read versionName from app/build.gradle.kts")
+VERSION = MATCH.group(1)
+OUTPUT = ROOT / "dist" / ("AILinux-Pocket-AI-" + VERSION + "-arm64-debug.apk")
 
 def run(*args):
     subprocess.run([str(v) for v in args], check=True, stdout=subprocess.DEVNULL)
