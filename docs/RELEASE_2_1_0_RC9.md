@@ -49,3 +49,33 @@ before offering an in-place update.
 5. Create chats, swap models, restart/update, search, rename/archive/delete,
    and test end-swipe/back gesture. Validate 1000-message history.
 6. Confirm LiteRT Tensor G5 behavior using specific model files and native logs.
+
+## Signed QA release workflow
+
+The existing Android CI now runs on \`v2.1.0-RC*\` tags as well as on
+pull requests/main. Its tag job refuses versionName/tag and versionCode
+mismatches. CI artifacts are disposable CI-debug-signed packages and are
+**not** the public update APK.
+
+The public RC APK must be built and signed on the authorized release host
+using the existing AILinux developer debug certificate. Before uploading:
+
+1. Confirm all required PR checks and blocking reviews, verify that \`main\`
+   contains the intended commit, and do not rewrite any existing tag.
+2. Run \`./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug\`
+   and \`python3 scripts/compact-debug-apk.py\` on the approved build host.
+3. Run \`./scripts/verify-apk.sh dist/AILinux-Pocket-AI-2.1.0-RC9-arm64-debug.apk\`.
+4. Compare \`apksigner verify --print-certs\` SHA-256 signer fingerprint with
+   the **downloaded public RC8 APK**. The expected RC8 signer is
+   \`125766c26dd400e39804c7b97c36682d8a2c16caa134c58745a02aca0bd51187\`.
+5. Create tag \`v2.1.0-RC9\` on verified \`main\`; publish the signed QA
+   APK and SHA-256 checksum as GitHub pre-release assets.
+6. Re-download the public asset, compare SHA-256 byte-for-byte, verify the
+   APK version metadata and signer, then check the RC tag GitHub CI.
+7. On Pixel, test install *over RC8 without uninstalling* to ensure all
+   GGUF/LiteRT models and user settings persist.
+
+The local signing key must not be copied into the repository or exposed
+to unprotected CI. If this release gate cannot be completed, leave RC9
+unpublished and document the blocking check rather than publish a
+differently signed APK.
