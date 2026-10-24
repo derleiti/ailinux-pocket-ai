@@ -22,6 +22,17 @@ class McpOnDemandDiscoveryTest {
         assertEquals(0, run.remoteCalls)
     }
 
+    @Test fun queryStringIsPreservedAndMisleadingReadNameRejected() {
+        val schema = JSONObject("""{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}""")
+        val plan = McpOnDemandDiscovery.propose(
+            "mcp crawl https://ailinux.me/search?q=gemma&lang=de",
+            run(listOf(tool("crawl", schema))))
+        assertEquals("https://ailinux.me/search?q=gemma&lang=de",
+            plan!!.arguments.getString("url"))
+        assertNull(McpOnDemandDiscovery.propose("mcp tool read_and_clear_notifications",
+            run(listOf(tool("read_and_clear_notifications")))))
+    }
+
     @Test fun noSideEffectingFallbackAndNoInventedParameters() {
         assertNull(McpOnDemandDiscovery.propose("mcp tool delete", run(listOf(tool("delete")))))
         val required = JSONObject("""{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}""")

@@ -31,6 +31,8 @@ class RuntimeHardwareTest {
         assertEquals(all, RuntimeHardware.forModelFile("generic.litertlm", all))
         assertEquals(listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR),
             RuntimeHardware.forModelFile("gemma-4-E2B-npu.litertlm", all))
+        assertEquals(listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR),
+            RuntimeHardware.forModelFile("qwen-mixed-4b_Google_Tensor_G5.litertlm", all))
     }
 
     @Test fun genericAndroidDoesNotAssumeVendorTpu() {

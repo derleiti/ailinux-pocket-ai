@@ -23,7 +23,8 @@ internal object RuntimeHardware {
     fun forModelFile(name: String, available: List<Attempt>): List<Attempt> {
         val lower = name.lowercase(java.util.Locale.ROOT)
         val gpuOnly = Regex("(?:^|[-_.])gpu(?:[-_.]|$)").containsMatchIn(lower)
-        val tpuOnly = Regex("(?:^|[-_.])(?:npu|tpu)(?:[-_.]|$)").containsMatchIn(lower)
+        val tpuOnly = Regex("(?:^|[-_.])(?:npu|tpu|google_tensor|tensor_g5)(?:[-_.]|$)").containsMatchIn(lower) ||
+            lower.contains("google_tensor") || lower.contains("tensor_g5")
         return when {
             gpuOnly -> listOf(Attempt.GPU, Attempt.CPU).filter { it in available }
             tpuOnly -> listOf(Attempt.GOOGLE_TENSOR).filter { it in available }

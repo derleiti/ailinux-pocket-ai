@@ -1424,7 +1424,7 @@ class MainActivity : AppCompatActivity() {
         answerIndex: Int
     ): Boolean {
         val runtime = McpProgressiveBridge.Run(
-            active.progressiveSources, active.progressiveCreatedAtMs
+            active.progressiveSources, System.currentTimeMillis()
         )
         var modelOutput = firstModelOutput
         var serverResult: JSONObject? = null
@@ -1987,7 +1987,7 @@ class MainActivity : AppCompatActivity() {
         var lastServerResult: JSONObject? = null
         val progressive = active.progressiveSources.isNotEmpty()
         val catalog = if (progressive) McpProgressiveBridge.Run(
-            active.progressiveSources, active.progressiveCreatedAtMs
+            active.progressiveSources, System.currentTimeMillis()
         ) else null
         fun evidence(text: String) {
             messages.add(ChatMessage(false, text))

@@ -14,7 +14,7 @@ object McpOnDemandDiscovery {
         "meine","meinen","mcp","tool","tools","verwende","benutze","nutze","zeige",
         "check","checke","prüfe","pruefe","über","ueber","with","using","the","und",
         "eine","einen","server","status","www","https")
-    private val webUrl = Regex("https://[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?", RegexOption.IGNORE_CASE)
+    private val webUrl = Regex("https://[^\\s<>\"\']+", RegexOption.IGNORE_CASE)
     private val explicitTool = Regex("(?:tool|werkzeug|function)[\\s:='\"\\u0060]+([a-z][a-z0-9_.-]{2,})", RegexOption.IGNORE_CASE)
     private val mentionsExternal = Regex("\\b(?:mcp|tool|werkzeug|triforce|discord|crawl|status|api|server)\\b", RegexOption.IGNORE_CASE)
 
@@ -49,17 +49,11 @@ object McpOnDemandDiscovery {
         val tool = run.tool(id)?.tool ?: return null
         // Host fallback never guesses a side-effecting tool, even when the
         // caller might later approve it. Native model calls stay available.
-        val disallowed = Regex(
-            "(?:delete|remove|write|update|create|edit|send|post|execute|" +
-                "shell|input|install|start|stop|restart|control|set_|put_|bid|deliver)",
-            RegexOption.IGNORE_CASE
-        )
-        val readIntent = Regex(
-            "(?:crawl|search|read|list|get|status|info|inspect|observe|fetch|query|lookup)",
-            RegexOption.IGNORE_CASE
-        )
-        if (disallowed.containsMatchIn(tool.name) ||
-            !readIntent.containsMatchIn(tool.name)) return null
+        // An unknown tool cannot be classified read-only by its name.
+        // The fallback is deliberately limited to exact audited contracts;
+        // native tool calls still support all permitted MCP tools.
+        if (tool.name !in setOf("crawl", "status", "discord_connection_status",
+                "current_time", "models", "device_info")) return null
         // Never guess mandatory parameters; allow a single HTTPS URL only for
         // a schema requiring exactly one URL-like string property.
         val schema = tool.schema
