@@ -4,6 +4,14 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
+
+# Cancel superseded PR builds rather than burning minutes on old commits.
+concurrency:
+  group: pocket-full-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,16 +26,27 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Android SDK and NDK
+      - name: Install missing Android SDK and NDK components
+        shell: bash
         run: |
+          set -euo pipefail
           test -d "$ANDROID_HOME" || { echo "Android SDK missing on runner"; exit 1; }
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses > /dev/null 2>&1 || true
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "platforms;android-36" "build-tools;35.0.0" "ndk;29.0.13113456" "cmake;3.31.6"
+          packages=()
+          if [ ! -d "$ANDROID_HOME/platforms/android-36" ]; then packages+=("platforms;android-36"); fi
+          if [ ! -d "$ANDROID_HOME/build-tools/35.0.0" ]; then packages+=("build-tools;35.0.0"); fi
+          if [ ! -d "$ANDROID_HOME/ndk/29.0.13113456" ]; then packages+=("ndk;29.0.13113456"); fi
+          if [ ! -d "$ANDROID_HOME/cmake/3.31.6" ]; then packages+=("cmake;3.31.6"); fi
+          if [ "${#packages[@]}" -gt 0 ]; then
+            echo "Installing: ${packages[*]}"
+            "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "${packages[@]}" < <(yes)
+          else
+            echo "All required Android components already installed."
+          fi
       - uses: gradle/actions/setup-gradle@v4
       - name: Build and tests
-        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
+        run: ./gradlew --no-daemon --build-cache :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
       - name: Create temporary CI-only debug signing key
         run: |
           mkdir -p "$HOME/.android"
@@ -36,13 +55,24 @@ jobs:
               -validity 10000 -dname "CN=Android Debug,O=Android,C=US" \
               -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android
           fi
+      - name: Read versioned APK path from Gradle
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\1/p' app/build.gradle.kts)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            echo "Unexpected RC versionName: $version" >&2
+            exit 1
+          fi
+          echo "apk_path=dist/AILinux-Pocket-AI-${version}-arm64-debug.apk" >> "$GITHUB_OUTPUT"
       - name: Compact and verify test APK
         run: |
           python3 scripts/compact-debug-apk.py
-          ./scripts/verify-apk.sh dist/AILinux-Pocket-AI-1.0.0-rc.15-arm64-debug.apk
+          ./scripts/verify-apk.sh ${{ steps.version.outputs.apk_path }}
       - uses: actions/upload-artifact@v4
         with:
           name: AILinux-Pocket-AI-debug-arm64
-          path: dist/AILinux-Pocket-AI-1.0.0-rc.15-arm64-debug.apk
+          path: ${{ steps.version.outputs.apk_path }}
           if-no-files-found: error
           retention-days: 14

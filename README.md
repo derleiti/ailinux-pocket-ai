@@ -43,6 +43,26 @@ Debug APK output: app/build/outputs/apk/debug/app-debug.apk
 
 This APK uses the Android debug signing key and is intended for testing. Public updates require a long-lived, private release signing key. Never commit signing material.
 
+## Quick GitHub Actions checks
+
+The **Android Fast Checks** workflow runs on pull requests and only executes
+`app:testDebugUnitTest`. It avoids the native APK compilation and Android Lint
+so code issues appear sooner. Superseded PR runs are cancelled automatically.
+Gradle's dependency/task cache is enabled and only missing SDK components
+are installed.
+
+After the workflow is present on the default branch, **Actions → Android Fast
+Checks → Run workflow → apk=true** builds and uploads a compact ARM64 debug APK
+without the slower full Lint suite. For release candidates, still require the
+complete **Android CI** workflow (unit tests, native APK, Lint and verification).
+The full workflow also cancels outdated PR runs and reads the filename from
+`versionName` rather than hardcoding an RC number.
+
+**Important:** CI uses an ephemeral debug signing key. The resulting Actions
+artifact is not guaranteed to install over a previous AILinux-signed APK
+without losing app data. Official test releases use the maintained local
+test-signing certificate; do not uninstall Pocket AI just to test a CI APK.
+
 ## Using a model
 
 1. Open MODELLE.
