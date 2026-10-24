@@ -424,7 +424,7 @@ internal class InferenceEngineImpl private constructor(
             // A native std::exception from token generation is translated to a
             // Java IOException. Expose the last safe diagnostics to the user.
             val detail = runCatching { lastLoadError().trim().takeLast(2500) }.getOrNull().orEmpty()
-            val error = if (e is IOException && detail.isNotEmpty()) {
+            val error = if (e is IncompleteThinkingTurnException) e else if (e is IOException && detail.isNotEmpty()) {
                 IOException((e.message ?: "Native Generierung fehlgeschlagen") + "\n" + detail, e)
             } else e
             _state.value = if (e is IncompleteThinkingTurnException)

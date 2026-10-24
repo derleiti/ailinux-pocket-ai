@@ -23,29 +23,43 @@ import java.io.IOException
  */
 internal class LiteRtRuntime private constructor(
     private val engine: Engine,
-    private var conversation: Conversation,
+    private var conversation: Conversation?,
     private val systemPrompt: String,
     val backendName: String
 ) : AutoCloseable {
 
     fun send(text: String): Flow<String> {
         require(text.isNotBlank()) { "Leere Modellanfrage" }
-        return conversation.sendMessageAsync(text).map { it.toString() }
+        val session = checkNotNull(conversation) {
+            "LiteRT-Konversation nicht bereit. Modell bitte neu laden."
+        }
+        return session.sendMessageAsync(text).map { it.toString() }
     }
 
-    /** Keep the initialized TPU/GPU/CPU engine and weights; only renew chat. */
+    /** Keep weights but release the old native LiteRT session before new one.
+     * LiteRT-LM permits only one conversation per initialized engine.
+     */
     suspend fun clearConversation() = withContext(Dispatchers.IO) {
-        val newConversation = engine.createConversation(
+        val old = conversation
+        conversation = null
+        old?.close()
+        conversation = engine.createConversation(
             ConversationConfig(systemInstruction = Contents.of(systemPrompt))
         )
-        val old = conversation
-        conversation = newConversation
-        old.close()
         Unit
     }
 
+    /** A session creation failure after closing must not leave fake readiness. */
+    val hasConversation: Boolean get() = conversation != null
+
     override fun close() {
-        try { conversation.close() } finally { engine.close() }
+        try {
+            val old = conversation
+            conversation = null
+            old?.close()
+        } finally {
+            engine.close()
+        }
     }
 
     companion object {
@@ -80,7 +94,8 @@ internal class LiteRtRuntime private constructor(
                             (problem.message ?: problem.javaClass.simpleName).take(180)
                         try { candidate?.close() } catch (_: Exception) {}
                     } catch (problem: LinkageError) {
-                        errors += attempt.name + ": Native Bibliothek nicht verfügbar"
+                        errors += attempt.name + ": Native Bibliothek nicht verfügbar (" +
+                            (problem.message ?: problem.javaClass.simpleName).take(140) + ")"
                         try { candidate?.close() } catch (_: Exception) {}
                     }
                 }

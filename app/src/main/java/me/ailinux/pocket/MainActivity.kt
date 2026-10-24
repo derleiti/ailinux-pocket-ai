@@ -615,12 +615,16 @@ class MainActivity : AppCompatActivity() {
         setModelLoading(true, file.name)
         setStatus("● LITERT · PRÜFE NPU / GPU / CPU …")
         lifecycleScope.launch {
+            var previousModelUnloaded = false
             try {
                 val loaded = withContext(Dispatchers.IO) {
                     ModelStore.validate(file)
                     check(prefs.edit().putString(PREF_LOADING_MODEL, file.name).commit()) {
                         "Prozessdiagnose-Marker konnte nicht gespeichert werden."
                     }
+                    // Only now alter runtime ownership. Invalid import files
+                    // must not make the already loaded model disappear.
+                    previousModelUnloaded = true
                     // Never hold two multi-GB models in memory simultaneously.
                     if (::engine.isInitialized && (engine.state.value is InferenceEngine.State.ModelReady ||
                             engine.state.value is InferenceEngine.State.Error)) {
@@ -643,12 +647,14 @@ class MainActivity : AppCompatActivity() {
                 refreshLibrary()
                 showPage(0)
             } catch (error: Exception) {
-                activeModel = null
-                setStatus("LiteRT-LM konnte nicht gestartet werden")
+                if (previousModelUnloaded) activeModel = null
+                setStatus(if (activeModel != null) "● BEREIT"
+                    else "LiteRT-LM konnte nicht gestartet werden")
                 showError("LiteRT-Modell/Backend fehlgeschlagen", error)
             } catch (error: LinkageError) {
-                activeModel = null
-                setStatus("LiteRT-LM Bibliothek nicht verfügbar")
+                if (previousModelUnloaded) activeModel = null
+                setStatus(if (activeModel != null) "● BEREIT"
+                    else "LiteRT-LM Bibliothek nicht verfügbar")
                 showError("LiteRT-LM Bibliothek konnte nicht geladen werden", error)
             } finally {
                 prefs.edit().remove(PREF_LOADING_MODEL).apply()
@@ -711,7 +717,17 @@ class MainActivity : AppCompatActivity() {
                 findViewById<View>(R.id.emptyState).visibility = View.VISIBLE
                 toast("Chat zurückgesetzt · Modell nicht neu geladen")
             } catch (problem: Exception) {
-                setStatus("Chat-Reset fehlgeschlagen · Modell bleibt unverändert")
+                // A failed LiteRT conversation re-open may leave a live Engine
+                // with no session. Do not advertise a usable model.
+                if (activeModel?.name?.endsWith(".litertlm", true) == true &&
+                        liteRtRuntime?.hasConversation == false) {
+                    withContext(Dispatchers.IO) {
+                        try { liteRtRuntime?.close() } catch (_: Exception) {}
+                        liteRtRuntime = null
+                    }
+                    activeModel = null
+                    setStatus("LiteRT-Konversation fehlgeschlagen · Modell neu laden")
+                } else setStatus("Chat-Reset fehlgeschlagen · Modell bleibt unverändert")
                 showError("Schneller Konversationsreset nicht möglich", problem)
             } finally {
                 busy = false

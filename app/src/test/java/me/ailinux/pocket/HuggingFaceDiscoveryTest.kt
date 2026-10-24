@@ -34,6 +34,21 @@ class HuggingFaceDiscoveryTest {
         assertNull(parsed.single().suggestedFile)
     }
 
+    @Test fun explicitJsonNullPipelineIsTreatedAsUnspecifiedOnAndroid() {
+        val source = java.io.File(
+            "src/main/java/me/ailinux/pocket/HuggingFaceDiscovery.kt"
+        ).readText()
+        // Android org.json optString(JSONObject.NULL) and the JVM test
+        // org.json version differ. Pin explicit null normalization in source.
+        assertTrue(source.contains("item.isNull(\"pipeline_tag\")"))
+        val json = """[
+          {"id":"litert-community/gemma-4-E2B-it-litert-lm",
+           "gated":false,"private":false,"pipeline_tag":null,
+           "tags":["litert-lm"],"downloads":900}
+        ]"""
+        assertEquals(1, HuggingFaceDiscovery.parseHubSearch(json, 5, "litertlm").size)
+    }
+
     @Test fun directHubSearchRecognizesOfficialLiteRtLmTag() {
         val data = """[
           {"id":"litert-community/gemma-4-E2B-it-litert-lm", "gated":false,

@@ -45,10 +45,30 @@ class ThinkingRecoveryRegressionTest {
         assertTrue(activity.contains("R.id.clearChatButton).setOnClickListener {\n            resetLocalConversation()"))
     }
 
+    @Test fun liteRtClosesOldConversationBeforeRecreatingSession() {
+        val source = File("src/main/java/me/ailinux/pocket/LiteRtRuntime.kt")
+            .readText()
+        val reset = source.substringAfter("suspend fun clearConversation()")
+            .substringBefore("val hasConversation:")
+        assertTrue(reset.indexOf("old?.close()") < reset.indexOf("engine.createConversation("))
+        assertTrue(reset.contains("conversation = null"))
+        assertTrue(source.contains("checkNotNull(conversation)"))
+        assertTrue(source.contains("val hasConversation: Boolean get()"))
+    }
+
+    @Test fun liteRtImportOnlyDropsPreviouslyLoadedModelAfterSuccessfulPreflight() {
+        val load = activity.substringAfter("private fun loadLiteRtModel(")
+            .substringBefore("Both CHAT and SETUP")
+        assertTrue(load.indexOf("ModelStore.validate(file)") <
+            load.indexOf("previousModelUnloaded = true"))
+        assertTrue(load.contains("if (previousModelUnloaded) activeModel = null"))
+    }
+
     @Test fun kotlinRecoversIncompleteAssistantWithoutRetryingTool() {
         assertTrue(engine.contains("private external fun recoverIncompleteThinkingNative(): Int"))
         assertTrue(engine.contains("private fun finishAndRecoverThinking(): Boolean"))
         assertTrue(engine.contains("IncompleteThinkingTurnException("))
+        assertTrue(engine.contains("val error = if (e is IncompleteThinkingTurnException) e else"))
         assertTrue(engine.contains("InferenceEngine.State.ModelReady else InferenceEngine.State.Error("))
         assertTrue(activity.contains("if (error is IncompleteThinkingTurnException)"))
         assertTrue(activity.contains("pendingNativeToolTurn = null"))

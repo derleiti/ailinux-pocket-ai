@@ -67,7 +67,8 @@ object HuggingFaceDiscovery {
             val id = item.optString("id")
             if (!validRepo.matches(id) || ".." in id ||
                 item.optBoolean("private") ||
-                item.optString("pipeline_tag") !in (if (format == "litertlm")
+                (if (item.isNull("pipeline_tag")) "" else item.optString("pipeline_tag")) !in (
+                    if (format == "litertlm")
                     setOf("", "text-generation", "image-text-to-text")
                     else setOf("", "text-generation"))
             ) continue
