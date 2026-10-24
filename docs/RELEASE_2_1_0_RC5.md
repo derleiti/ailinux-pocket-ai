@@ -1,0 +1,1 @@
+Pocket AI 2.1.0-RC5: natural-language MCP agent requests bypass generic health-only routing when a model and MCP agent are selected. Direct diagnostics remain available. No native LiteRT tool call means no external action and an explicit warning. Real device MCP QA remains pending.
