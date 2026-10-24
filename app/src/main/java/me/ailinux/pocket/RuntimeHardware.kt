@@ -20,6 +20,17 @@ internal object RuntimeHardware {
         else listOf(Attempt.GPU, Attempt.CPU)
     }
 
+    fun forModelFile(name: String, available: List<Attempt>): List<Attempt> {
+        val lower = name.lowercase(java.util.Locale.ROOT)
+        val gpuOnly = Regex("(?:^|[-_.])gpu(?:[-_.]|$)").containsMatchIn(lower)
+        val tpuOnly = Regex("(?:^|[-_.])(?:npu|tpu)(?:[-_.]|$)").containsMatchIn(lower)
+        return when {
+            gpuOnly -> listOf(Attempt.GPU, Attempt.CPU).filter { it in available }
+            tpuOnly -> listOf(Attempt.GOOGLE_TENSOR).filter { it in available }
+            else -> available
+        }
+    }
+
     fun candidatesOnDevice(): List<Attempt> =
         candidates(Build.MANUFACTURER, Build.MODEL, Build.SOC_MODEL)
 

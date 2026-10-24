@@ -24,6 +24,15 @@ class RuntimeHardwareTest {
         assertTrue(java.io.File("../third_party/google_tensor_dispatch/LICENSE").isFile)
     }
 
+    @Test fun gpuNamedModelSkipsExpensiveTensorAttempt() {
+        val all = RuntimeHardware.candidates("Google", "Pixel 10 Pro", "Tensor G5")
+        assertEquals(listOf(RuntimeHardware.Attempt.GPU, RuntimeHardware.Attempt.CPU),
+            RuntimeHardware.forModelFile("gemma-4-E2B-it-gpu.litertlm", all))
+        assertEquals(all, RuntimeHardware.forModelFile("generic.litertlm", all))
+        assertEquals(listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR),
+            RuntimeHardware.forModelFile("gemma-4-E2B-npu.litertlm", all))
+    }
+
     @Test fun genericAndroidDoesNotAssumeVendorTpu() {
         assertEquals(listOf(RuntimeHardware.Attempt.GPU, RuntimeHardware.Attempt.CPU),
             RuntimeHardware.candidates("Samsung", "Galaxy S26", "Exynos"))

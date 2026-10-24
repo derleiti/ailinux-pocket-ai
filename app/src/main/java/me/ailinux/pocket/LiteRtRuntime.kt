@@ -184,7 +184,9 @@ internal class LiteRtRuntime private constructor(
     }
 
     companion object {
-        suspend fun load(context: Context, file: File, prompt: String): LiteRtRuntime {
+        suspend fun load(context: Context, file: File, prompt: String,
+                         session: McpAgentSession? = null,
+                         onStage: (String) -> Unit = {}): LiteRtRuntime {
             require(file.isFile && file.name.endsWith(".litertlm", true)) {
                 "Nur lokal importierte LiteRT-LM-Modelle"
             }
@@ -198,7 +200,11 @@ internal class LiteRtRuntime private constructor(
             try {
                 return withContext(dispatcher) {
                     val errors = mutableListOf<String>()
-                    for (attempt in RuntimeHardware.candidatesOnDevice()) {
+                    val choices = RuntimeHardware.forModelFile(
+                        file.name, RuntimeHardware.candidatesOnDevice())
+                    require(choices.isNotEmpty()) { "Kein kompatibler Backend-Kandidat für " + file.name }
+                    for (attempt in choices) {
+                        onStage("backend_" + attempt.name.lowercase())
                         var candidate: Engine? = null
                         var initialized = false
                         try {
@@ -216,12 +222,37 @@ internal class LiteRtRuntime private constructor(
                             candidate = Engine(config)
                             candidate.initialize()
                             initialized = true
-                            val convo = candidate.createConversation(
-                                ConversationConfig(systemInstruction = Contents.of(prompt))
-                            )
+                            onStage("conversation_" + attempt.name.lowercase())
+                            val chosenTools = session?.let { McpAgentBridge.nativeToolsJson(it.tools) }
+                            val definitions = if (chosenTools == null) emptyList() else
+                                (0 until org.json.JSONArray(chosenTools).length()).map { index ->
+                                    val json = org.json.JSONArray(chosenTools)
+                                        .getJSONObject(index).getJSONObject("function").toString()
+                                    tool(object : OpenApiTool {
+                                        override fun getToolDescriptionJsonString() = json
+                                        override fun execute(paramsJsonString: String): String =
+                                            throw SecurityException("Host approval is required")
+                                    })
+                                }
+                            val instruction = if (session == null) prompt else
+                                prompt + "\n" + LiteRtMcpProtocol.shortInstructions(
+                                    session.progressiveSources.isNotEmpty()) +
+                                    me.ailinux.pocket.mcp.McpServerGuidance.optionalPromptBlock(session)
+                            val convo = candidate.createConversation(ConversationConfig(
+                                systemInstruction = Contents.of(instruction),
+                                tools = definitions, automaticToolCalling = false))
+                            onStage("ready_" + attempt.name.lowercase())
                             return@withContext LiteRtRuntime(
                                 candidate, convo, prompt, attempt.name, dispatcher
-                            )
+                            ).apply {
+                                currentInstruction = instruction
+                                currentToolProviders = definitions
+                                activeBridgeKey = session?.let {
+                                    McpAgentBridge.nativeToolsJson(it.tools) + "|" + it.profileId +
+                                    "|" + it.progressiveSources.joinToString { src -> src.id + src.endpoint } +
+                                    "|" + me.ailinux.pocket.mcp.McpServerGuidance.optionalPromptBlock(it)
+                                }.orEmpty()
+                            }
                         } catch (problem: Exception) {
                             errors += attempt.name + ": " +
                                 (problem.message ?: problem.javaClass.simpleName).take(180)
