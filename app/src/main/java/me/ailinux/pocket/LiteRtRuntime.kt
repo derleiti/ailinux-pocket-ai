@@ -270,7 +270,8 @@ internal class LiteRtRuntime private constructor(
                         }
                     }
                     val likelyCompiledMismatch = errors.any {
-                        it.contains("No KV cache inputs found", ignoreCase = true)
+                        it.startsWith(RuntimeHardware.Attempt.GOOGLE_TENSOR.name + ": ") &&
+                            it.contains("No KV cache inputs found", ignoreCase = true)
                     }
                     val explanation = if (likelyCompiledMismatch)
                         "Das Modell enthält offenbar keine für GPU/CPU verwendbaren KV-Cache-Eingänge. " +

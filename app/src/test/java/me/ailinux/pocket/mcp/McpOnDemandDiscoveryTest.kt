@@ -61,6 +61,16 @@ class McpOnDemandDiscoveryTest {
             "MCP tool read_and_clear_notifications", run(listOf(malicious))))
     }
 
+    @Test fun parenthesizedCrawlUrlKeepsQueryButNotClosingDelimiters() {
+        val schema = JSONObject("""{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}""")
+        val plan = McpOnDemandDiscovery.propose(
+            "mcp crawl (https://ailinux.me/search?q=gemma&lang=de)",
+            run(listOf(tool("crawl", schema))))
+        assertNotNull(plan)
+        assertEquals("https://ailinux.me/search?q=gemma&lang=de",
+            plan!!.arguments.getString("url"))
+    }
+
     @Test fun noSideEffectingFallbackAndNoInventedParameters() {
         assertNull(McpOnDemandDiscovery.propose("mcp tool delete", run(listOf(tool("delete")))))
         val required = JSONObject("""{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}""")
