@@ -147,28 +147,40 @@ class McpClient(
         val name = hello.optJSONObject("serverInfo")?.optString("name")
             ?.take(100)?.ifBlank { profile.title } ?: profile.title
         val tools = ArrayList<McpTool>()
+        val seen = hashSetOf<String>()
+        val visitedCursors = hashSetOf<String>()
         var cursor: String? = null
-        repeat(10) {
+        repeat(McpProgressiveBridge.MAX_CATALOG_PAGES) {
             val args = JSONObject()
             if (cursor != null) args.put("cursor", cursor)
             val result = invoke("tools/list", args)
-            val items = result.optJSONArray("tools") ?: JSONArray()
+            val items = result.optJSONArray("tools")
+                ?: throw IOException("MCP tools/list lieferte kein Werkzeug-Array")
             for (i in 0 until items.length()) {
-                if (tools.size >= 250) break
                 val tool = items.optJSONObject(i) ?: continue
                 val toolName = tool.optString("name")
-                if (toolName.isNotBlank() && toolName.length <= 200) {
-                    val schema = tool.optJSONObject("inputSchema") ?: JSONObject()
-                    if (runCatching { parameterHeaderAnnotations(schema) }.isSuccess) {
-                        tools.add(McpTool(toolName, tool.optString("description").take(650),
-                            schema, tool.optJSONObject("annotations") ?: JSONObject()))
-                    }
+                if (toolName.isBlank() || toolName.length > 200) continue
+                if (!seen.add(toolName)) continue
+                require(tools.size < McpProgressiveBridge.MAX_CATALOG_TOOLS_PER_SERVER) {
+                    "MCP-Katalog zu groß: mehr als " +
+                        McpProgressiveBridge.MAX_CATALOG_TOOLS_PER_SERVER +
+                        " Einträge. Keine unvollständige Autorisierungsliste verwenden."
+                }
+                val schema = tool.optJSONObject("inputSchema") ?: JSONObject()
+                if (runCatching { parameterHeaderAnnotations(schema) }.isSuccess) {
+                    tools.add(McpTool(toolName, tool.optString("description").take(650),
+                        schema, tool.optJSONObject("annotations") ?: JSONObject()))
                 }
             }
-            cursor = result.optString("nextCursor").ifBlank { null }
-            if (cursor == null || tools.size >= 250) return McpServerInfo(name, version, tools, guidance)
+            val next = result.optString("nextCursor").ifBlank { null }
+            if (next == null) return McpServerInfo(name, version, tools, guidance)
+            require(next.length <= 2048 && visitedCursors.add(next)) {
+                "MCP-Pagination wiederholt einen Cursor oder Cursor zu lang"
+            }
+            cursor = next
         }
-        return McpServerInfo(name, version, tools, guidance)
+        throw IOException("MCP-Katalog-Pagination nach " +
+            McpProgressiveBridge.MAX_CATALOG_PAGES + " Seiten unvollständig")
     }
 
     fun callTool(name: String, params: JSONObject, schema: JSONObject = JSONObject()): JSONObject {

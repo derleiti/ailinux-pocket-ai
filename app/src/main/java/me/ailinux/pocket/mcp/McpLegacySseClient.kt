@@ -178,27 +178,37 @@ class McpLegacySseClient(private val profile: McpProfile) : Closeable {
         val name = handshake.optJSONObject("serverInfo")?.optString("name").orEmpty()
             .ifBlank { profile.title }
         val tools = ArrayList<McpTool>()
+        val seen = hashSetOf<String>()
+        val visitedCursors = hashSetOf<String>()
         var cursor: String? = null
-        repeat(10) {
+        repeat(McpProgressiveBridge.MAX_CATALOG_PAGES) {
             val args = JSONObject()
             if (cursor != null) args.put("cursor", cursor)
             val result = request("tools/list", args)
-            val values = result.optJSONArray("tools") ?: JSONArray()
+            val values = result.optJSONArray("tools")
+                ?: throw IOException("Legacy MCP tools/list ohne Werkzeug-Array")
             for (i in 0 until values.length()) {
-                if (tools.size >= 250) break
                 val tool = values.optJSONObject(i) ?: continue
-                val name = tool.optString("name")
-                if (name.isNotBlank()) tools.add(McpTool(name,
+                val toolName = tool.optString("name")
+                if (toolName.isBlank() || !seen.add(toolName)) continue
+                require(tools.size < McpProgressiveBridge.MAX_CATALOG_TOOLS_PER_SERVER) {
+                    "Legacy MCP-Katalog zu groß oder unvollständig"
+                }
+                tools.add(McpTool(toolName,
                     tool.optString("description").take(650),
                     tool.optJSONObject("inputSchema") ?: JSONObject(),
                     tool.optJSONObject("annotations") ?: JSONObject()))
             }
-            cursor = result.optString("nextCursor").ifBlank { null }
-            if (cursor == null || tools.size >= 250) {
+            val next = result.optString("nextCursor").ifBlank { null }
+            if (next == null) {
                 return McpServerInfo(name, "2024-11-05 (HTTP+SSE)", tools, guidance)
             }
+            require(next.length <= 2048 && visitedCursors.add(next)) {
+                "Legacy MCP-Pagination wiederholt einen Cursor oder Cursor zu lang"
+            }
+            cursor = next
         }
-        return McpServerInfo(name, "2024-11-05 (HTTP+SSE)", tools, guidance)
+        throw IOException("Legacy MCP-Katalog-Pagination unvollständig")
     }
 
     fun callTool(name: String, args: JSONObject): JSONObject {
