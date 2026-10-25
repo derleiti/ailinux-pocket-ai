@@ -46,7 +46,9 @@ internal object PocketDiagnostics {
         INVALID_NATIVE_TOOL_COUNT, NATIVE_RESPONSE_REJECTED,
         NATIVE_SCHEMA_MISSING_REQUIRED, NATIVE_SCHEMA_UNKNOWN_FIELD,
         NATIVE_SCHEMA_WRONG_TYPE, NATIVE_SCHEMA_INVALID_VALUE,
-        NATIVE_SCHEMA_OTHER, MODEL_FOLLOWUP_EMPTY, MODEL_RUNTIME, UNKNOWN
+        NATIVE_SCHEMA_OTHER, MODEL_FOLLOWUP_EMPTY, MODEL_RUNTIME,
+        GGUF_METADATA, GGUF_PREVIOUS_ENGINE, GGUF_NATIVE_LOAD, GGUF_THINKING,
+        GGUF_TEMPLATE, GGUF_SAMPLING, UNKNOWN
     }
     data class Event(
         val time: Long, val id: String, val trace: String,
@@ -93,6 +95,7 @@ internal object PocketDiagnostics {
         if (error is me.ailinux.pocket.mcp.McpExecutionUncertain &&
             error.cause != null) return classify(error.cause!!)
         if (error is kotlinx.coroutines.CancellationException) return ErrorCode.CANCELLED
+        if (error is GgufLoadFailure) return error.diagnosticCode
         if (error is OutOfMemoryError || error is ModelMemoryGuardException)
             return ErrorCode.MEMORY
         val klass = error.javaClass.simpleName.lowercase(Locale.ROOT)

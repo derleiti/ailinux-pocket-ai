@@ -58,18 +58,17 @@ object ModelLoadSafety {
         fun addBounded(value: Long, extra: Long): Long =
             if (value > Long.MAX_VALUE - extra) Long.MAX_VALUE else value + extra
         val weights = modelSizeBytes.coerceAtLeast(0L)
-        // Only a cautious WARN threshold, not a proven allocation upper
-        // bound. Scale with the model instead of blocking all 0.8B Tensor
-        // models behind a fixed 6 GiB threshold on 12 GiB Pixel devices.
-        // A user may explicitly accept an NPU attempt above the hard Android
-        // low-memory / non-Tensor floor; never silently force that choice.
+        // Two actual Pixel Android REASON_LOW_MEMORY exits (RSS ~5.7 GB
+        // and ~4.8 GB) followed consented Tensor-G5 experiments. The NPU
+        // floor therefore must be HARD, not bypassable with a warning.
+        // This heuristic is not a measured upper allocation bound.
         val approximateNativePeak = addBounded(
             if (weights > Long.MAX_VALUE / 2L) Long.MAX_VALUE else weights * 2L,
             twoGiB
         )
         return maxOf(
             basic,
-            3L * GIB,
+            6L * GIB,
             approximateNativePeak,
             addBounded(androidLowMemoryThresholdBytes.coerceAtLeast(0L), twoGiB)
         )
@@ -82,14 +81,15 @@ object ModelLoadSafety {
     internal fun allowedLiteRtAttempts(
         fileBytes: Long, availableBytes: Long,
         androidLowMemory: Boolean, lowMemoryThresholdBytes: Long,
-        candidates: List<RuntimeHardware.Attempt>,
-        explicitlyAcceptedTensorRisk: Boolean = false
+        candidates: List<RuntimeHardware.Attempt>
     ): List<RuntimeHardware.Attempt> {
         if (androidLowMemory || insufficientAfterUnload(fileBytes, availableBytes))
             return emptyList()
-        val tensorAllowed = explicitlyAcceptedTensorRisk ||
-            !insufficientForLiteRtModel(
-                fileBytes, availableBytes, true, false, lowMemoryThresholdBytes)
+        // Consent does not make an unsafe native allocation safe. Keep
+        // GPU/CPU fallback for genuinely compatible graphs and reject NPU-
+        // only graphs when Tensor memory is insufficient.
+        val tensorAllowed = !insufficientForLiteRtModel(
+            fileBytes, availableBytes, true, false, lowMemoryThresholdBytes)
         return candidates.distinct().filter {
             it != RuntimeHardware.Attempt.GOOGLE_TENSOR || tensorAllowed
         }

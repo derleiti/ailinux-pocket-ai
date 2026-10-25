@@ -1021,12 +1021,15 @@ class MainActivity : AppCompatActivity() {
             PocketDiagnostics.State.START)
         lifecycleScope.launch {
             var previousModelUnloaded = false
+            var newGgufLoaded = false
+            var startupPhase = GgufLoadFailure.Phase.METADATA
             try {
                 val inspection = withContext(Dispatchers.IO) { ModelCompatibility.inspect(file) }
                 inspection.incompatibleReason?.let { throw IllegalArgumentException(it) }
                 setStatus("Lade " + (inspection.architecture ?: "GGUF") + " …")
                 // Persist before JNI starts, but commit() fsync can take
                 // hundreds of ms on a busy device: do it off the UI thread.
+                startupPhase = GgufLoadFailure.Phase.PREVIOUS_ENGINE_RELEASE
                 withContext(Dispatchers.IO) {
                     check(prefs.edit().putString(PREF_LOADING_MODEL, file.name)
                         .putLong(PREF_LOADING_MODEL_STARTED_MS, System.currentTimeMillis())
@@ -1050,6 +1053,7 @@ class MainActivity : AppCompatActivity() {
                         else -> Unit
                     }
                     previousModelUnloaded = true
+                    startupPhase = GgufLoadFailure.Phase.NATIVE_MODEL_LOAD
                     try {
                         engine.loadModel(file.absolutePath)
                     } catch (error: IOException) {
@@ -1063,6 +1067,8 @@ class MainActivity : AppCompatActivity() {
                             error
                         )
                     }
+                    newGgufLoaded = true
+                    startupPhase = GgufLoadFailure.Phase.THINKING_SETUP
                     // The mode must be set BEFORE the system prompt enters
                     // the KV cache; changing it within an active chat corrupts
                     // incremental Jinja template prefixes.
@@ -1074,7 +1080,9 @@ class MainActivity : AppCompatActivity() {
                     val nativeTools = activeMcp?.let {
                         McpAgentBridge.nativeToolsJson(it.tools)
                     } ?: "[]"
+                    startupPhase = GgufLoadFailure.Phase.CHAT_TEMPLATE
                     engine.setSystemPrompt(groundedSystemPrompt(activeMcp), nativeTools)
+                    startupPhase = GgufLoadFailure.Phase.SAMPLING_SETUP
                     applySampling()
                 }
                 activeModel = file
@@ -1092,12 +1100,31 @@ class MainActivity : AppCompatActivity() {
                 refreshLibrary()
                 showPage(0)
             } catch (error: Exception) {
+                val typed = GgufLoadFailure(startupPhase, error)
                 failure(PocketDiagnostics.Domain.GGUF,
-                    PocketDiagnostics.Step.MODEL_LOAD, error)
-                // Preserve the previously loaded model if the preflight is rejected.
+                    PocketDiagnostics.Step.MODEL_LOAD, typed,
+                    durationMs = SystemClock.elapsedRealtime() - modelLoadStarted)
+                // A load succeeded but a later template/sampling step failed:
+                // release the still-mapped GGUF weights, not only UI state.
+                // Never double-unload after the native load() catch already
+                // performed its own cleanup.
+                if (newGgufLoaded && ::engine.isInitialized) {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        try {
+                            if (engine.state.value is InferenceEngine.State.ModelReady ||
+                                engine.state.value is InferenceEngine.State.Error) {
+                                engine.cleanUp()
+                            }
+                        } catch (cleanupError: Exception) {
+                            failure(PocketDiagnostics.Domain.GGUF,
+                                PocketDiagnostics.Step.ENGINE_ERROR, cleanupError)
+                        }
+                    }
+                }
+                // Preserve the previously loaded model if preflight failed.
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT" else "Ladefehler")
-                showError("Modell/Chat-Template konnte nicht gestartet werden", error)
+                showError("GGUF-Modellstart fehlgeschlagen", typed)
             } finally {
                 prefs.edit().remove(PREF_LOADING_MODEL)
                     .remove(PREF_LOADING_MODEL_STARTED_MS).apply()
@@ -1150,15 +1177,15 @@ class MainActivity : AppCompatActivity() {
                 "\n\nGoogle Tensor benötigt möglicherweise weitere Speicherpuffer. " +
                     "Die vorsichtige Warnschwelle beträgt " +
                     ModelStore.displaySize(tensorWarningFloor) +
-                    ". Ein manueller Versuch kann Androids Speicherschutz auslösen; " +
-                    "ein bestätigter Versuch wird bei akutem Speicherdruck " +
-                    "(lowMemory=true) dennoch gestoppt."
+                    ". Diese Grenze darf nicht per Bestätigung überschritten " +
+                    "werden. Pocket AI überspringt dann die Tensor-NPU und " +
+                    "verwendet nur kompatible GPU-/CPU-Backends."
             else ""
             AlertDialog.Builder(this)
                 .setTitle("Hoher RAM-Bedarf")
                 .setMessage(ModelLoadSafety.explain(file.length(), memory.availMem) + riskNote)
                 .setNegativeButton("Abbrechen", null)
-                .setPositiveButton("Trotzdem laden") { _, _ ->
+                .setPositiveButton("Sicher versuchen") { _, _ ->
                     loadLiteRtModel(file, acknowledgedLargeModel = true)
                 }.show()
             return
@@ -1214,8 +1241,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     val safeCandidates = ModelLoadSafety.allowedLiteRtAttempts(
                         file.length(), currentMemory.availMem, currentMemory.lowMemory,
-                        currentMemory.threshold, deviceCandidates,
-                        explicitlyAcceptedTensorRisk = acknowledgedLargeModel
+                        currentMemory.threshold, deviceCandidates
                     )
                     val tensorCandidate = RuntimeHardware.Attempt.GOOGLE_TENSOR in deviceCandidates
                     if (safeCandidates.isEmpty()) {
@@ -1225,16 +1251,6 @@ class MainActivity : AppCompatActivity() {
                                 file.length(), tensorCandidate, currentMemory.threshold),
                             androidLowMemory = currentMemory.lowMemory
                         )
-                    }
-                    if (tensorCandidate && acknowledgedLargeModel &&
-                        ModelLoadSafety.insufficientForLiteRtModel(
-                            file.length(), currentMemory.availMem, true,
-                            currentMemory.lowMemory, currentMemory.threshold) &&
-                        RuntimeHardware.Attempt.GOOGLE_TENSOR in safeCandidates) {
-                        trace(PocketDiagnostics.Domain.LITERT,
-                            PocketDiagnostics.Step.BACKEND_RISK_ACCEPTED,
-                            PocketDiagnostics.State.INFO,
-                            code = PocketDiagnostics.ErrorCode.MEMORY)
                     }
                     if (tensorCandidate &&
                         RuntimeHardware.Attempt.GOOGLE_TENSOR !in safeCandidates) {

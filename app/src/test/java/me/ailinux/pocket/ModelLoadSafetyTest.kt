@@ -62,8 +62,7 @@ class ModelLoadSafetyTest {
         assertTrue(ModelLoadSafety.allowedLiteRtAttempts(
             gib, 10L * gib, androidLowMemory = true,
             lowMemoryThresholdBytes = gib,
-            candidates = listOf(RuntimeHardware.Attempt.GPU),
-            explicitlyAcceptedTensorRisk = true
+            candidates = listOf(RuntimeHardware.Attempt.GPU)
         ).isEmpty())
     }
 
@@ -71,9 +70,9 @@ class ModelLoadSafetyTest {
         val smallModel = 900L * 1024L * 1024L
         val tensorRequired = ModelLoadSafety.minimumAvailableForLiteRtModel(
             smallModel, mayUseGoogleTensor = true)
-        assertEquals(2L * smallModel + 2L * gib, tensorRequired)
+        assertEquals(6L * gib, tensorRequired)
         assertTrue(ModelLoadSafety.insufficientForLiteRtModel(
-            smallModel, 3L * gib, true, false, gib))
+            smallModel, 5L * gib, true, false, gib))
         assertFalse(ModelLoadSafety.insufficientForLiteRtModel(
             smallModel, 8L * gib, true, false, gib))
         // Android's OS lowMemory flag must override user opt-in.
@@ -125,21 +124,14 @@ class ModelLoadSafetyTest {
             fileBytes, 10L * gib, true, gib, both).isEmpty())
         assertEquals(both, ModelLoadSafety.allowedLiteRtAttempts(
             fileBytes, 8L * gib, false, gib, both))
-        // The user's explicit warning acknowledgment can allow an NPU
-        // attempt, but never overrides the actual Android low-memory flag
-        // or the original hard load floor.
-        assertEquals(both, ModelLoadSafety.allowedLiteRtAttempts(
-            fileBytes, 3L * gib, false, gib, both,
-            explicitlyAcceptedTensorRisk = true))
-        assertTrue(ModelLoadSafety.allowedLiteRtAttempts(
-            fileBytes, 3L * gib, true, gib, both,
-            explicitlyAcceptedTensorRisk = true).isEmpty())
-        assertTrue(ModelLoadSafety.allowedLiteRtAttempts(
-            fileBytes, gib, false, gib, both,
-            explicitlyAcceptedTensorRisk = true).isEmpty())
-        // With no user opt-in a real GPU/CPU fallback remains available.
+        // A prior "Trotzdem laden" click is now just acknowledgement of
+        // potentially large weights, NOT consent to bypass the Tensor
+        // low-memory safety floor after two real Android LMK exits.
         assertEquals(listOf(RuntimeHardware.Attempt.GPU, RuntimeHardware.Attempt.CPU),
-            ModelLoadSafety.allowedLiteRtAttempts(fileBytes, 3L * gib, false, gib, both))
+            ModelLoadSafety.allowedLiteRtAttempts(fileBytes, 3L * gib,
+                false, gib, both))
+        assertTrue(ModelLoadSafety.allowedLiteRtAttempts(fileBytes, 3L * gib,
+            false, gib, listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR)).isEmpty())
     }
 
     @Test fun runtimeReceivesMemoryFilteredCandidatesBeforeNativeInitialization() {
@@ -154,8 +146,8 @@ class ModelLoadSafetyTest {
         assertTrue(method.contains("ModelLoadSafety.allowedLiteRtAttempts("))
         assertTrue(method.contains("allowedAttempts = safeCandidates"))
         assertTrue(method.contains("PocketDiagnostics.Step.BACKEND_SKIPPED"))
-        assertTrue(method.contains("PocketDiagnostics.Step.BACKEND_RISK_ACCEPTED"))
-        assertTrue(method.contains("explicitlyAcceptedTensorRisk = acknowledgedLargeModel"))
+        assertFalse(method.contains("PocketDiagnostics.Step.BACKEND_RISK_ACCEPTED"))
+        assertFalse(method.contains("explicitlyAcceptedTensorRisk"))
         assertTrue(method.contains("tensorRiskWarning"))
     }
 

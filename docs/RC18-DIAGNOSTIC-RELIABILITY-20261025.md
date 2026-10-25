@@ -27,3 +27,14 @@ Test device: Pixel 10 Pro, Android 17; original public RC17 remains untouched. T
 ## 12 GiB Pixel memory-floor review
 
 The paired Android device reports 12,124,946,432 bytes total RAM (~11.29 GiB). A flat 6 GiB free-memory requirement can reject valid small Tensor models even after native resources were released. RC18 therefore uses a **size-scaled soft NPU warning** (max(3 GiB, 2x file bytes + 2 GiB, Android LMK threshold + 2 GiB)) and requires explicit user acknowledgement before attempting a low-margin NPU load. The user opt-in never bypasses Android lowMemory=true or the pre-existing hard non-Tensor safety floor. If an NPU model supports GPU/CPU, the app may skip NPU rather than attempting an unsafe automatic NPU load; NPU-only models have no imaginary GPU fallback. Trace BACKEND_RISK_ACCEPTED and BACKEND_SKIPPED separately, without logging model prompts or secrets. This is a conservative safety heuristic; actual memory consumption remains subject to Pixel QA.
+
+## Additional 19:23–19:27 CET device events (new local fix)
+
+- **19:23:14 CET (18:23:14Z)** user accepted a Tensor memory warning (BACKEND_RISK_ACCEPTED).
+- **19:23:29 CET (18:23:29Z)** Android REASON_LOW_MEMORY: 4,840,256 kB RSS; last phase Spark-X2.5-1.7B Google Tensor. This is a second observed LMK after the earlier 5,727,100 kB exit. Acknowledging a warning **cannot safely override** the NPU preflight.
+- **19:25–19:27 CET (18:25–18:27Z)** five quick MCP DISCOVERY_DONE FAIL/HTTP_FAILURE events (3 selected sources, individual source not identified by original log). TriForce POST /v1/mcp access logs for matching period returned HTTP 200. A direct unauthenticated Discord /mcp check returned HTTP 401 as expected. No evidence identifies the failing source or establishes a complete server outage.
+- **19:21:52 CET (18:21:52Z)** genuine host-assisted APPROVAL -> AUTH_CHECK -> SCHEMA_CHECK -> DISPATCH -> SERVER_RESULT. Do not mistake this for native model function calling.
+
+Corrective source behavior: treat the Tensor-specific conservative floor as a HARD guard even after a warning is accepted. Permit compatible GPU/CPU attempts only after the OS memory/available-memory checks. Preserve NPU-only graph compatibility restrictions. During a freshly consented multi-server discovery, log a privacy-safe per-source ordinal and error class/HTTP status and retain live sources with their ORIGINAL s1/s2/s3 identities; clearly mark partial availability. Never silently retry tools/call or route an unavailable source through another identity.
+
+A previous build with 3 GiB NPU warning floor and a consent override was not sufficient for this device. The new 6 GiB Tensor warning/hard floor remains a heuristic and requires hardware acceptance. Neither the model weights nor the private OAuth profile store are changed.
