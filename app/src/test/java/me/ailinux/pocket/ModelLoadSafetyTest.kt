@@ -107,6 +107,50 @@ class ModelLoadSafetyTest {
             ModelLoadSafety.minimumAvailableForLiteRtModel(gib, true, Long.MAX_VALUE))
     }
 
+    @Test fun observedPixelTensorRefusalIsConservativeNotAndroidLowMemoryEvidence() {
+        val gemmaG5Bytes = 3_113_545_589L
+        val available = (4.56 * gib).toLong()
+        val required = ModelLoadSafety.minimumAvailableForLiteRtModel(
+            gemmaG5Bytes, true, gib)
+        assertEquals("7,80 GB", ModelStore.displaySize(required))
+        assertTrue(available < required)
+        assertTrue(ModelLoadSafety.insufficientForLiteRtModel(
+            gemmaG5Bytes, available, true, false, gib))
+        // The OS flag was NOT shown true; this is our own conservative
+        // policy, not evidence of Android's lowMemory flag.
+        val refusal = ModelMemoryGuardException(available, required, false)
+        assertFalse(ModelLoadSafety.explainRefusal(refusal).contains("lowMemory=true"))
+        assertTrue(ModelLoadSafety.explainRefusal(refusal).contains("Schutzabschätzung"))
+    }
+
+    @Test fun unloadAndRecheckRequiresUserAndKeepsThePostUnloadHardGate() {
+        assertTrue(ModelLoadSafety.canOfferTensorRecheckAfterUnload(
+            tensorRisk = true, tensorOnly = true, previousSessionReady = true))
+        assertFalse(ModelLoadSafety.canOfferTensorRecheckAfterUnload(
+            tensorRisk = true, tensorOnly = true, previousSessionReady = false))
+        assertFalse(ModelLoadSafety.canOfferTensorRecheckAfterUnload(
+            tensorRisk = true, tensorOnly = false, previousSessionReady = true))
+        assertFalse(ModelLoadSafety.canOfferTensorRecheckAfterUnload(
+            tensorRisk = false, tensorOnly = true, previousSessionReady = true))
+        val source = java.io.File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        val method = source.substringAfter("private fun loadLiteRtModel(")
+            .substringBefore("private fun showMcpAgentMenu()")
+        val preflight = method.indexOf("ModelLoadSafety.canOfferTensorRecheckAfterUnload(")
+        val acknowledge = method.indexOf("Entladen und neu prüfen")
+        val release = method.indexOf("previousLiteRt.shutdown()")
+        val postcheck = method.indexOf("ModelLoadSafety.allowedLiteRtAttempts(")
+        val load = method.indexOf("LiteRtRuntime.load(applicationContext")
+        assertTrue(preflight in 0 until release)
+        assertTrue(acknowledge in 0 until release)
+        assertTrue(release < postcheck && postcheck < load)
+        assertTrue(method.contains("allowedAttempts = safeCandidates"))
+        assertTrue(method.contains("if (safeCandidates.isEmpty())"))
+        assertTrue(method.contains("Bisheriges Modell behalten"))
+        assertTrue(method.contains("Modell- und .part-Dateien"))
+        // No acknowledged consent is allowed to override the post-unload gate.
+        assertFalse(method.contains("explicitlyAcceptedTensorRisk"))
+    }
+
     @Test fun lowMemoryNpuDoesNotSuppressSupportedGpuFallback() {
         val both = listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR,
             RuntimeHardware.Attempt.GPU, RuntimeHardware.Attempt.CPU)

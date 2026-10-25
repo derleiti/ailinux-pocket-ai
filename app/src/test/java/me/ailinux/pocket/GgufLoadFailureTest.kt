@@ -17,6 +17,19 @@ class GgufLoadFailureTest {
         assertTrue(categories.all { it.name.startsWith("GGUF_") })
     }
 
+    @Test fun projectorAndPostUnloadMemoryRefusalHaveSafeDistinctErrors() {
+        val projector = GgufLoadFailure(
+            GgufLoadFailure.Phase.METADATA, GgufProjectorException())
+        assertEquals(PocketDiagnostics.ErrorCode.GGUF_PROJECTOR,
+            PocketDiagnostics.classify(projector))
+        val lowMemory = GgufLoadFailure(
+            GgufLoadFailure.Phase.MEMORY_PREFLIGHT,
+            ModelMemoryGuardException(1024, 2048, true))
+        assertEquals(PocketDiagnostics.ErrorCode.GGUF_MEMORY_PREFLIGHT,
+            PocketDiagnostics.classify(lowMemory))
+        assertFalse(PocketDiagnostics.publicError(projector).contains("mmproj-"))
+    }
+
     @Test fun originalNativeFailureDetailsNeverLeaveInStructuredDiagnosis() {
         val secret = "Bearer EXAMPLE_TOKEN https://internal.example.test/?token=PRIVATE"
         val typed = GgufLoadFailure(
@@ -42,6 +55,9 @@ class GgufLoadFailureTest {
             .substringBefore("private fun loadLiteRtModel(")
         assertTrue(gguf.contains("var startupPhase = GgufLoadFailure.Phase.METADATA"))
         assertTrue(gguf.contains("startupPhase = GgufLoadFailure.Phase.NATIVE_MODEL_LOAD"))
+        assertTrue(gguf.contains("startupPhase = GgufLoadFailure.Phase.MEMORY_PREFLIGHT"))
+        assertTrue(gguf.contains("ModelLoadSafety.insufficientAfterUnload("))
+        assertTrue(gguf.contains("if (ModelCompatibility.isProjectorFilename(file.name))"))
         assertTrue(gguf.contains("newGgufLoaded = true"))
         assertTrue(gguf.contains("startupPhase = GgufLoadFailure.Phase.CHAT_TEMPLATE"))
         assertTrue(gguf.contains("startupPhase = GgufLoadFailure.Phase.SAMPLING_SETUP"))
