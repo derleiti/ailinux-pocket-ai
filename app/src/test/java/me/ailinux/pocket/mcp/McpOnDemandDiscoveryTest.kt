@@ -45,6 +45,60 @@ class McpOnDemandDiscoveryTest {
             "Erkläre mir den Discord Verbindungsstatus", state))
     }
 
+    @Test fun vagueDiscordConnectedRequestWith172ToolsMustNotGuessAnyOtherTool() {
+        val triforce = (0 until 90).map {
+            tool("triforce_check_$it")
+        }
+        val discord = (0 until 49).map {
+            tool("discord_feature_$it")
+        } + tool("discord_connection_status")
+        val workspace = (0 until 32).map {
+            tool("workspace_utility_$it")
+        }
+        val state = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1","tri","https://example.test/tri",
+                "TriForce",triforce),
+            McpProgressiveBridge.Source("s2","discord","https://example.test/discord",
+                "Discord",discord),
+            McpProgressiveBridge.Source("s3","workspace","https://example.test/ws",
+                "Workspace",workspace)
+        ))
+        assertEquals(172,state.totalTools)
+        for (request in listOf(
+            "Prüfe, ob Discord verbunden ist",
+            "Check my Discord connection",
+            "Verify the Discord connection using MCP"
+        )) {
+            val proposal = McpOnDemandDiscovery.propose(request,state)
+            assertEquals(request, "s2/discord_connection_status",proposal?.toolId)
+            assertTrue(request,proposal!!.hostFallback)
+        }
+        assertEquals(0,state.remoteCalls)
+    }
+
+    @Test fun internationalDiscordConnectionPromptsPlanOnlyRealReadOnlyTool() {
+        val state = run(listOf(tool("discord_connection_status"),
+            tool("read_and_clear_notifications")))
+        for (request in listOf(
+            "Check my Discord connection",
+            "Verify the Discord connection using MCP",
+            "Prüfe, ob Discord verbunden ist",
+            "Kannst du bitte nachsehen, ob die Discord-Verbindung besteht?"
+        )) {
+            val plan = McpOnDemandDiscovery.propose(request, state)
+            assertEquals("Wrong tool for " + request,
+                "discord_connection_status", plan?.tool?.name)
+            assertTrue(plan!!.hostFallback)
+        }
+        assertEquals("Only discovery and planning, no tools/call",0,state.remoteCalls)
+        assertNull(McpOnDemandDiscovery.propose(
+            "Explain how to check Discord connection", state))
+        assertNull(McpOnDemandDiscovery.propose(
+            "How do I check my Discord connection?", state))
+        assertNull(McpOnDemandDiscovery.propose(
+            "Wie kann ich prüfen, ob Discord verbunden ist?", state))
+    }
+
     @Test fun naturalDevMcpStatusToolCallResolvesExactlyNamedProvider() {
         val status = tool("status")
         val providers = McpProgressiveBridge.Run(listOf(

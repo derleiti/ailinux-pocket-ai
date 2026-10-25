@@ -68,7 +68,7 @@ object McpOnDemandDiscovery {
             Regex("\\b(?:crawl|crawle|crawlen)\\b").containsMatchIn(lower) &&
                 webUrl.containsMatchIn(request) -> "crawl"
             Regex("\\bdiscord\\b").containsMatchIn(lower) &&
-                Regex("\\b(?:status|verbindung|verbindungsstatus|connection|connectionstatus)\\b")
+                Regex("\\b(?:status|verbindung|verbindungsstatus|verbunden|connection|connectionstatus|connected|linked)\\b")
                     .containsMatchIn(lower) -> "discord_connection_status"
             Regex("\\b(?:status|systemstatus|systemzustand|serverstatus|serverzustand)\\b")
                 .containsMatchIn(lower) &&
