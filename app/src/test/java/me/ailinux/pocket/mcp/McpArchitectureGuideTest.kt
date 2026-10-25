@@ -16,7 +16,6 @@ class McpArchitectureGuideTest {
             "Explain MCP without invoking external tools.",
             "How do I get started with MCP integration?",
             "How do I create an MCP integration?"
-main
         )) {
             assertTrue("conceptual routing: $request", McpArchitectureGuide.applies(request))
             assertFalse("no native MCP agent for app architecture: $request",
