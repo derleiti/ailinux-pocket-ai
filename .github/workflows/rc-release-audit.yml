@@ -1,0 +1,54 @@
+name: Pocket AI Published RC Asset Audit
+# Create a draft with all assets before publishing. This workflow only audits.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: 'Existing published RC tag (e.g. v2.1.0-RC17)'
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  audit:
+    name: Verify public APK and original signer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RC_TAG: ${{ github.event.release.tag_name || inputs.rc_tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate the immutable release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/tests -p 'test_audit_rc_release.py' -v
+          [[ "$RC_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-RC[0-9]+$ ]] || {
+            echo "::error::Invalid RC tag: $RC_TAG"; exit 1;
+          }
+          git cat-file -e "${RC_TAG}^{commit}"
+          git show "${RC_TAG}:app/build.gradle.kts" > "$RUNNER_TEMP/tagged-build.gradle.kts"
+      - name: Ensure Android build tools are installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          if [ ! -x "$ANDROID_HOME/build-tools/35.0.0/apksigner" ]; then
+            "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "build-tools;35.0.0" < <(yes)
+          fi
+      - name: Validate public assets independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/audit_rc_release.py --tag "$RC_TAG" --gradle "$RUNNER_TEMP/tagged-build.gradle.kts"
+      - name: Add verified audit summary
+        if: success()
+        run: echo "Published RC $RC_TAG has a verified APK, digest, version and original signer." >> "$GITHUB_STEP_SUMMARY"
