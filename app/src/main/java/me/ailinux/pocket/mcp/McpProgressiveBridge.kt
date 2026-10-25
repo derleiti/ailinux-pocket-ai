@@ -241,7 +241,8 @@ object McpProgressiveBridge {
             val text = userRequest.lowercase(Locale.ROOT)
             val kind = listOfNotNull(
                 "workspace".takeIf {
-                    Regex("\\b(?:workspace|arbeitsbereich)\\b").containsMatchIn(text)
+                    Regex("\\b(?:workspace|worspace|arbeitsbereich)\\b")
+                        .containsMatchIn(text)
                 },
                 "dev".takeIf {
                     Regex("\\b(?:dev|developer)\\b").containsMatchIn(text)

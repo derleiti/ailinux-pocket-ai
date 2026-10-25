@@ -63,6 +63,38 @@ class McpProgressiveBridgeTest {
         assertTrue(raw.contains("arguments_json"))
     }
 
+    @Test fun mistypedWorkspaceNameLimitsSearchDetailsAndCallToWorkspaceSource() {
+        val sources = listOf(
+            McpProgressiveBridge.Source("s1","ws","https://example.test/ws",
+                "AILinux TriForce Workspace", listOf(
+                    McpTool("status","Read Workspace status",
+                        JSONObject().put("type","object"),
+                        JSONObject().put("readOnlyHint",true)))),
+            McpProgressiveBridge.Source("s2","dev","https://example.test/dev",
+                "AILinux TriForce DEV MCP", listOf(
+                    McpTool("status","Read DEV status",
+                        JSONObject().put("type","object"),
+                        JSONObject().put("readOnlyHint",true))))
+        )
+        val state = McpProgressiveBridge.Run(sources)
+        val user = "worspace status"
+        val result = report(state.search("status", 5, user))
+        val matches = result.getJSONArray("matches")
+        assertEquals(1, matches.length())
+        assertEquals("s1/status",
+            matches.getJSONObject(0).getString("tool_id"))
+        report(state.details("s1/status", user))
+        assertThrows(IllegalArgumentException::class.java) {
+            state.details("s2/status", user)
+        }
+        assertEquals("s1/status",
+            state.prepareCall("s1/status", "{}", user).toolId)
+        assertThrows(IllegalArgumentException::class.java) {
+            state.prepareCall("s2/status", "{}", user)
+        }
+        assertEquals(0, state.remoteCalls)
+    }
+
     @Test fun progressiveSearchUsesActualServerToolsAndDisambiguatesNames() {
         val state = run()
         assertEquals(6, state.totalTools)

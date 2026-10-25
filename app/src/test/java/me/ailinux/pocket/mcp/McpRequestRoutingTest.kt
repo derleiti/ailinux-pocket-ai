@@ -45,6 +45,19 @@ class McpRequestRoutingTest {
             McpRequestRouting.expectsToolEvidence(question))
     }
 
+    @Test fun shortWorkspaceStatusAndCommonTypoStillRequireRealEvidence() {
+        for (request in listOf("workspace status", "worspace status",
+                "Brumo, workspace status", "Arbeitsbereich Status")) {
+            assertTrue("Should reach active local agent: " + request,
+                McpRequestRouting.useModelAgent(request, true))
+            assertTrue("Should not report simulated status: " + request,
+                McpRequestRouting.expectsToolEvidence(request))
+        }
+        assertFalse(McpRequestRouting.expectsToolEvidence(
+            "Erkläre mir den Workspace-Status"))
+        assertFalse(McpRequestRouting.expectsToolEvidence("status"))
+    }
+
     @Test fun naturalAccountAndVoiceStatusTasksReachModel() {
         for (input in listOf(
             "Prüfe bitte den TriForce Server Status",

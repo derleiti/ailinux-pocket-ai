@@ -60,7 +60,8 @@ object McpRequestRouting {
         RegexOption.IGNORE_CASE
     )
     private val externalSubject = Regex(
-        "\\b(?:mcp|triforce|tri[ -]?force|discord|server|werkzeuge?|tools?)\\b",
+        "\\b(?:mcp|triforce|tri[ -]?force|discord|workspace|worspace|" +
+            "arbeitsbereich|server|werkzeuge?|tools?)\\b",
         RegexOption.IGNORE_CASE
     )
 

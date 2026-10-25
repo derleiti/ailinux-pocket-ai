@@ -16,7 +16,9 @@ object McpOnDemandDiscovery {
         "eine","einen","server","status","www","https")
     private val webUrl = Regex("https://[^\\s<>\"\']+", RegexOption.IGNORE_CASE)
     private val explicitTool = Regex("(?:tool|werkzeug|function)[\\s:='\"\\u0060]+([a-z][a-z0-9_.-]{2,})", RegexOption.IGNORE_CASE)
-    private val mentionsExternal = Regex("\\b(?:mcp|tool|werkzeug|triforce|discord|crawl|status|api|server)\\b", RegexOption.IGNORE_CASE)
+    private val mentionsExternal = Regex(
+        "\\b(?:mcp|tool|werkzeug|triforce|discord|workspace|worspace|" +
+            "arbeitsbereich|crawl|status|api|server)\\b", RegexOption.IGNORE_CASE)
     // "per MCP tool call" describes the protocol, NOT an explicit tool
     // called "call". Keep explicit function names only when meaningful.
     private val genericActionWords = setOf(
@@ -38,7 +40,10 @@ object McpOnDemandDiscovery {
         candidates: List<JSONObject>, request: String
     ): JSONObject? {
         val requestedTokens = titleTokens.findAll(request.lowercase(Locale.ROOT))
-            .map { it.value }.toSet()
+            // Single observed typo, not fuzzy matching: no source selection
+            // based on distant spellings or arbitrary similar server names.
+            .map { if (it.value == "worspace") "workspace" else it.value }
+            .toSet()
         fun ownTokens(candidate: JSONObject) =
             titleTokens.findAll(candidate.optString("server").lowercase(Locale.ROOT))
                 .map { it.value }.filter { it !in genericServerWords }.toSet()
@@ -72,7 +77,8 @@ object McpOnDemandDiscovery {
                     .containsMatchIn(lower) -> "discord_connection_status"
             Regex("\\b(?:status|systemstatus|systemzustand|serverstatus|serverzustand)\\b")
                 .containsMatchIn(lower) &&
-                Regex("\\b(?:mcp|triforce|tri-force|ailinux|server)\\b")
+                Regex("\\b(?:mcp|triforce|tri-force|ailinux|workspace|" +
+                    "worspace|arbeitsbereich|server)\\b")
                     .containsMatchIn(lower) -> "status"
             else -> null
         }
@@ -201,6 +207,12 @@ object McpOnDemandDiscovery {
             return reject(Rejection.EXPLANATION_ONLY)
         if (!mentionsExternal.containsMatchIn(request))
             return reject(Rejection.NO_EXTERNAL_TASK)
+        // A natural-language crawl task necessarily needs a URL. Malformed
+        // text such as "httpsailinux.me" must produce a parameter error,
+        // NOT an ambiguous-tool hint and NEVER a guessed remote URL.
+        if (Regex("\\b(?:crawl|crawle|crawlen)\\b", RegexOption.IGNORE_CASE)
+                .containsMatchIn(request) && !webUrl.containsMatchIn(request))
+            return reject(Rejection.ARGUMENTS_UNAVAILABLE)
         val terms = words.findAll(request.lowercase(Locale.ROOT)).map { it.value }
             .filter { it !in stop && !it.all(Char::isDigit) }.distinct().take(10).toList()
         val namedAlternatives = explicitTool.findAll(request)
