@@ -1210,6 +1210,7 @@ class MainActivity : AppCompatActivity() {
         setModelLoading(true, file.name)
         setStatus("● LITERT · PRÜFE NPU / GPU / CPU …")
         diagnosticTrace = PocketDiagnostics.newTrace()
+        val modelLoadTrace = diagnosticTrace
         val modelLoadStarted = SystemClock.elapsedRealtime()
         trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD,
             PocketDiagnostics.State.START)
@@ -1284,6 +1285,11 @@ class MainActivity : AppCompatActivity() {
                             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
                                 .setProcessStateSummary(("PocketAI load=" + file.name.take(45) +
                                     " phase=" + phase).toByteArray(Charsets.UTF_8))
+                            LiteRtBackendStages.parse(phase)?.let { stage ->
+                                PocketDiagnostics.log(applicationContext, modelLoadTrace,
+                                    PocketDiagnostics.Domain.LITERT, stage.step, stage.state,
+                                    backend = stage.backend)
+                            }
                         }
                     }
                 }
