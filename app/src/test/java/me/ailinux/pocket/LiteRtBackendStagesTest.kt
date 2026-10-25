@@ -43,14 +43,15 @@ class LiteRtBackendStagesTest {
         val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
         val load = source.substringAfter("private fun loadLiteRtModel(")
             .substringBefore("private fun showMcpAgentMenu(")
-        assertTrue(load.contains("LiteRtBackendStages.parse(phase)"))
+        assertTrue(load.contains("LiteRtBackendStages.Tracker()"))
+        assertTrue(load.contains("phaseTimer.capture(phase, SystemClock.elapsedRealtime())"))
         assertTrue(load.contains("backend = stage.backend"))
         assertTrue(load.contains("modelLoadTrace"))
         // A failed Android setProcessStateSummary must never suppress the
         // independent engine-stage event. The allowlisted trace goes first.
         val stageCallback = load.substringAfter("allowedAttempts = safeCandidates) { phase ->")
             .substringBefore("\n                    }\n                }")
-        assertTrue(stageCallback.contains("LiteRtBackendStages.parse(phase)?.let"))
+        assertTrue(stageCallback.contains("phaseTimer.capture(phase, SystemClock.elapsedRealtime())?.let"))
         assertTrue(stageCallback.contains("runCatching {"))
         assertTrue(stageCallback.indexOf("PocketDiagnostics.log(") >= 0)
         assertTrue(stageCallback.indexOf("PocketDiagnostics.log(") <
@@ -58,6 +59,50 @@ class LiteRtBackendStagesTest {
         assertFalse(load.contains("PocketDiagnostics.log(applicationContext, phase"))
         val native = File("src/main/java/me/ailinux/pocket/LiteRtRuntime.kt").readText()
         assertTrue(native.contains("onStage(\"failed_\" + attempt.name.lowercase"))
+    }
+
+    @Test fun timedNativeStagesExposeFailedInitializationAndConversationCost() {
+        val t = LiteRtBackendStages.Tracker()
+        val first = t.capture("backend_google_tensor", 30_000L)!!
+        assertEquals(-1L, first.durationMs)
+        assertEquals("TPU", first.evidence.backend)
+        val error = t.capture("failed_google_tensor", 30_459L)!!
+        assertEquals(459L, error.durationMs)
+        assertEquals(PocketDiagnostics.Step.ENGINE_ERROR, error.evidence.step)
+
+        // Switching candidates must start a new independent native phase.
+        assertEquals(-1L, t.capture("backend_gpu", 30_480L)!!.durationMs)
+        val convo = t.capture("conversation_gpu", 31_100L)!!
+        assertEquals(620L, convo.durationMs)
+        assertEquals(PocketDiagnostics.Step.CONVERSATION_INIT, convo.evidence.step)
+        val ready = t.capture("ready_gpu", 31_172L)!!
+        assertEquals(72L, ready.durationMs)
+        assertEquals(PocketDiagnostics.Step.ENGINE_READY, ready.evidence.step)
+        assertTrue(PocketDiagnostics.Event(
+            1780000000000L, "ab12cd34", "beadcafe",
+            PocketDiagnostics.Domain.LITERT, ready.evidence.step,
+            ready.evidence.state, backend = ready.evidence.backend,
+            durationMs = ready.durationMs
+        ).line().contains("ms=72"))
+    }
+
+    @Test fun timingIgnoresUnknownStagesAndMonotonicClockRegression() {
+        val timer = LiteRtBackendStages.Tracker()
+        timer.capture("backend_google_tensor", 500L)
+        assertNull(timer.capture("failed_google_tensor\\nBearer secret", 550L))
+        assertEquals(300L, timer.capture("failed_google_tensor", 800L)!!.durationMs)
+        assertEquals(-1L, timer.capture("backend_cpu", 100L)!!.durationMs)
+        // A clock reset / invalid value is not logged as negative duration
+        // or as a potentially huge unsigned difference.
+        assertEquals(-1L, timer.capture("ready_cpu", 95L)!!.durationMs)
+        assertEquals(-1L, timer.capture("failed_cpu", -1L)!!.durationMs)
+        assertEquals(-1L, timer.capture("ready_cpu", 101L)!!.durationMs)
+        val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        val load = source.substringAfter("private fun loadLiteRtModel(")
+            .substringBefore("private fun showMcpAgentMenu(")
+        assertTrue(load.contains("LiteRtBackendStages.Tracker()"))
+        assertTrue(load.contains("phaseTimer.capture(phase, SystemClock.elapsedRealtime())"))
+        assertTrue(load.contains("durationMs = timed.durationMs"))
     }
 
     @Test fun readyIsNotConfusedWithGeneratedTokensOrExternalDispatch() {

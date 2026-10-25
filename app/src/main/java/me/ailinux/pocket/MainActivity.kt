@@ -1278,17 +1278,19 @@ class MainActivity : AppCompatActivity() {
                             code = PocketDiagnostics.ErrorCode.MEMORY)
                     }
                     val prompt = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
+                    val phaseTimer = LiteRtBackendStages.Tracker()
                     LiteRtRuntime.load(applicationContext, file, prompt,
                         mcpAgent.current(), allowedAttempts = safeCandidates) { phase ->
                         // Each diagnostic is independently best effort. Some
                         // Android builds may reject the process-state summary;
                         // that must not suppress the separate, allowlisted
                         // LiteRT engine/conversation stage trace.
-                        LiteRtBackendStages.parse(phase)?.let { stage ->
+                        phaseTimer.capture(phase, SystemClock.elapsedRealtime())?.let { timed ->
                             runCatching {
+                                val stage = timed.evidence
                                 PocketDiagnostics.log(applicationContext, modelLoadTrace,
                                     PocketDiagnostics.Domain.LITERT, stage.step, stage.state,
-                                    backend = stage.backend)
+                                    backend = stage.backend, durationMs = timed.durationMs)
                             }
                         }
                         runCatching {
