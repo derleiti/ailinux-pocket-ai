@@ -1,12 +1,28 @@
 # AILinux Pocket AI
 
-Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
+Android ARM64 app for private GGUF and LiteRT-LM inference, model management, resumable model transfers, and opt-in MCP tools. Built with Kotlin, llama.cpp, LiteRT-LM, JobScheduler/WorkManager and AILinux TriForce.
 
-**QA candidate: 2.1.0-RC12 (versionCode 37).**
-RC11 was publicly released as QA and is not a final stable version.
-RC12 adds Android UIDT VPN-compatible download constraints and explicit
-network diagnostics, plus the already merged LiteRT/MCP corrections.
-Existing app data and model files must survive the in-place update. Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**Current corrected QA candidate: 2.1.0-RC19 (versionCode 44).** Android 13+, ARM64. Not a stable production release.
+
+### RC19 release provenance and recovery
+
+The original public tag v2.1.0-RC19 points at a commit still declaring **RC18 (versionCode 43)** and its public release contains **no installable APK**. The tag remains immutable for auditability. The forward-only corrected source and signed RC19 APK will use **v2.1.0-RC19-recovery1**, after GitHub CI, original signer and public asset checks pass. Do not install an ephemeral CI APK over a signed existing app.
+
+- [Corrected RC19 recovery release](https://github.com/derleiti/ailinux-pocket-ai/releases/tag/v2.1.0-RC19-recovery1) (link available after publication)
+- [Issue #58: invalid original RC19 tag](https://github.com/derleiti/ailinux-pocket-ai/issues/58)
+- [RC19 QA acceptance plan](docs/RC19-RELEASE-QA.md)
+- [Device diagnosis and fixes](docs/RC18-DIAGNOSTIC-RELIABILITY-20261025.md)
+- [Upstream runtime research](docs/RC18-UPSTREAM-RESEARCH-20261025.md)
+
+**Signing and data retention:** Corrected user-facing QA APKs must retain the long-lived RC17 test-signing certificate SHA-256: 125766c26dd400e39804c7b97c36682d8a2c16caa134c58745a02aca0bd51187. CI-only debug artifacts use temporary keys and are not update-compatible. Do not uninstall, clear app data, delete models or discard .part files to install an APK.
+
+### RC19 runtime and known limitations
+
+- LiteRT-LM 0.18.0 and LiteRT 2.3.0, with source-pinned Google Tensor G5 dispatcher. Actual NPU model generation, not merely engine initialization, remains a Pixel hardware test.
+- Local GGUF and LiteRT inference; progressive MCP catalogue via three bounded local meta-tools. Remote tools/call requires explicit approval, authentication and schema checks. A host-assisted proposal is not native function calling. Only DISPATCH plus SERVER_RESULT confirms receipt.
+- User-initiated background model downloads with HTTP Range and validator-aware resumption. A complete journal or matching byte count alone is not a fresh SHA-256 check.
+- Conservative low-memory protection, bounded LiteRT output tokens, and privacy-safe structured diagnostics. Memory estimates cannot prevent all native allocation failures.
+- Open acceptance issues: [#19 background inference](https://github.com/derleiti/ailinux-pocket-ai/issues/19), [#20 locales](https://github.com/derleiti/ailinux-pocket-ai/issues/20), [#21 model discovery and integrity](https://github.com/derleiti/ailinux-pocket-ai/issues/21), [#22 Pixel device QA](https://github.com/derleiti/ailinux-pocket-ai/issues/22), [#25 repeat native FunctionCall](https://github.com/derleiti/ailinux-pocket-ai/issues/25) and [#29 MCP schema/followup](https://github.com/derleiti/ailinux-pocket-ai/issues/29). These must not be closed without their own acceptance evidence.
 
 ## Features
 
@@ -103,6 +119,10 @@ https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5
 Note: CI debug builds use their own temporary Android signing certificates and
 are **not** update-compatible with releases signed on the AILinux build server.
 Release APKs are debug-signed for alpha tests only.
+
+## Historical development notes (Alpha and earlier RCs)
+
+The following sections describe older iterations. Use the RC19 status above for current capabilities and release safety; older Alpha limitations may have been superseded by subsequent releases.
 
 ## Transfer UI (Alpha 3)
 

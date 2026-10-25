@@ -71,6 +71,15 @@ jobs:
           actual_version="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\1/p' app/build.gradle.kts)"
           actual_code="$(sed -nE 's/^[[:space:]]*versionCode = ([0-9]+).*/\1/p' app/build.gradle.kts)"
           expected_version="${GITHUB_REF_NAME#v}"
+          # The original RC19 tag is immutable but points to RC18 source.
+          # Allow ONLY this explicitly audited forward-only RC19 repair tag.
+          if [ "$GITHUB_REF_NAME" = "v2.1.0-RC19-recovery1" ]; then
+            expected_version="2.1.0-RC19"
+            test "$actual_code" = "44" || {
+              echo "RC19 recovery must use versionCode 44" >&2
+              exit 1
+            }
+          fi
           test "$expected_version" = "$actual_version" || {
             echo "Tag $GITHUB_REF_NAME does not match Gradle $actual_version" >&2
             exit 1
@@ -80,8 +89,6 @@ jobs:
             exit 1
           }
           echo "Verified RC tag: $expected_version (versionCode=$actual_code)"
-      - name: Build and tests
-        run: ./gradlew --no-daemon --build-cache :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
       - name: Create temporary CI-only debug signing key
         run: |
           mkdir -p "$HOME/.android"
@@ -90,6 +97,8 @@ jobs:
               -validity 10000 -dname "CN=Android Debug,O=Android,C=US" \
               -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android
           fi
+      - name: Build and tests
+        run: ./gradlew --no-daemon --build-cache :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
       - name: Read versioned APK path from Gradle
         id: version
         shell: bash
