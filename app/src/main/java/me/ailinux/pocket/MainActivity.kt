@@ -1280,16 +1280,21 @@ class MainActivity : AppCompatActivity() {
                     val prompt = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
                     LiteRtRuntime.load(applicationContext, file, prompt,
                         mcpAgent.current(), allowedAttempts = safeCandidates) { phase ->
-                        // Diagnostics are best effort; never break a valid model start.
-                        runCatching {
-                            (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
-                                .setProcessStateSummary(("PocketAI load=" + file.name.take(45) +
-                                    " phase=" + phase).toByteArray(Charsets.UTF_8))
-                            LiteRtBackendStages.parse(phase)?.let { stage ->
+                        // Each diagnostic is independently best effort. Some
+                        // Android builds may reject the process-state summary;
+                        // that must not suppress the separate, allowlisted
+                        // LiteRT engine/conversation stage trace.
+                        LiteRtBackendStages.parse(phase)?.let { stage ->
+                            runCatching {
                                 PocketDiagnostics.log(applicationContext, modelLoadTrace,
                                     PocketDiagnostics.Domain.LITERT, stage.step, stage.state,
                                     backend = stage.backend)
                             }
+                        }
+                        runCatching {
+                            (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
+                                .setProcessStateSummary(("PocketAI load=" + file.name.take(45) +
+                                    " phase=" + phase).toByteArray(Charsets.UTF_8))
                         }
                     }
                 }

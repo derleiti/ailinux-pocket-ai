@@ -46,6 +46,15 @@ class LiteRtBackendStagesTest {
         assertTrue(load.contains("LiteRtBackendStages.parse(phase)"))
         assertTrue(load.contains("backend = stage.backend"))
         assertTrue(load.contains("modelLoadTrace"))
+        // A failed Android setProcessStateSummary must never suppress the
+        // independent engine-stage event. The allowlisted trace goes first.
+        val stageCallback = load.substringAfter("allowedAttempts = safeCandidates) { phase ->")
+            .substringBefore("\n                    }\n                }")
+        assertTrue(stageCallback.contains("LiteRtBackendStages.parse(phase)?.let"))
+        assertTrue(stageCallback.contains("runCatching {"))
+        assertTrue(stageCallback.indexOf("PocketDiagnostics.log(") >= 0)
+        assertTrue(stageCallback.indexOf("PocketDiagnostics.log(") <
+            stageCallback.indexOf("setProcessStateSummary("))
         assertFalse(load.contains("PocketDiagnostics.log(applicationContext, phase"))
         val native = File("src/main/java/me/ailinux/pocket/LiteRtRuntime.kt").readText()
         assertTrue(native.contains("onStage(\"failed_\" + attempt.name.lowercase"))
