@@ -238,11 +238,16 @@ class RcAuditTest(unittest.TestCase):
         workflow = (S.parents[1] / ".github/workflows/rc-release-preflight.yml").read_text()
         for expected in ("workflow_dispatch:", "contents: read", "git show",
                          "--metadata-only", "--prepublish", "--asset-dir",
-                         "gh release download", "tagged-build.gradle.kts"):
+                         "gh release download", "tagged-build.gradle.kts",
+                         "permissions:\n      contents: write"):
             self.assertIn(expected, workflow)
+        # Drafts require push access to list, even when just inspecting.
+        # The manual preflight job only has the higher token scope.
+        self.assertEqual(1, workflow.count("contents: write"))
+        self.assertIn("persist-credentials: false", workflow)
         for forbidden in ("types: [published]", "gh release create",
                           "gh release upload", "gh release edit",
-                          "contents: write", "git push"):
+                          "git push"):
             self.assertNotIn(forbidden, workflow)
 
     def test_published_release_workflow_is_read_only_and_checks_tagged_source(self):
