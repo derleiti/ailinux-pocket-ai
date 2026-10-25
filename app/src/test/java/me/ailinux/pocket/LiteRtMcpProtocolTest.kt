@@ -98,23 +98,58 @@ class LiteRtMcpProtocolTest {
         assertTrue(recovery.contains("kein weiterer Aufruf"))
     }
 
-    @Test fun rejectWrongNativeArgumentsJsonTypeBeforeExternalDispatch() {
-        val call = McpTool("mcp_call_tool", "Local bridge",
-            JSONObject("""{"type":"object","properties":{
-                "tool_id":{"type":"string"},
-                "arguments_json":{"type":"string"}
-                },"required":["tool_id","arguments_json"],
-                "additionalProperties":false}"""))
+    private fun metaCall() = McpTool("mcp_call_tool", "Local bridge",
+        JSONObject("""{"type":"object","properties":{
+            "tool_id":{"type":"string"},
+            "arguments_json":{"type":"string","minLength":2,"maxLength":3000}
+            },"required":["tool_id","arguments_json"],
+            "additionalProperties":false}"""))
+
+    @Test fun metaJsonObjectMayBeConvertedToJsonStringWithoutGuessingParameters() {
+        val allowed = listOf(metaCall())
+        val asObject = """{"tool_id":"s3/status","arguments_json":{}}"""
+        val asMap = mapOf("tool_id" to "s3/status",
+            "arguments_json" to emptyMap<String, Any>())
+        assertTrue(LiteRtMcpPolicy.hasObjectStyleMetaArguments("mcp_call_tool", asObject))
+        assertTrue(LiteRtMcpPolicy.hasObjectStyleMetaArguments("mcp_call_tool", asMap))
+        assertNull(LiteRtMcpPolicy.diagnoseRaw("mcp_call_tool", asObject, allowed))
+        assertNull(LiteRtMcpPolicy.diagnoseRaw("mcp_call_tool", asMap, allowed))
+        val normalized = LiteRtMcpPolicy.normalizeRaw("mcp_call_tool", asMap)!!
+        assertEquals("s3/status", normalized.getString("tool_id"))
+        assertEquals("{}", normalized.getString("arguments_json"))
+        val validated = LiteRtMcpPolicy.validateRaw("mcp_call_tool", normalized, allowed)
+        assertEquals("{}", validated.second.getString("arguments_json"))
+        assertFalse(LiteRtMcpPolicy.hasObjectStyleMetaArguments("mcp_call_tool",
+            """{"tool_id":"s3/status","arguments_json":"{}"}"""))
+    }
+
+    @Test fun metaJsonNormalizationNeverSuppliesMissingFieldsOrRelaxedTypes() {
+        val allowed = listOf(metaCall())
         assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA,
-            LiteRtMcpPolicy.diagnoseRaw(
-                "mcp_call_tool", """{"tool_id":"s3/status","arguments_json":{}}""",
-                listOf(call)))
-        assertNull(LiteRtMcpPolicy.diagnoseRaw(
-            "mcp_call_tool", """{"tool_id":"s3/status","arguments_json":"{}"}""",
-            listOf(call)))
+            LiteRtMcpPolicy.diagnoseRaw("mcp_call_tool",
+                """{"tool_id":"s3/status"}""", allowed))
         assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA,
-            LiteRtMcpPolicy.diagnoseRaw(
-                "mcp_call_tool", """{"tool_id":"s3/status"}""", listOf(call)))
+            LiteRtMcpPolicy.diagnoseRaw("mcp_call_tool",
+                """{"arguments_json":{}}""", allowed))
+        assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA,
+            LiteRtMcpPolicy.diagnoseRaw("mcp_call_tool",
+                """{"tool_id":"s3/status","arguments_json":[] }""", allowed))
+        assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA,
+            LiteRtMcpPolicy.diagnoseRaw("mcp_call_tool",
+                """{"tool_id":"s3/status","arguments_json":{},"permission":"write"}""",
+                allowed))
+        assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_TOO_LARGE,
+            LiteRtMcpPolicy.diagnoseRaw("mcp_call_tool",
+                mapOf("tool_id" to "s3/status",
+                    "arguments_json" to mapOf("private" to "z".repeat(3600))),
+                allowed))
+        // This conversion is strictly for local mcp_call_tool, never a remote
+        // tool nor any other host meta-function.
+        assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA,
+            LiteRtMcpPolicy.diagnoseRaw("mcp_search_tools",
+                """{"query":{"name":"status"}}""", listOf(oneTool)))
+        assertFalse(LiteRtMcpPolicy.hasObjectStyleMetaArguments("status",
+            mapOf("arguments_json" to emptyMap<String, Any>())))
     }
 
     @Test fun invalidNativeProposalResetsOnlyConversationAndNeverDispatches() {

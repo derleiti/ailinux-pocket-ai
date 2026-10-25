@@ -2878,6 +2878,16 @@ class MainActivity : AppCompatActivity() {
                     else "Konversation konnte nicht zurückgesetzt werden; Modell neu laden."))
                 return
             }
+            if (candidate != null &&
+                LiteRtMcpPolicy.hasObjectStyleMetaArguments(
+                    candidate.name, candidate.arguments)) {
+                // No parameters are logged. Only the local meta-tool field
+                // representation is normalized; remote schema and consent
+                // are still checked immediately before any tools/call.
+                trace(PocketDiagnostics.Domain.MCP,
+                    PocketDiagnostics.Step.META_ARGS_NORMALIZED,
+                    PocketDiagnostics.State.INFO)
+            }
             val (tool, args) = LiteRtMcpProtocol.validate(
                 checkNotNull(candidate), active.tools
             )
