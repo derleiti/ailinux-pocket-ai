@@ -2870,9 +2870,29 @@ class MainActivity : AppCompatActivity() {
                     LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA ->
                         PocketDiagnostics.ErrorCode.INVALID_NATIVE_ARGUMENTS_SCHEMA
                 }
+                // Capture only the validated *category* of native schema
+                // mismatch. Never persist model arguments or field names.
+                val traceCode = if (invalid == LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA &&
+                    candidate != null) {
+                    when (runCatching {
+                        LiteRtMcpPolicy.schemaCause(
+                            candidate.name, candidate.arguments, active.tools)
+                    }.getOrDefault(LiteRtMcpPolicy.SchemaCause.OTHER)) {
+                        LiteRtMcpPolicy.SchemaCause.MISSING_REQUIRED ->
+                            PocketDiagnostics.ErrorCode.NATIVE_SCHEMA_MISSING_REQUIRED
+                        LiteRtMcpPolicy.SchemaCause.UNKNOWN_FIELD ->
+                            PocketDiagnostics.ErrorCode.NATIVE_SCHEMA_UNKNOWN_FIELD
+                        LiteRtMcpPolicy.SchemaCause.WRONG_TYPE ->
+                            PocketDiagnostics.ErrorCode.NATIVE_SCHEMA_WRONG_TYPE
+                        LiteRtMcpPolicy.SchemaCause.INVALID_VALUE ->
+                            PocketDiagnostics.ErrorCode.NATIVE_SCHEMA_INVALID_VALUE
+                        LiteRtMcpPolicy.SchemaCause.OTHER ->
+                            PocketDiagnostics.ErrorCode.NATIVE_SCHEMA_OTHER
+                    }
+                } else code
                 trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SCHEMA_CHECK,
                     PocketDiagnostics.State.FAIL, tool = candidate?.name.orEmpty(),
-                    code = code)
+                    code = traceCode)
                 // The native tool request is unresolved. Close only that
                 // conversation and restore a fresh one on the SAME engine.
                 // Never pretend to restore its KV cache or past messages.

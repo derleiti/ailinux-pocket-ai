@@ -68,6 +68,28 @@ internal object LiteRtMcpPolicy {
         ARGUMENTS_NOT_JSON, ARGUMENTS_TOO_LARGE, ARGUMENTS_SCHEMA
     }
 
+    /** Safe diagnostics only: never retain parameter names, arguments,
+     * prompt contents or values. Remote MCP schemas stay authoritative.
+     */
+    enum class SchemaCause {
+        MISSING_REQUIRED, UNKNOWN_FIELD, WRONG_TYPE, INVALID_VALUE, OTHER
+    }
+
+    fun schemaCause(name: String, raw: Any?, allowed: List<McpTool>): SchemaCause {
+        val tool = allowed.singleOrNull { it.name == name } ?: return SchemaCause.OTHER
+        val args = normalizeRaw(name, raw) ?: return SchemaCause.OTHER
+        val reason = McpToolSchema.validate(tool.schema, args)
+            ?: return SchemaCause.OTHER
+        return when {
+            reason.startsWith("Pflichtparameter fehlt:") -> SchemaCause.MISSING_REQUIRED
+            reason.startsWith("Unbekannter MCP-Parameter:") -> SchemaCause.UNKNOWN_FIELD
+            reason.startsWith("Falscher MCP-Datentyp") -> SchemaCause.WRONG_TYPE
+            reason.startsWith("Nicht unterstützte") ||
+                reason.startsWith("MCP-Schema") -> SchemaCause.OTHER
+            else -> SchemaCause.INVALID_VALUE
+        }
+    }
+
     /**
      * LiteRT's small models sometimes supply arguments_json as an object
      * instead of the bridge's requested JSON string. This adapter changes
