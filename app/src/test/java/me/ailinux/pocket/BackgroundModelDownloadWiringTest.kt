@@ -42,6 +42,12 @@ class BackgroundModelDownloadWiringTest {
         assertTrue(store.contains("progress(TransferProgress(offset, total))"))
         assertFalse("Never silently delete existing multi-GB model on hash failure",
             store.contains("if (error !is TransferCancelled) temp.delete()"))
+        val downloadLifecycle = store.substringAfter("    fun download(")
+            .substringBefore("    private fun verifyAndPublish(")
+        assertFalse("Never delete even a short persisted .part on a failed transfer",
+            downloadLifecycle.contains("temp.delete()"))
+        assertTrue("Download retains an exclusive lease until network cleanup",
+            downloadLifecycle.contains("lease.close()"))
         assertTrue("Model must still be verified before atomic publication",
             store.contains("validate(temp, name)"))
         assertTrue(store.contains("AtomicModelInstall.publish(temp, target)"))

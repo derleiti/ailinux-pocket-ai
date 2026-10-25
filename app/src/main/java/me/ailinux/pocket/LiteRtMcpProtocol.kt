@@ -23,11 +23,71 @@ internal object LiteRtMcpProtocol {
     }
 }
 
+/** Single testable boundary for all native LiteRT response paths.
+ * Cancellation must reach the outer coroutine cancellation handler; only
+ * actual parser errors may reset the conversation.
+ */
+internal object LiteRtNativeResponseBoundary {
+    suspend fun <T : Any> call(
+        invokeNative: suspend () -> T,
+        onInvalidNativeResponse: suspend () -> Unit
+    ): T? = try {
+        invokeNative()
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (_: IllegalArgumentException) {
+        onInvalidNativeResponse()
+        null
+    } catch (_: IllegalStateException) {
+        onInvalidNativeResponse()
+        null
+    }
+}
+
+/** Classify local LiteRT feedback without mistaking a pending tool call or
+ * empty model output for a completed natural-language answer.
+ * This never determines whether a remote MCP tool ran: only the host receipt can.
+ */
+internal object LiteRtMcpFollowupQuality {
+    enum class Answer { TEXT, TOOL_REQUEST, EMPTY }
+
+    fun assess(text: String, callCount: Int): Answer {
+        require(callCount >= 0)
+        return when {
+            callCount > 0 -> Answer.TOOL_REQUEST
+            text.isNotBlank() -> Answer.TEXT
+            else -> Answer.EMPTY
+        }
+    }
+}
+
 internal object LiteRtMcpPolicy {
     /** Privacy-safe classification; neither tool arguments nor prompts are logged. */
     enum class Fault {
         MULTIPLE_CALLS, TOO_MANY_TOOLS, UNKNOWN_TOOL_NAME,
         ARGUMENTS_NOT_JSON, ARGUMENTS_TOO_LARGE, ARGUMENTS_SCHEMA
+    }
+
+    /** Safe diagnostics only: never retain parameter names, arguments,
+     * prompt contents or values. Remote MCP schemas stay authoritative.
+     */
+    enum class SchemaCause {
+        MISSING_REQUIRED, UNKNOWN_FIELD, WRONG_TYPE, INVALID_VALUE, OTHER
+    }
+
+    fun schemaCause(name: String, raw: Any?, allowed: List<McpTool>): SchemaCause {
+        val tool = allowed.singleOrNull { it.name == name } ?: return SchemaCause.OTHER
+        val args = normalizeRaw(name, raw) ?: return SchemaCause.OTHER
+        val reason = McpToolSchema.validate(tool.schema, args)
+            ?: return SchemaCause.OTHER
+        return when {
+            reason.startsWith("Pflichtparameter fehlt:") -> SchemaCause.MISSING_REQUIRED
+            reason.startsWith("Unbekannter MCP-Parameter:") -> SchemaCause.UNKNOWN_FIELD
+            reason.startsWith("Falscher MCP-Datentyp") -> SchemaCause.WRONG_TYPE
+            reason.startsWith("Nicht unterstützte") ||
+                reason.startsWith("MCP-Schema") -> SchemaCause.OTHER
+            else -> SchemaCause.INVALID_VALUE
+        }
     }
 
     /**

@@ -1,5 +1,7 @@
 package me.ailinux.pocket
 
+import java.io.File
+
 /**
  * Pure presentation of Android scheduler/journal state. No Android APIs are
  * called here; OS reasons are mapped by BackgroundModelDownloads.snapshot().
@@ -42,7 +44,8 @@ internal object DownloadSchedulerState {
         done: Long,
         total: Long,
         error: String,
-        network: NetworkInfo? = null
+        network: NetworkInfo? = null,
+        completedFilePresent: Boolean? = null
     ): View {
         val suffix = if (done > 0)
             " · " + ModelStore.displaySize(done) +
@@ -53,7 +56,13 @@ internal object DownloadSchedulerState {
             "failed" -> View("⚠ Fehlgeschlagen: " + name + " · " +
                     error.ifBlank { "Ursache nicht protokolliert" }.take(125),
                 canResume = true)
-            "complete" -> View("✓ Installiert und geprüft: " + name)
+            "complete" -> when (completedFilePresent) {
+                true -> View("✓ Download abgeschlossen · Modelldatei vorhanden " +
+                    "(Größe geprüft, kein erneuter SHA-256-Test): " + name)
+                false -> View("⚠ Downloadjournal abgeschlossen, aber Modelldatei fehlt " +
+                    "oder Größe weicht ab: " + name)
+                null -> View("ⓘ Downloadjournal abgeschlossen; Dateibestand ungeprüft: " + name)
+            }
             "verifying", "running" -> if (hasJob == false &&
                 elapsedSinceUpdateMs >= 15_000L)
                 View("⚠ Android-Job verloren (z. B. nach App-Update): " + name + suffix,
@@ -90,5 +99,17 @@ internal object DownloadSchedulerState {
             }
             else -> View("Downloadzustand unbekannt: " + name + suffix)
         }
+    }
+}
+
+/** Read-only, path-safe disk evidence; historical complete is not proof of
+ * present installation. Never removes models, journals, or partial downloads.
+ */
+internal object CompletedModelEvidence {
+    fun present(directory: File, name: String, completedBytes: Long): Boolean {
+        if (name != ModelStore.sanitize(name) || !ModelStore.isModelName(name)) return false
+        val file = File(directory, name)
+        return file.isFile && file.length() > 32 &&
+            (completedBytes <= 0 || file.length() == completedBytes)
     }
 }

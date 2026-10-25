@@ -719,11 +719,10 @@ class McpAgentUi(
             McpToolSchema.equivalent(current.annotations, proposal.tool.annotations)) {
             "MCP-Tooldefinition oder Risikohinweis geändert. Bitte neu verbinden."
         }
-        // Host inference is strictly narrower than a native tool call.
+        // Enforce the SAME audited read-only policy used by the host planner.
+        // A server-side crawl creates jobs even if readOnlyHint is spoofed.
         if (hostFallback) {
-            check(current.declaresReadOnly &&
-                current.name in setOf("status", "discord_connection_status",
-                    "current_time", "device_info", "models", "crawl")) {
+            check(McpOnDemandDiscovery.isAuditedReadOnlyTool(current)) {
                 "Host-Fallback darf kein schreibendes oder unbekanntes Werkzeug aufrufen."
             }
         }

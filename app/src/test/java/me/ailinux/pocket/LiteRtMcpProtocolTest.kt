@@ -76,22 +76,80 @@ class LiteRtMcpProtocolTest {
                 "mcp_search_tools", """{"query":"status"}""", List(6) { oneTool }))
     }
 
+    @Test fun cancelledLiteRtTurnMustNotBeRecoveredAsNativeParserFailure() {
+        val rejected = java.util.concurrent.atomic.AtomicInteger()
+        val cancellation = kotlinx.coroutines.CancellationException("user cancelled")
+        val error = assertThrows(kotlinx.coroutines.CancellationException::class.java) {
+            kotlinx.coroutines.runBlocking {
+                LiteRtNativeResponseBoundary.call(
+                    invokeNative = { throw cancellation },
+                    onInvalidNativeResponse = { rejected.incrementAndGet() }
+                )
+            }
+        }
+        assertSame(cancellation, error)
+        assertEquals(0, rejected.get())
+        for (nativeError in listOf(IllegalArgumentException("invalid"),
+            IllegalStateException("invalid"))) {
+            val actual = kotlinx.coroutines.runBlocking {
+                LiteRtNativeResponseBoundary.call(
+                    invokeNative = { throw nativeError },
+                    onInvalidNativeResponse = { rejected.incrementAndGet() }
+                )
+            }
+            assertNull(actual)
+        }
+        assertEquals(2, rejected.get())
+        val bridge = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+            .substringAfter("private suspend fun runLiteRtToolbridge(")
+            .substringBefore("private fun sendLiteRtMessage(")
+        assertEquals(3, Regex("LiteRtNativeResponseBoundary\\.call\\(").findAll(bridge).count())
+    }
+
+    @Test fun nativeSchemaCauseIdentifiesOnlySafeFailureClassNotFieldValues() {
+        val tools = listOf(oneTool)
+        assertEquals(LiteRtMcpPolicy.SchemaCause.MISSING_REQUIRED,
+            LiteRtMcpPolicy.schemaCause("mcp_search_tools", mapOf("limit" to 3), tools))
+        assertEquals(LiteRtMcpPolicy.SchemaCause.UNKNOWN_FIELD,
+            LiteRtMcpPolicy.schemaCause("mcp_search_tools",
+                mapOf("query" to "status", "secret_field" to "hidden value"), tools))
+        assertEquals(LiteRtMcpPolicy.SchemaCause.WRONG_TYPE,
+            LiteRtMcpPolicy.schemaCause("mcp_search_tools", mapOf("query" to 4), tools))
+        assertEquals(LiteRtMcpPolicy.SchemaCause.OTHER,
+            LiteRtMcpPolicy.schemaCause("missing", mapOf("query" to "status"), tools))
+        val bounded = McpTool("mcp_search_tools", "safe local search",
+            JSONObject("""{"type":"object","properties":{"query":{"type":"string","minLength":2}},"required":["query"],"additionalProperties":false}"""))
+        assertEquals(LiteRtMcpPolicy.SchemaCause.INVALID_VALUE,
+            LiteRtMcpPolicy.schemaCause("mcp_search_tools", mapOf("query" to ""), listOf(bounded)))
+        val code = LiteRtMcpPolicy.schemaCause("mcp_search_tools",
+            mapOf("query" to "status", "private_token" to "VERY_PRIVATE"), tools)
+        assertEquals("UNKNOWN_FIELD", code.name)
+        assertFalse(code.toString().contains("VERY_PRIVATE"))
+        val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+            .substringAfter("private suspend fun runLiteRtToolbridge(")
+            .substringBefore("private fun sendLiteRtMessage(")
+        assertTrue(source.contains("LiteRtMcpPolicy.schemaCause("))
+        assertTrue(source.contains("PocketDiagnostics.ErrorCode.NATIVE_SCHEMA_UNKNOWN_FIELD"))
+        assertTrue(source.contains("code = traceCode"))
+        assertTrue(source.contains("code.name"))
+        assertFalse(source.contains("schemaCause(", ignoreCase = true) && source.contains("Log.d("))
+    }
+
     @Test fun nativeParserFailureBeforeToolCallIsHandledForInitialAndFollowup() {
         val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
             .substringAfter("private suspend fun runLiteRtToolbridge(")
             .substringBefore("private fun sendLiteRtMessage(")
         assertTrue(source.indexOf("val catalog =") < source.indexOf("runtime.askMcp(request)"))
-        val initial = source.substringAfter("var turn = try {")
+        val initial = source.substringAfter("var turn = LiteRtNativeResponseBoundary.call(")
             .substringBefore("for (step in 0 until")
-        assertTrue(initial.contains("recoverNativeFailure()"))
-        assertTrue(initial.contains("catch (_: IllegalArgumentException)"))
-        assertTrue(initial.contains("catch (_: IllegalStateException)"))
+        assertTrue(initial.contains("runtime.askMcp(request)"))
+        assertTrue(initial.contains("onInvalidNativeResponse = { recoverNativeFailure() }"))
         val followup = source.substringAfter("val boundedFeedback =")
         assertTrue(followup.contains("runtime.toolFeedback(tool.name, boundedFeedback)"))
         assertTrue(followup.contains("recoverNativeFailure()"))
         assertTrue(source.contains("if (hadRealCall) {"))
         val recovery = source.substringAfter("suspend fun recoverNativeFailure() {")
-            .substringBefore("var turn = try {")
+            .substringBefore("var turn = LiteRtNativeResponseBoundary.call(")
         assertTrue(recovery.contains("if (hadRealCall) {"))
         assertTrue(recovery.contains("runtime.clearConversation()"))
         assertTrue(recovery.contains("tryHostDiscovery("))
@@ -188,6 +246,28 @@ class LiteRtMcpProtocolTest {
         assertTrue(afterCalls.contains("Weiterer Modell-Toolvorschlag"))
         assertTrue(afterCalls.contains("maximal ein externer Aufruf"))
         assertTrue(source.contains("outcome.toString().take(12_000)"))
+    }
+
+    @Test fun emptyOrToolFollowupMustNotBeReportedAsSuccessfulModelSummary() {
+        val quality = LiteRtMcpFollowupQuality
+        assertEquals(LiteRtMcpFollowupQuality.Answer.TEXT,
+            quality.assess("Server antwortet", 0))
+        assertEquals(LiteRtMcpFollowupQuality.Answer.EMPTY,
+            quality.assess("  \n\t", 0))
+        assertEquals(LiteRtMcpFollowupQuality.Answer.TOOL_REQUEST,
+            quality.assess("Some text accompanying a tool request", 1))
+        assertEquals(LiteRtMcpFollowupQuality.Answer.TOOL_REQUEST,
+            quality.assess("", 2))
+        assertThrows(IllegalArgumentException::class.java) {
+            quality.assess("", -1)
+        }
+        val bridge = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+            .substringAfter("private suspend fun runLiteRtToolbridge(")
+            .substringBefore("private fun sendLiteRtMessage(")
+        assertTrue(bridge.contains("LiteRtMcpFollowupQuality.assess(turn.text, turn.calls.size)"))
+        assertTrue(bridge.contains("PocketDiagnostics.ErrorCode.MODEL_FOLLOWUP_EMPTY"))
+        assertTrue(bridge.contains("if (hadRealCall && turn.text.isBlank())"))
+        assertTrue(bridge.contains("Keine zweite Serveraktion."))
     }
 
     @Test fun remoteDispatchRequiresApprovalAndOneRunGate() {

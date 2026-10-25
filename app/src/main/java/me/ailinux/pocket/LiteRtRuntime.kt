@@ -17,6 +17,8 @@ import me.ailinux.pocket.mcp.McpAgentBridge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
@@ -190,6 +192,8 @@ internal class LiteRtRuntime private constructor(
             require(file.isFile && file.name.endsWith(".litertlm", true)) {
                 "Nur lokal importierte LiteRT-LM-Modelle"
             }
+            LiteRtModelCompatibility.requireSupported(
+                file.name, BuildConfig.LITERT_LM_VERSION)
             // The native session/engine belong to this executor for their
             // entire lifetime, never to a multithreaded Dispatchers.IO pool.
             val dispatcher = Executors.newSingleThreadExecutor { runnable ->
@@ -204,6 +208,7 @@ internal class LiteRtRuntime private constructor(
                         file.name, RuntimeHardware.candidatesOnDevice())
                     require(choices.isNotEmpty()) { "Kein kompatibler Backend-Kandidat für " + file.name }
                     for (attempt in choices) {
+                        currentCoroutineContext().ensureActive()
                         onStage("backend_" + attempt.name.lowercase())
                         var candidate: Engine? = null
                         var initialized = false
@@ -222,6 +227,9 @@ internal class LiteRtRuntime private constructor(
                             candidate = Engine(config)
                             candidate.initialize()
                             initialized = true
+                            // initialize() can block inside JNI; stop before creating a
+                            // conversation if the caller cancelled during that work.
+                            currentCoroutineContext().ensureActive()
                             onStage("conversation_" + attempt.name.lowercase())
                             val chosenTools = session?.let { McpAgentBridge.nativeToolsJson(it.tools) }
                             val definitions = if (chosenTools == null) emptyList() else
@@ -254,6 +262,12 @@ internal class LiteRtRuntime private constructor(
                                 }.orEmpty()
                             }
                         } catch (problem: Exception) {
+                            // CancellationException extends IllegalStateException on the JVM.
+                            // Never interpret Stop/Home/lifecycle cancellation as a
+                            // recoverable backend failure or start another NPU/GPU/CPU.
+                            LiteRtNativeLoadGuard.rethrowIfCancelled(problem) {
+                                if (initialized) candidate?.close()
+                            }
                             errors += attempt.name + ": " +
                                 (problem.message ?: problem.javaClass.simpleName).take(180)
                             // The LiteRT API prohibits closing an engine whose

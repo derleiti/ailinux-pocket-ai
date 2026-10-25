@@ -66,12 +66,19 @@ object McpOnDemandDiscovery {
             McpToolSchema.validate(plan.tool.schema, plan.arguments) == null
     }
 
-    /** Server hints do not turn the server-side crawler job into a read. */
+    /** The same audited read-only tools must pass both planning and execution.
+     * An untrusted readOnlyHint alone never promotes a tool such as crawl.
+     */
+    private val auditedReadOnlyTools = setOf(
+        "status", "discord_connection_status", "current_time", "models", "device_info"
+    )
+
+    fun isAuditedReadOnlyTool(tool: McpTool): Boolean =
+        tool.declaresReadOnly && tool.name in auditedReadOnlyTools
+
     fun isVerifiedReadOnlyHostPlan(plan: McpProgressiveBridge.RemoteCall): Boolean =
         plan.hostFallback && !plan.hostWriteIntent &&
-            plan.tool.declaresReadOnly &&
-            plan.tool.name in setOf("status", "discord_connection_status",
-                "current_time", "models", "device_info")
+            isAuditedReadOnlyTool(plan.tool)
 
     private val explicitTool = Regex("(?:tool|werkzeug|function)[\\s:='\"\\u0060]+([a-z][a-z0-9_.-]{2,})", RegexOption.IGNORE_CASE)
     private val mentionsExternal = Regex(

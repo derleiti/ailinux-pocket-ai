@@ -146,6 +146,10 @@ class ModelStore(private val context: Context) {
             if (code == 429 || code in 500..599)
                 throw java.io.IOException("HTTP " + code + " – Server vorübergehend nicht erreichbar")
             require(code == 200 || code == 206) { "HTTP $code – Download nicht verfügbar." }
+            // RFC 9110 allows a server to ignore Range and return 200.
+            // Never truncate a user's existing .part as a side effect of
+            // a network response. Require explicit user-managed restart.
+            ensureNoSilentRangeRestart(offset, code)
             if (code == 206) {
                 // Without a stable remote validator or an expected file hash,
                 // resuming an old partial could quietly join two different models.
@@ -168,8 +172,6 @@ class ModelStore(private val context: Context) {
                         "Remote-Modell hat anderes Last-Modified; alte Teildatei bewahrt."
                     }
                 }
-            } else if (offset > 0) {
-                offset = 0L // A 200 reply replaces the old incomplete .part, never a model.
             }
             val newValidator = connection.getHeaderField("ETag")
                 ?.takeIf { it.startsWith('"') && it.endsWith('"') && it.length < 200 }
@@ -215,7 +217,9 @@ class ModelStore(private val context: Context) {
                 sha256, cancelled, onVerifying, progress)
         } finally {
             connection?.disconnect()
-            if (temp.exists() && temp.length() in 1..32) temp.delete()
+            // Preserve even a short .part fragment and its validator after
+            // failures, cancellations and unknown network outcomes. Only a
+            // verified atomic install or an explicit user action may remove it.
             lease.close()
         }
     }
@@ -316,6 +320,20 @@ class ModelStore(private val context: Context) {
     )
 
     companion object {
+        /** Caller checks this BEFORE touching the validator or opening the
+         * existing partial for write. A 200 response to Range is not a
+         * verified resume and must not destroy the old partial bytes.
+         */
+        internal fun ensureNoSilentRangeRestart(offset: Long, code: Int) {
+            if (offset > 0 && code == HttpURLConnection.HTTP_OK) {
+                throw IOException(
+                    "HTTP 200 statt Range 206: Server ignoriert oder verwirft " +
+                    "Wiederaufnahme. Vorhandene .part bleibt unverändert. " +
+                    "Für einen Neustart den alten Teiltransfer ausdrücklich verwalten."
+                )
+            }
+        }
+
         private val digestPattern = Regex("^[a-fA-F0-9]{64}$")
         private val strongTagPattern = Regex("^\\\"[^\\\"]{1,198}\\\"$")
 

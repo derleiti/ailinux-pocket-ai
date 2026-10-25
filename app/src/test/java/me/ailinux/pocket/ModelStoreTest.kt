@@ -55,6 +55,30 @@ class ModelStoreTest {
         } finally { file.delete() }
     }
 
+    @Test fun ignoredRange200NeverSilentlyOverwritesExistingPart() {
+        val part = File.createTempFile("Qwen3_1.7B", ".litertlm.part")
+        try {
+            val previousBytes = "LITERTLM-previous-part".toByteArray()
+            part.writeBytes(previousBytes)
+            val e = assertThrows(java.io.IOException::class.java) {
+                ModelStore.ensureNoSilentRangeRestart(part.length(),
+                    java.net.HttpURLConnection.HTTP_OK)
+            }
+            assertTrue(e.message.orEmpty().contains(".part bleibt unverändert"))
+            assertArrayEquals(previousBytes, part.readBytes())
+            ModelStore.ensureNoSilentRangeRestart(0, java.net.HttpURLConnection.HTTP_OK)
+            ModelStore.ensureNoSilentRangeRestart(part.length(),
+                java.net.HttpURLConnection.HTTP_PARTIAL)
+            val store = File("src/main/java/me/ailinux/pocket/ModelStore.kt").readText()
+            val guard = store.indexOf("ensureNoSilentRangeRestart(offset, code)")
+            val openForWrite = store.indexOf("FileOutputStream(temp, offset > 0)")
+            assertTrue("Range guard must run before any .part mutation",
+                guard >= 0 && openForWrite > guard)
+        } finally {
+            part.delete()
+        }
+    }
+
     @Test fun onlyOneTransferCanOwnTheSamePartialAcrossWorkers() {
         val folder = java.nio.file.Files.createTempDirectory("transfer-lease-").toFile()
         try {
