@@ -1,3 +1,30 @@
+# AILinux Pocket AI 2.1.0-RC12 (versionCode 37) - Android QA
+
+## P0: model downloads queued behind VPN connectivity constraint
+
+On the Pixel Android 17 test device, Qwen3_1.7B.litertlm
+was queued with PENDING_JOB_REASON_CONSTRAINT_CONNECTIVITY,
+zero executed transfer attempts, and no byte progress.
+The Android system UI confirmed active WireGuard Internet connectivity.
+RC11's UIDT NetworkRequest.Builder required the default NOT_VPN
+capability even though a VPN is the intended Internet transport.
+
+RC12 explicitly clears NET_CAPABILITY_NOT_VPN while retaining
+INTERNET and the user's explicit Wi-Fi-only preference. The
+JobScheduler/network diagnostic also reports privacy-safe booleans
+for validated, Internet, Wi-Fi, VPN and metered; no SSID, IP, DNS,
+token or model URL is included.
+
+An in-place APK update alone may leave an old queued job with its
+original JobInfo. The user should explicitly pause and then resume
+the existing download to submit a new VPN-compatible UIDT job.
+Do NOT delete models, .part files, validators or app data.
+
+The pending job must not be called fixed until the Pixel shows a real
+worker start, increasing downloaded byte count and ultimately verified
+file installation. Android screen-off, network switch and force-stop
+restrictions still apply; never claim unconditional background work.
+
 # AILinux Pocket AI RC12 - Visible MCP Auto-Bridge Settings
 
 RC12 addresses a Pixel usability regression in RC11: only MCP server
