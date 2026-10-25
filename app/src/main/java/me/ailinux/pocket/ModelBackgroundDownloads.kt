@@ -179,15 +179,20 @@ internal object BackgroundModelDownloads {
         // Reconcile historical completion with the current private model
         // directory. A journal entry survives app updates and even deletion
         // of its final file; it cannot by itself prove installation.
-        val completedFilePresent = if (entry.state == "complete")
-            CompletedModelEvidence.present(
+        val completedEvidence = if (entry.state == "complete")
+            CompletedModelEvidence.inspect(
                 java.io.File(context.filesDir, "models"), entry.name, entry.done)
         else null
         return DownloadSchedulerState.describe(
             entry.name, entry.state, entry.wifiOnly, present,
             reasons, age, entry.done, entry.total, entry.error,
             network = networkInfo(context),
-            completedFilePresent = completedFilePresent
+            completedFilePresent = completedEvidence?.let {
+                it == CompletedModelEvidence.Status.PRESENT
+            },
+            completedFileMissing = completedEvidence?.let {
+                it == CompletedModelEvidence.Status.MISSING
+            }
         )
     }
 

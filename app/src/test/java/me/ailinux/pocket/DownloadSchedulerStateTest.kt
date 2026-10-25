@@ -108,6 +108,51 @@ class DownloadSchedulerStateTest {
         assertFalse(missing.active)
     }
 
+    @Test fun staleCompletionDifferentiatesAbsentFileAndExistingWrongLength() {
+        val absent = DownloadSchedulerState.describe(
+            "qwen3_4b_mixed_int4.litertlm", "complete", false, false, emptySet(),
+            0L, 5000L, 5000L, "", completedFilePresent = false,
+            completedFileMissing = true)
+        assertTrue(absent.label.contains("finale Modelldatei fehlt"))
+        assertTrue(absent.label.contains("Quelle erneut auswählen"))
+        assertFalse("Never auto-reschedule a journal on read", absent.canResume)
+
+        val wrongLength = DownloadSchedulerState.describe(
+            "qwen3_4b_mixed_int4.litertlm", "complete", false, false, emptySet(),
+            0L, 5000L, 5000L, "", completedFilePresent = false,
+            completedFileMissing = false)
+        assertTrue(wrongLength.label.contains("falsche Größe"))
+        assertTrue(wrongLength.label.contains("nichts überschrieben"))
+        assertFalse(wrongLength.canResume)
+    }
+
+    @Test fun completedJournalInspectionIsPureAndNeverRemovesFailedFiles() {
+        val dir = java.nio.file.Files.createTempDirectory("pocket-verified-file-").toFile()
+        val name = "qwen3_4b_mixed_int4.litertlm"
+        val file = java.io.File(dir, name)
+        try {
+            assertEquals(CompletedModelEvidence.Status.MISSING,
+                CompletedModelEvidence.inspect(dir, name, 128))
+            file.writeBytes(ByteArray(64))
+            assertEquals(CompletedModelEvidence.Status.INVALID_SIZE,
+                CompletedModelEvidence.inspect(dir, name, 128))
+            assertEquals(64L, file.length())
+            assertTrue(file.exists())
+            assertEquals(CompletedModelEvidence.Status.PRESENT,
+                CompletedModelEvidence.inspect(dir, name, 64))
+            assertEquals(CompletedModelEvidence.Status.INVALID_SIZE,
+                CompletedModelEvidence.inspect(dir, name, 4))
+            assertEquals(CompletedModelEvidence.Status.PRESENT,
+                CompletedModelEvidence.inspect(dir, name, 0))
+            assertEquals(CompletedModelEvidence.Status.INVALID_NAME,
+                CompletedModelEvidence.inspect(dir, "../" + name, 64))
+            assertTrue(file.exists())
+        } finally {
+            file.delete()
+            dir.delete()
+        }
+    }
+
     @Test fun completedJournalChecksRealFileAndExpectedBytesWithoutDeleting() {
         val dir = java.nio.file.Files.createTempDirectory("pocket-completed-").toFile()
         try {

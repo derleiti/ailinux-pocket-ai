@@ -45,7 +45,8 @@ internal object DownloadSchedulerState {
         total: Long,
         error: String,
         network: NetworkInfo? = null,
-        completedFilePresent: Boolean? = null
+        completedFilePresent: Boolean? = null,
+        completedFileMissing: Boolean? = null
     ): View {
         val suffix = if (done > 0)
             " · " + ModelStore.displaySize(done) +
@@ -59,8 +60,15 @@ internal object DownloadSchedulerState {
             "complete" -> when (completedFilePresent) {
                 true -> View("✓ Download abgeschlossen · Modelldatei vorhanden " +
                     "(Größe geprüft, kein erneuter SHA-256-Test): " + name)
-                false -> View("⚠ Downloadjournal abgeschlossen, aber Modelldatei fehlt " +
-                    "oder Größe weicht ab: " + name)
+                false -> when (completedFileMissing) {
+                    true -> View("⚠ Downloadjournal abgeschlossen, aber finale Modelldatei " +
+                        "fehlt: " + name + " · Quelle erneut auswählen; keine automatische Wiederholung.")
+                    false -> View("⚠ Downloadjournal abgeschlossen, aber vorhandene " +
+                        "Modelldatei hat eine falsche Größe: " + name +
+                        " · Datei vor einem neuen Download manuell prüfen; nichts überschrieben.")
+                    null -> View("⚠ Downloadjournal abgeschlossen, aber Modelldatei fehlt " +
+                        "oder Größe weicht ab: " + name)
+                }
                 null -> View("ⓘ Downloadjournal abgeschlossen; Dateibestand ungeprüft: " + name)
             }
             "verifying", "running" -> if (hasJob == false &&
@@ -106,10 +114,22 @@ internal object DownloadSchedulerState {
  * present installation. Never removes models, journals, or partial downloads.
  */
 internal object CompletedModelEvidence {
-    fun present(directory: File, name: String, completedBytes: Long): Boolean {
-        if (name != ModelStore.sanitize(name) || !ModelStore.isModelName(name)) return false
+    enum class Status { PRESENT, MISSING, INVALID_SIZE, INVALID_NAME }
+
+    /** Uses *only* file existence and expected length, never claims SHA proof.
+     * Invalid names are never resolved as paths outside the model directory.
+     */
+    fun inspect(directory: File, name: String, completedBytes: Long): Status {
+        if (name != ModelStore.sanitize(name) || !ModelStore.isModelName(name))
+            return Status.INVALID_NAME
         val file = File(directory, name)
-        return file.isFile && file.length() > 32 &&
-            (completedBytes <= 0 || file.length() == completedBytes)
+        if (!file.exists()) return Status.MISSING
+        if (!file.isFile || file.length() <= 32L ||
+            (completedBytes > 0L && file.length() != completedBytes))
+            return Status.INVALID_SIZE
+        return Status.PRESENT
     }
+
+    fun present(directory: File, name: String, completedBytes: Long): Boolean =
+        inspect(directory, name, completedBytes) == Status.PRESENT
 }
