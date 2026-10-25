@@ -28,7 +28,8 @@ class RuntimeHardwareTest {
         val all = RuntimeHardware.candidates("Google", "Pixel 10 Pro", "Tensor G5")
         assertEquals(listOf(RuntimeHardware.Attempt.GPU, RuntimeHardware.Attempt.CPU),
             RuntimeHardware.forModelFile("gemma-4-E2B-it-gpu.litertlm", all))
-        assertEquals(all, RuntimeHardware.forModelFile("generic.litertlm", all))
+        assertEquals(listOf(RuntimeHardware.Attempt.GPU, RuntimeHardware.Attempt.CPU),
+            RuntimeHardware.forModelFile("generic.litertlm", all))
         assertEquals(listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR),
             RuntimeHardware.forModelFile("gemma-4-E2B-npu.litertlm", all))
         assertEquals(listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR),
@@ -42,10 +43,34 @@ class RuntimeHardwareTest {
             "Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm", available))
         assertEquals(expected, RuntimeHardware.forModelFile(
             "Qwen3_1.7B.litertlm", available))
-        // Only the allowlisted upstream artifacts skip Google Tensor.
-        assertEquals(available, RuntimeHardware.forModelFile("another-qwen.litertlm", available))
+        // Unknown Qwen and Spark files are NOT proof of a Tensor AOT graph.
+        // Their earlier speculative NPU attempts preceded fast setup
+        // failures and Android low-memory exits; never claim causality.
+        assertEquals(expected, RuntimeHardware.forModelFile("another-qwen.litertlm", available))
+        assertEquals(expected, RuntimeHardware.forModelFile(
+            "Qwen3.5-0.8B-VL_int8.litertlm", available))
+        assertEquals(expected, RuntimeHardware.forModelFile(
+            "Spark-X2.5-1.7B_int8.litertlm", available))
+        assertEquals(expected, RuntimeHardware.forModelFile(
+            "Spark-X2.6-4B_int4.litertlm", available))
         assertEquals(listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR),
             RuntimeHardware.forModelFile("gemma-4-E2B-it_Google_Tensor_G5.litertlm", available))
+    }
+
+    @Test fun npuRequiresExplicitModelHintNotJustGoogleHardware() {
+        val all = RuntimeHardware.candidates("Google", "Pixel 10 Pro", "Tensor G5")
+        val safe = listOf(RuntimeHardware.Attempt.GPU, RuntimeHardware.Attempt.CPU)
+        assertEquals(safe, RuntimeHardware.forModelFile("unknown.litertlm", all))
+        assertEquals(safe, RuntimeHardware.forModelFile("custom_gemma4.litertlm", all))
+        assertEquals(listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR),
+            RuntimeHardware.forModelFile("gemma-4-E2B-it_Google_Tensor_G5.litertlm", all))
+        assertEquals(emptyList<RuntimeHardware.Attempt>(),
+            RuntimeHardware.forModelFile("unknown.litertlm",
+                listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR)))
+        assertEquals(emptyList<RuntimeHardware.Attempt>(),
+            RuntimeHardware.forModelFile("model-npu-gpu.litertlm", all))
+        assertEquals(emptyList<RuntimeHardware.Attempt>(),
+            RuntimeHardware.forModelFile("model-Google_Tensor_G5.litertlm", safe))
     }
 
     @Test fun genericAndroidDoesNotAssumeVendorTpu() {
