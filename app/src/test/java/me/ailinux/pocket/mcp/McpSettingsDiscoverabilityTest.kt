@@ -72,9 +72,12 @@ class McpSettingsDiscoverabilityTest {
         assertFalse(menu.contains(".setMessage("))
         assertTrue(auto.contains(".setCustomTitle(listDialogHeader("))
         assertTrue(auto.contains(".setMultiChoiceItems("))
-        // The no-profile error legitimately uses setMessage before returning.
-        val dialog = auto.substringAfter("val checked = BooleanArray")
-        assertFalse(dialog.contains(".setMessage("))
+        // The no-profile and post-connection partial-failure alerts can
+        // independently use setMessage. The CHOOSER builder itself must not:
+        // AppCompat would hide its multi-choice server list.
+        val chooser = auto.substringAfter("val checked = BooleanArray")
+            .substringBefore(".setPositiveButton(\"Online-Werkzeuge verbinden\")")
+        assertFalse(chooser.contains(".setMessage("))
         assertTrue(menu.contains("AUTO-BRIDGE · Tools automatisch finden (RC11)"))
     }
 

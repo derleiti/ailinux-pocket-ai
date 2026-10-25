@@ -187,7 +187,9 @@ internal object BackgroundModelDownloads {
             entry.name, entry.state, entry.wifiOnly, present,
             reasons, age, entry.done, entry.total, entry.error,
             network = networkInfo(context),
-            completedFilePresent = completedFilePresent
+            completedFilePresent = completedFilePresent,
+            completedWithVerifiedSha256 = entry.state == "complete" &&
+                entry.hash?.matches(Regex("[a-fA-F0-9]{64}")) == true
         )
     }
 
@@ -448,7 +450,10 @@ class ModelTransferJobService : JobService() {
                     }
                 }
                 ModelDownloadJournal.change(applicationContext, name) {
-                    it.copy(state = "complete", error = "", url = "", hash = null,
+                    // Preserve only the digest (not a possibly private URL) as
+                    // historic verification evidence. Do not claim it is
+                    // a new hash of the current file after an app update.
+                    it.copy(state = "complete", error = "", url = "",
                         done = java.io.File(ModelStore(applicationContext).dir, name).length())
                 }
             } catch (_: TransferCancelled) {
@@ -532,7 +537,8 @@ class ModelTransferWorker(context: Context, params: WorkerParameters) :
                 }
             }
             ModelDownloadJournal.change(applicationContext, name) {
-                it.copy(state = "complete", url = "", hash = null,
+                // Keep the validated digest but clear the download URL.
+                it.copy(state = "complete", url = "",
                     done = java.io.File(ModelStore(applicationContext).dir, name).length())
             }
             ModelDownloadJournal.read(applicationContext, name)?.let {

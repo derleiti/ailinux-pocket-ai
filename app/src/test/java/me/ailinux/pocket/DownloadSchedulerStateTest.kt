@@ -11,11 +11,13 @@ class DownloadSchedulerStateTest {
         wifiOnly: Boolean = false,
         age: Long = 30_000L,
         done: Long = 0L,
-        completedFilePresent: Boolean? = null
+        completedFilePresent: Boolean? = null,
+        completedWithVerifiedSha256: Boolean = false
     ) = DownloadSchedulerState.describe(
         "Qwen3_1.7B.litertlm", state, wifiOnly,
         hasJob, reasons, age, done, 2_400_000_000L, "",
-        completedFilePresent = completedFilePresent
+        completedFilePresent = completedFilePresent,
+        completedWithVerifiedSha256 = completedWithVerifiedSha256
     )
 
     @Test fun missingAndroidJobMustOfferExplicitResumeEvenBeforePartFileExists() {
@@ -101,7 +103,12 @@ class DownloadSchedulerStateTest {
         assertFalse(historical.canResume)
         val present = status(state = "complete", completedFilePresent = true)
         assertTrue(present.label.contains("Modelldatei vorhanden"))
-        assertTrue(present.label.contains("kein erneuter SHA-256-Test"))
+        assertTrue(present.label.contains("SHA-256 nicht bestätigt"))
+        assertFalse(present.label.startsWith("✓"))
+        val verifiedAtTransfer = status(state = "complete",
+            completedFilePresent = true, completedWithVerifiedSha256 = true)
+        assertTrue(verifiedAtTransfer.label.contains("SHA-256 beim Transfer geprüft"))
+        assertTrue(verifiedAtTransfer.label.contains("kein erneuter Hash-Test"))
         val missing = status(state = "complete", completedFilePresent = false)
         assertTrue(missing.label.contains("fehlt"))
         assertFalse(missing.canResume)

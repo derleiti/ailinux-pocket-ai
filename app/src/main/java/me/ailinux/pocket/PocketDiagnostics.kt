@@ -32,7 +32,7 @@ internal object PocketDiagnostics {
         APPROVAL_REQUEST, APPROVAL_ACCEPT, APPROVAL_DENY,
         AUTH_CHECK, SCHEMA_CHECK, META_ARGS_NORMALIZED, DISPATCH, SERVER_RESULT, REMOTE_ERROR,
         MODEL_FOLLOWUP, MODEL_TOOL_MISSING, NATIVE_RESPONSE_REJECTED, INPUT_REQUIRED, CANCELLED,
-        ENGINE_ERROR, DIAGNOSTIC
+        BACKEND_SKIPPED, BACKEND_RISK_ACCEPTED, ENGINE_ERROR, DIAGNOSTIC
     }
     enum class State { START, OK, INFO, REJECTED, FAIL, UNCONFIRMED }
     enum class ErrorCode {
@@ -46,7 +46,9 @@ internal object PocketDiagnostics {
         INVALID_NATIVE_TOOL_COUNT, NATIVE_RESPONSE_REJECTED,
         NATIVE_SCHEMA_MISSING_REQUIRED, NATIVE_SCHEMA_UNKNOWN_FIELD,
         NATIVE_SCHEMA_WRONG_TYPE, NATIVE_SCHEMA_INVALID_VALUE,
-        NATIVE_SCHEMA_OTHER, MODEL_FOLLOWUP_EMPTY, MODEL_RUNTIME, UNKNOWN
+        NATIVE_SCHEMA_OTHER, MODEL_FOLLOWUP_EMPTY, MODEL_RUNTIME,
+        GGUF_METADATA, GGUF_PREVIOUS_ENGINE, GGUF_NATIVE_LOAD, GGUF_THINKING,
+        GGUF_TEMPLATE, GGUF_SAMPLING, UNKNOWN
     }
     data class Event(
         val time: Long, val id: String, val trace: String,
@@ -93,6 +95,7 @@ internal object PocketDiagnostics {
         if (error is me.ailinux.pocket.mcp.McpExecutionUncertain &&
             error.cause != null) return classify(error.cause!!)
         if (error is kotlinx.coroutines.CancellationException) return ErrorCode.CANCELLED
+        if (error is GgufLoadFailure) return error.diagnosticCode
         if (error is OutOfMemoryError || error is ModelMemoryGuardException)
             return ErrorCode.MEMORY
         val klass = error.javaClass.simpleName.lowercase(Locale.ROOT)
@@ -263,9 +266,11 @@ internal object PocketDiagnostics {
     }
 
     fun failure(context: Context, trace: String, domain: Domain, step: Step,
-                error: Throwable, uncertain: Boolean = false): String =
+                error: Throwable, uncertain: Boolean = false,
+                durationMs: Long = -1L): String =
         log(context, trace, domain, step,
-            if (uncertain) State.UNCONFIRMED else State.FAIL, code = classify(error))
+            if (uncertain) State.UNCONFIRMED else State.FAIL,
+            durationMs = durationMs, code = classify(error))
 
     /**
      * Newest evidence comes first. Android accessibility often returns only

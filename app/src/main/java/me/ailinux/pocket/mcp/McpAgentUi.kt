@@ -210,33 +210,65 @@ class McpAgentUi(
                         PocketDiagnostics.State.START, count = chosen.size)
                     val started = SystemClock.elapsedRealtime()
                     try {
+                        // An outage at source #2 must not masquerade as a
+                        // global failure of the three independent servers.
+                        // Do not store endpoint, tokens or response bodies.
+                        val offline = mutableListOf<String>()
                         val sources = withContext(Dispatchers.IO) {
-                            chosen.mapIndexed { index, old ->
-                                val fresh = vault.get(old.id)
-                                    ?: error("MCP-Profil wurde entfernt")
-                                require(fresh.endpoint == old.endpoint &&
-                                    fresh.auth == old.auth &&
-                                    fresh.oauthClientId == old.oauthClientId) {
-                                    "MCP-Profil während der Serverauswahl geändert."
+                            chosen.mapIndexedNotNull { index, old ->
+                                val sourceNumber = index + 1
+                                val sourceStarted = SystemClock.elapsedRealtime()
+                                diag(PocketDiagnostics.Step.DISCOVERY_START,
+                                    PocketDiagnostics.State.START, count = sourceNumber)
+                                try {
+                                    val fresh = vault.get(old.id)
+                                        ?: error("MCP-Profil wurde entfernt")
+                                    require(fresh.endpoint == old.endpoint &&
+                                        fresh.auth == old.auth &&
+                                        fresh.oauthClientId == old.oauthClientId) {
+                                        "MCP-Profil während der Serverauswahl geändert."
+                                    }
+                                    require(fresh.auth != McpAuth.OAUTH ||
+                                        fresh.oauthAccessToken.isNotBlank() ||
+                                        fresh.oauthRefreshToken.isNotBlank()) {
+                                        "OAuth-Anmeldung fehlt für " + fresh.title
+                                    }
+                                    val authorized = oauth.refreshIfNeeded(fresh)
+                                    val live = McpConnection.inspect(authorized)
+                                    diag(PocketDiagnostics.Step.DISCOVERY_DONE,
+                                        PocketDiagnostics.State.OK, count = sourceNumber,
+                                        durationMs = SystemClock.elapsedRealtime() - sourceStarted)
+                                    McpProgressiveBridge.Source(
+                                        id = "s" + sourceNumber,
+                                        profileId = fresh.id,
+                                        endpoint = fresh.endpoint,
+                                        title = fresh.title,
+                                        tools = live.tools.distinctBy { it.name }.take(
+                                            McpProgressiveBridge.MAX_CATALOG_TOOLS_PER_SERVER),
+                                        auth = fresh.auth,
+                                        publicOauthClientId = fresh.oauthClientId,
+                                        instructions = live.instructions
+                                    )
+                                } catch (problem: Exception) {
+                                    // This is a fresh read-only discovery,
+                                    // NOT a remote tools/call. Never retry
+                                    // any possibly executed external action.
+                                    PocketDiagnostics.log(activity.applicationContext,
+                                        diagTrace(), PocketDiagnostics.Domain.MCP,
+                                        PocketDiagnostics.Step.DISCOVERY_DONE,
+                                        PocketDiagnostics.State.FAIL, count = sourceNumber,
+                                        durationMs = SystemClock.elapsedRealtime() - sourceStarted,
+                                        code = PocketDiagnostics.classify(problem))
+                                    offline.add(McpAutoDiscoveryStatus.safeFailure(
+                                        sourceNumber,
+                                        (problem as? McpHttpFailure)?.code,
+                                        PocketDiagnostics.classify(problem)))
+                                    null
                                 }
-                                require(fresh.auth != McpAuth.OAUTH ||
-                                    fresh.oauthAccessToken.isNotBlank() ||
-                                    fresh.oauthRefreshToken.isNotBlank()) {
-                                    "OAuth-Anmeldung fehlt für " + fresh.title
-                                }
-                                val authorized = oauth.refreshIfNeeded(fresh)
-                                val live = McpConnection.inspect(authorized)
-                                McpProgressiveBridge.Source(
-                                    id = "s" + (index + 1),
-                                    profileId = fresh.id,
-                                    endpoint = fresh.endpoint,
-                                    title = fresh.title,
-                                    tools = live.tools.distinctBy { it.name }.take(McpProgressiveBridge.MAX_CATALOG_TOOLS_PER_SERVER),
-                                    auth = fresh.auth,
-                                    publicOauthClientId = fresh.oauthClientId,
-                                    instructions = live.instructions
-                                )
                             }
+                        }
+                        require(sources.isNotEmpty()) {
+                            "Keiner der gewählten MCP-Server konnte live geprüft werden."
                         }
                         // A 1,000+ tool authenticated catalogue can take time
                         // to index; never block the Android UI thread.
@@ -254,15 +286,32 @@ class McpAgentUi(
                         session = McpAgentSession(
                             profileId = sources.first().profileId,
                             endpoint = sources.first().endpoint,
-                            serverName = "Auto-Bridge · " + sources.size + " Server",
+                            serverName = "Auto-Bridge · " + sources.size +
+                                "/" + chosen.size + " Server",
                             tools = meta,
                             thinkingMode = "low",
                             progressiveSources = sources,
                             includeServerGuidance = allowServerGuidance.isChecked
                         )
                         onActiveChanged(session)
-                        toast("AUTO-Bridge: " + runtime.totalTools +
-                            " Tools entdeckt; 3 Meta-Werkzeuge an Spark gebunden.")
+                        toast("AUTO-Bridge: " + sources.size + "/" + chosen.size +
+                            " Server, " + runtime.totalTools +
+                            " Tools; 3 lokale Meta-Werkzeuge.")
+                        if (offline.isNotEmpty() && !activity.isFinishing &&
+                            !activity.isDestroyed) {
+                            AlertDialog.Builder(activity)
+                                .setTitle("AUTO-MCP nur teilweise verbunden")
+                                .setMessage(
+                                    "Erreichbar: " + sources.size + "/" + chosen.size +
+                                    " Server. Die fehlenden Quellen bleiben für " +
+                                    "diese Sitzung deaktiviert, nicht heimlich " +
+                                    "durch andere Server ersetzt.\n\n" +
+                                    offline.joinToString("\n") +
+                                    "\n\nVerbindung später erneut prüfen; " +
+                                    "keine automatische tools/call-Wiederholung."
+                                )
+                                .setPositiveButton("Verstanden", null).show()
+                        }
                     } catch (problem: Exception) {
                         PocketDiagnostics.failure(activity.applicationContext,
                             diagTrace(), PocketDiagnostics.Domain.MCP,
