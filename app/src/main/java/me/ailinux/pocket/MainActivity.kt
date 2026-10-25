@@ -1169,7 +1169,22 @@ class MainActivity : AppCompatActivity() {
         val tensorMayBeUsed = RuntimeHardware.Attempt.GOOGLE_TENSOR in initialCandidates
         val tensorWarningFloor = ModelLoadSafety.minimumAvailableForLiteRtModel(
             file.length(), tensorMayBeUsed, memory.threshold)
-        val tensorRiskWarning = tensorMayBeUsed && memory.availMem < tensorWarningFloor
+        val tensorRiskWarning = tensorMayBeUsed && ModelLoadSafety.insufficientForLiteRtModel(
+            file.length(), memory.availMem, true, memory.lowMemory, memory.threshold)
+        // A Tensor-only graph has no safe fallback below the hard floor.
+        // Refuse before acknowledgement or releasing the current session.
+        if (tensorRiskWarning &&
+            initialCandidates.all { it == RuntimeHardware.Attempt.GOOGLE_TENSOR }) {
+            diagnosticTrace = PocketDiagnostics.newTrace()
+            val refusal = ModelMemoryGuardException(
+                availableBytes = memory.availMem,
+                requiredBytes = tensorWarningFloor
+            )
+            failure(PocketDiagnostics.Domain.LITERT,
+                PocketDiagnostics.Step.MODEL_LOAD, refusal)
+            showError("LiteRT: Zu wenig RAM für Modellwechsel", refusal)
+            return
+        }
         if (!acknowledgedLargeModel &&
             (ModelLoadSafety.requiresConfirmation(file.length(), memory.availMem) ||
                 tensorRiskWarning)) {
