@@ -29,7 +29,6 @@ internal object McpArchitectureGuide {
         "\\b(?:prüfe|pruefe|checke|check|verify|verifiziere|" +
             "rufe|abrufen|hole|nutze|benutze|verwende|(?:and\\s+use)|call|invoke|" +
             "sende|send|post|poste|schicke|schreibe|delete|write|read|lies|lese|lösche|loesche|ändere|aendere|" +
-main
             "starte|execute|execute\\s+tool|fetch|deploy|restart)\\b",
         RegexOption.IGNORE_CASE
     )
