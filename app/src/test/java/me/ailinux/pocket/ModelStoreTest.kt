@@ -43,6 +43,42 @@ class ModelStoreTest {
         } finally { file.delete() }
     }
 
+    @Test fun interruptedSha256VerificationDoesNotClaimSuccessfulInstall() {
+        val file = File.createTempFile("pocket-interrupted", ".gguf")
+        try {
+            file.writeBytes("GGUF".toByteArray() + ByteArray(1024))
+            val stopped = java.util.concurrent.atomic.AtomicBoolean(true)
+            assertThrows(TransferCancelled::class.java) {
+                ModelStore.sha256(file, stopped)
+            }
+            assertTrue("Cancellation must not delete the usable source file", file.exists())
+        } finally { file.delete() }
+    }
+
+    @Test fun onlyOneTransferCanOwnTheSamePartialAcrossWorkers() {
+        val folder = java.nio.file.Files.createTempDirectory("transfer-lease-").toFile()
+        try {
+            val first = ModelStore.claimTransfer(folder, "Qwen3_1.7B.litertlm")
+            try {
+                assertThrows(java.io.IOException::class.java) {
+                    ModelStore.claimTransfer(folder, "Qwen3_1.7B.litertlm")
+                }
+                ModelStore.claimTransfer(folder, "different.gguf").close()
+            } finally { first.close() }
+            ModelStore.claimTransfer(folder, "Qwen3_1.7B.litertlm").close()
+        } finally { folder.deleteRecursively() }
+    }
+
+    @Test fun completedRangeIsOnlyAcceptedForExactRfc9110UnsatisfiedRangeTotal() {
+        assertEquals(101L, ModelStore.completedRangeLength("bytes */101"))
+        assertEquals(9876543210L, ModelStore.completedRangeLength("bytes */9876543210"))
+        assertNull(ModelStore.completedRangeLength(null))
+        assertNull(ModelStore.completedRangeLength("bytes 0-100/101"))
+        assertNull(ModelStore.completedRangeLength("bytes */0"))
+        assertNull(ModelStore.completedRangeLength("bytes */-1"))
+        assertNull(ModelStore.completedRangeLength("bytes */garbage"))
+    }
+
     @Test fun sha256OfFileIsCorrect() {
         val file = File.createTempFile("pocket", ".txt")
         try {

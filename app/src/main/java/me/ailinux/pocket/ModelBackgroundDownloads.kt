@@ -13,6 +13,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
@@ -39,7 +40,8 @@ internal object ModelDownloadJournal {
     data class Entry(
         val id: Int, val name: String, val url: String, val hash: String?,
         val wifiOnly: Boolean, val state: String, val done: Long = 0,
-        val total: Long = -1, val error: String = "", val attempts: Int = 0
+        val total: Long = -1, val error: String = "", val attempts: Int = 0,
+        val updatedAtMs: Long = 0, val lastStopReason: Int = -1
     )
     private const val PREFS = "pocket_background_downloads"
     private fun prefs(context: Context) =
@@ -50,7 +52,8 @@ internal object ModelDownloadJournal {
         Entry(j.getInt("id"), j.getString("name"), j.getString("url"),
             j.optString("hash").ifBlank { null }, j.optBoolean("wifiOnly", false),
             j.optString("state"), j.optLong("done"), j.optLong("total", -1),
-            j.optString("error"), j.optInt("attempts"))
+            j.optString("error"), j.optInt("attempts"),
+            j.optLong("updatedAtMs", 0L), j.optInt("lastStopReason", -1))
     }.getOrNull()
 
     @Synchronized fun read(context: Context, name: String): Entry? =
@@ -69,6 +72,8 @@ internal object ModelDownloadJournal {
             .put("wifiOnly", entry.wifiOnly).put("state", entry.state)
             .put("done", entry.done).put("total", entry.total)
             .put("error", entry.error.take(220)).put("attempts", entry.attempts)
+            .put("updatedAtMs", System.currentTimeMillis())
+            .put("lastStopReason", entry.lastStopReason)
         val names = p.getStringSet("names", emptySet()).orEmpty().toMutableSet()
         names.add(entry.name)
         check(p.edit().putString(key(entry.name), j.toString())
@@ -90,6 +95,115 @@ internal object ModelDownloadJournal {
 internal object BackgroundModelDownloads {
     private const val ID_OFFSET = 26000
     fun jobId(name: String): Int = ID_OFFSET + (ModelStore.sanitize(name).hashCode() and 0x3fffffff)
+
+    /**
+     * Read the OS reason, not the journal's stale "queued" label. API 36
+     * exposes all reasons, API 34+ the first. This call is read-only and
+     * must never reschedule work from a polling Activity.
+     */
+    fun snapshot(
+        context: Context,
+        entry: ModelDownloadJournal.Entry
+    ): DownloadSchedulerState.View {
+        var present: Boolean? = null
+        val reasons = mutableSetOf<DownloadSchedulerState.Reason>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val scheduler = context.getSystemService(JobScheduler::class.java)
+            present = runCatching { scheduler.getPendingJob(entry.id) != null }.getOrNull()
+            if (present == true && entry.state == "queued") {
+                val pending = runCatching {
+                    if (Build.VERSION.SDK_INT >= 36)
+                        scheduler.getPendingJobReasons(entry.id).toList()
+                    else listOf(scheduler.getPendingJobReason(entry.id))
+                }.getOrElse { emptyList() }
+                for (reason in pending) {
+                    when (reason) {
+                        JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CONNECTIVITY ->
+                            reasons.add(DownloadSchedulerState.Reason.NETWORK)
+                        JobScheduler.PENDING_JOB_REASON_BACKGROUND_RESTRICTION,
+                        JobScheduler.PENDING_JOB_REASON_APP_STANDBY,
+                        JobScheduler.PENDING_JOB_REASON_QUOTA ->
+                            reasons.add(DownloadSchedulerState.Reason.BACKGROUND_RESTRICTION)
+                        JobScheduler.PENDING_JOB_REASON_DEVICE_STATE,
+                        JobScheduler.PENDING_JOB_REASON_CONSTRAINT_BATTERY_NOT_LOW,
+                        JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CHARGING,
+                        JobScheduler.PENDING_JOB_REASON_CONSTRAINT_DEVICE_IDLE ->
+                            reasons.add(DownloadSchedulerState.Reason.DEVICE_STATE)
+                        JobScheduler.PENDING_JOB_REASON_CONSTRAINT_STORAGE_NOT_LOW ->
+                            reasons.add(DownloadSchedulerState.Reason.STORAGE)
+                        JobScheduler.PENDING_JOB_REASON_EXECUTING ->
+                            reasons.add(DownloadSchedulerState.Reason.EXECUTING)
+                        JobScheduler.PENDING_JOB_REASON_APP,
+                        JobScheduler.PENDING_JOB_REASON_JOB_SCHEDULER_OPTIMIZATION ->
+                            reasons.add(DownloadSchedulerState.Reason.OPTIMIZATION)
+                        JobScheduler.PENDING_JOB_REASON_USER ->
+                            reasons.add(DownloadSchedulerState.Reason.USER)
+                    }
+                }
+            }
+            // If the scheduler reports no reason, give a grounded basic
+            // network hint. Never label unknown Android policy as "offline".
+            if (present == true && entry.state == "queued" && reasons.isEmpty()) {
+                val network = runCatching {
+                    val manager = context.getSystemService(ConnectivityManager::class.java)
+                    val caps = manager.getNetworkCapabilities(manager.activeNetwork)
+                    val internet = caps?.hasCapability(
+                        NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+                    val wifi = manager.allNetworks.any { id ->
+                        manager.getNetworkCapabilities(id)?.let {
+                            it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                                it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        } == true
+                    }
+                    !internet || (entry.wifiOnly && !wifi)
+                }.getOrDefault(false)
+                if (network) reasons.add(DownloadSchedulerState.Reason.NETWORK)
+            }
+        }
+        val age = (System.currentTimeMillis() - entry.updatedAtMs)
+            .coerceAtLeast(0L)
+        return DownloadSchedulerState.describe(
+            entry.name, entry.state, entry.wifiOnly, present,
+            reasons, age, entry.done, entry.total, entry.error
+        )
+    }
+
+    /**
+     * Explicit UI action only. Reschedule only a queued, not-yet-running
+     * UIDT job; never silently reschedule after a force-stop or system Stop.
+     * The on-disk .part and .part.validator remain untouched.
+     */
+    fun resume(context: Context, name: String, requeueWaiting: Boolean = false) {
+        val entry = ModelDownloadJournal.read(context, name)
+            ?: error("Keine gespeicherten Downloadinformationen vorhanden.")
+        require(entry.url.startsWith("https://")) {
+            "Die Downloadquelle wurde nicht gespeichert; bitte erneut auswählen."
+        }
+        val noLongerScheduled = if (Build.VERSION.SDK_INT >= 34)
+            context.getSystemService(JobScheduler::class.java).getPendingJob(entry.id) == null
+        else false
+        require(entry.state in setOf("queued", "paused", "failed") ||
+            (entry.state in setOf("running", "verifying") && noLongerScheduled)) {
+            "Der Download ist aktiv, wird geprüft oder ist bereits installiert."
+        }
+        if (entry.state == "queued" && Build.VERSION.SDK_INT >= 34) {
+            val scheduler = context.getSystemService(JobScheduler::class.java)
+            if (scheduler.getPendingJob(entry.id) != null) {
+                require(requeueWaiting) {
+                    "Android verwaltet diesen Job noch; erst Wartegrund prüfen."
+                }
+                // This is only called after a new explicit button press and
+                // only when the journal says QUEUED (not RUNNING).
+                ModelDownloadJournal.change(context, name) {
+                    it.copy(state = "paused")
+                }
+                scheduler.cancel(entry.id)
+            }
+        }
+        start(context, RemoteModel(entry.name, entry.url,
+            if (entry.total > 0) entry.total else -1L, entry.hash),
+            entry.wifiOnly)
+    }
 
     fun start(context: Context, model: RemoteModel, wifiOnly: Boolean) {
         val name = ModelStore.sanitize(model.name)
@@ -122,8 +236,11 @@ internal object BackgroundModelDownloads {
                 "Teil-Download gehört zu einer anderen URL"
             }
         }
+        val initialBytes = java.io.File(ModelStore(context).dir, name + ".part")
+            .takeIf { it.isFile }?.length() ?: 0L
         val entry = ModelDownloadJournal.Entry(id, name, model.url, model.sha256,
-            wifiOnly, "queued")
+            wifiOnly, "queued", done = initialBytes,
+            total = if (model.bytes > 0) model.bytes else previous?.total ?: -1L)
         ModelDownloadJournal.write(context, entry)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -138,6 +255,7 @@ internal object BackgroundModelDownloads {
                     .setExtras(extras)
                     .setUserInitiated(true)
                     .setRequiredNetwork(network)
+                    .setBackoffCriteria(30_000L, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
                     .apply {
                         if (model.bytes > 0)
                             setEstimatedNetworkBytes(model.bytes, 0L)
@@ -175,8 +293,16 @@ internal object BackgroundModelDownloads {
         else WorkManager.getInstance(context).cancelUniqueWork("pocket-model-" + entry.name)
     }
 
-    fun latestActive(context: Context): ModelDownloadJournal.Entry? =
-        ModelDownloadJournal.all(context).lastOrNull { it.state in setOf("running", "queued") }
+    fun latestActive(context: Context): ModelDownloadJournal.Entry? {
+        val entries = ModelDownloadJournal.all(context)
+            .filter { it.url.isNotBlank() }
+        return entries.filter {
+            it.state in setOf("running", "queued", "verifying")
+        }.maxByOrNull { it.updatedAtMs } ?:
+            entries.filter {
+                it.state in setOf("paused", "failed")
+            }.maxByOrNull { it.updatedAtMs }
+    }
 }
 
 internal object TransferNotification {
@@ -199,6 +325,7 @@ internal object TransferNotification {
         val stateText = when(entry.state) {
             "complete" -> "Downloaded and verified"
             "failed" -> "Failed: " + entry.error.take(65)
+            "verifying" -> "Verifying model file..."
             "paused" -> "Paused. Open Pocket AI to resume."
             else -> ModelStore.displaySize(entry.done) + " downloaded"
         }
@@ -240,20 +367,36 @@ class ModelTransferJobService : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         val name = params.extras.getString("name") ?: return false
         val existing = ModelDownloadJournal.read(this, name) ?: return false
-        if (existing.state == "paused") return false
+        if (existing.state in setOf("paused", "complete")) return false
         val flag = AtomicBoolean(false)
         cancelled[params.jobId] = flag
         stopped.remove(params.jobId)
-        val ready = existing.copy(state = "running")
+        val ready = existing.copy(state = "running", error = "", lastStopReason = -1)
         ModelDownloadJournal.write(this, ready)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-            setNotification(params, params.jobId, TransferNotification.build(this, ready),
-                JOB_END_NOTIFICATION_POLICY_REMOVE)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+                setNotification(params, params.jobId, TransferNotification.build(this, ready),
+                    JOB_END_NOTIFICATION_POLICY_REMOVE)
+        } catch (error: Exception) {
+            cancelled.remove(params.jobId)
+            ModelDownloadJournal.change(this, name) {
+                it.copy(state = "failed", error = "Download-Benachrichtigung: " +
+                    (error.message ?: error.javaClass.simpleName))
+            }
+            return false
+        }
         executor.execute {
             var reschedule = false
             try {
                 var lastUpdate = 0L
-                ModelStore(applicationContext).download(existing.url, name, existing.hash, flag) { p ->
+                ModelStore(applicationContext).download(
+                    existing.url, name, existing.hash, flag,
+                    onVerifying = {
+                        ModelDownloadJournal.change(applicationContext, name) {
+                            if (it.state == "running") it.copy(state = "verifying") else it
+                        }
+                    }
+                ) { p ->
                     val now = System.currentTimeMillis()
                     if (now - lastUpdate >= 1200) {
                         lastUpdate = now
@@ -269,7 +412,8 @@ class ModelTransferJobService : JobService() {
                     }
                 }
                 ModelDownloadJournal.change(applicationContext, name) {
-                    it.copy(state = "complete", error = "", url = "", hash = null)
+                    it.copy(state = "complete", error = "", url = "", hash = null,
+                        done = java.io.File(ModelStore(applicationContext).dir, name).length())
                 }
             } catch (_: TransferCancelled) {
                 reschedule = !stopped.contains(params.jobId) &&
@@ -298,7 +442,9 @@ class ModelTransferJobService : JobService() {
         cancelled.remove(params.jobId)?.set(true)
         val name = params.extras.getString("name") ?: return false
         val paused = ModelDownloadJournal.read(this, name)?.state == "paused"
-        if (!paused) ModelDownloadJournal.change(this, name) { it.copy(state = "queued") }
+        if (!paused) ModelDownloadJournal.change(this, name) {
+            it.copy(state = "queued", lastStopReason = params.stopReason)
+        }
         return !paused
     }
 
@@ -318,13 +464,22 @@ class ModelTransferWorker(context: Context, params: WorkerParameters) :
         if (entry.state == "paused") return@withContext Result.failure()
         val current = entry.copy(state = "running")
         ModelDownloadJournal.write(applicationContext, current)
-        setForeground(ForegroundInfo(current.id,
-            TransferNotification.build(applicationContext, current),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
         val cancelled = AtomicBoolean()
         var lastUpdate = 0L
         try {
-            ModelStore(applicationContext).download(entry.url, name, entry.hash, cancelled) { p ->
+            // Foreground-service restrictions and missing notifications must
+            // be stored as a failure, never leave a permanent "running" state.
+            setForeground(ForegroundInfo(current.id,
+                TransferNotification.build(applicationContext, current),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
+            ModelStore(applicationContext).download(
+                entry.url, name, entry.hash, cancelled,
+                onVerifying = {
+                    ModelDownloadJournal.change(applicationContext, name) {
+                        if (it.state == "running") it.copy(state = "verifying") else it
+                    }
+                }
+            ) { p ->
                 if (isStopped) cancelled.set(true)
                 val now = System.currentTimeMillis()
                 if (now - lastUpdate > 1200) {
@@ -341,7 +496,8 @@ class ModelTransferWorker(context: Context, params: WorkerParameters) :
                 }
             }
             ModelDownloadJournal.change(applicationContext, name) {
-                it.copy(state = "complete", url = "", hash = null)
+                it.copy(state = "complete", url = "", hash = null,
+                    done = java.io.File(ModelStore(applicationContext).dir, name).length())
             }
             ModelDownloadJournal.read(applicationContext, name)?.let {
                 TransferNotification.update(applicationContext, it, false)

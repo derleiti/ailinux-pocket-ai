@@ -12,6 +12,8 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
+import java.io.IOException
 
 data class TransferProgress(val done: Long, val total: Long) {
     val percent: Int get() = if (total > 0) ((done * 100) / total).coerceIn(0, 100).toInt() else -1
@@ -79,7 +81,8 @@ class ModelStore(private val context: Context) {
 
     fun download(
         address: String, displayName: String, sha256: String?,
-        cancelled: AtomicBoolean, progress: (TransferProgress) -> Unit
+        cancelled: AtomicBoolean, onVerifying: () -> Unit = {},
+        progress: (TransferProgress) -> Unit
     ): File {
         val url = URL(address)
         require(url.protocol == "https") { "Nur sichere HTTPS-Downloads sind erlaubt." }
@@ -88,6 +91,10 @@ class ModelStore(private val context: Context) {
         val target = File(dir, name)
         require(!target.exists()) { "Das Modell ist bereits installiert." }
         val temp = File(dir, "$name.part")
+        // The OS may restart a previously stopped UIDT while its old executor
+        // thread is still unwinding a blocking stream. Never allow two threads
+        // to append/replace the same model .part, even after a manual requeue.
+        val lease = claimTransfer(dir, name)
         // Strong ETag or Last-Modified protects HTTP Range resume from a
         // replaced remote object. Legacy .part files without a validator
         // remain usable, but only an expected SHA can authenticate them.
@@ -113,6 +120,35 @@ class ModelStore(private val context: Context) {
             require(connection.url.protocol.equals("https", ignoreCase = true)) {
                 "Unsicheres Download-Redirect auf HTTP verweigert"
             }
+            // A resume Range starting at EOF legitimately returns HTTP 416.
+            // This happens when Android stopped us *after* the final byte but
+            // *before* verification/publish. Never discard those bytes.
+            if (code == 416 && offset > 32 && (validator != null ||
+                    sha256?.matches(Regex("[a-fA-F0-9]{64}")) == true)) {
+                val remoteLength = completedRangeLength(
+                    connection.getHeaderField("Content-Range"))
+                if (remoteLength == offset) {
+                    val returnedTag = connection.getHeaderField("ETag")
+                        ?: connection.getHeaderField("Last-Modified")
+                    // A 416 result is NOT proof that the bytes belong to
+                    // today's object. Demand a verified SHA-256, or an exact
+                    // validator echoed by the server. A missing validator
+                    // is not grounds to trust an old partial.
+                    require(sha256?.matches(Regex("[a-fA-F0-9]{64}")) == true ||
+                        (validator != null && returnedTag == validator)) {
+                        "HTTP 416 ohne überprüfbare SHA-256 oder aktuellen " +
+                            "Range-Validator; Teildatei bleibt erhalten."
+                    }
+                    progress(TransferProgress(offset, offset))
+                    return verifyAndPublish(temp, target, name, validatorFile,
+                        sha256, cancelled, onVerifying, progress)
+                }
+                throw java.io.IOException("HTTP 416: Teilstand " + offset +
+                    " stimmt nicht mit Remote-Länge " + remoteLength +
+                    " überein; Teil-Datei bleibt erhalten.")
+            }
+            if (code == 429 || code in 500..599)
+                throw java.io.IOException("HTTP " + code + " – Server vorübergehend nicht erreichbar")
             require(code == 200 || code == 206) { "HTTP $code – Download nicht verfügbar." }
             if (code == 206) {
                 // Without a stable remote validator or an expected file hash,
@@ -156,6 +192,7 @@ class ModelStore(private val context: Context) {
             }
             val total = connection.contentLengthLong.let { if (it >= 0) offset + it else -1L }
             if (total > 0) checkStorage((total - offset).coerceAtLeast(0))
+            progress(TransferProgress(offset, total))
             var written = offset
             connection.inputStream.use { input ->
                 FileOutputStream(temp, offset > 0).use { output ->
@@ -176,28 +213,45 @@ class ModelStore(private val context: Context) {
                     output.fd.sync()
                 }
             }
-            if (total >= 0 && total != written) error("Download unvollständig.")
-            try {
-                validate(temp, name)
-                if (sha256 != null) {
-                    require(sha256.matches(Regex("[a-fA-F0-9]{64}"))) { "Ungültige SHA-256 Prüfsumme." }
-                    require(sha256(temp).equals(sha256, true)) { "SHA-256 stimmt nicht überein." }
-                }
-            } catch (error: Exception) {
-                temp.delete()  // Never offer to resume corrupt content or a checksum mismatch.
-                throw error
-            }
-            // A normal POSIX rename may REPLACE an existing complete model.
-            // Hard-link creation is atomic and fails if another writer created
-            // the target since the initial exists() check. Same app-private FS.
-            AtomicModelInstall.publish(temp, target)
-            validatorFile.delete() // A complete model no longer needs Range metadata.
-            progress(TransferProgress(target.length(), target.length()))
-            return target
+            if (total >= 0 && total != written)
+                throw java.io.IOException("Download unvollständig: " + written + "/" + total)
+            return verifyAndPublish(temp, target, name, validatorFile,
+                sha256, cancelled, onVerifying, progress)
         } finally {
             connection?.disconnect()
             if (temp.exists() && temp.length() in 1..32) temp.delete()
+            lease.close()
         }
+    }
+
+    private fun verifyAndPublish(
+        temp: File, target: File, name: String, validatorFile: File,
+        expectedHash: String?, cancelled: AtomicBoolean,
+        onVerifying: () -> Unit, progress: (TransferProgress) -> Unit
+    ): File {
+        if (cancelled.get()) throw TransferCancelled()
+        onVerifying()
+        try {
+            validate(temp, name)
+            if (expectedHash != null) {
+                require(expectedHash.matches(Regex("[a-fA-F0-9]{64}"))) {
+                    "Ungültige SHA-256 Prüfsumme."
+                }
+                require(sha256(temp, cancelled).equals(expectedHash, true)) {
+                    "SHA-256 stimmt nicht überein."
+                }
+            }
+        } catch (error: Exception) {
+            // A cancelled validation is resumable; genuinely corrupt files
+            // cannot ever be offered as a valid completed model.
+            if (error !is TransferCancelled) temp.delete()
+            throw error
+        }
+        if (cancelled.get()) throw TransferCancelled()
+        AtomicModelInstall.publish(temp, target)
+        validatorFile.delete()
+        progress(TransferProgress(target.length(), target.length()))
+        return target
     }
 
     /**
@@ -258,6 +312,22 @@ class ModelStore(private val context: Context) {
     }
 
     companion object {
+        private val activeDownloads = ConcurrentHashMap.newKeySet<String>()
+        internal fun claimTransfer(directory: File, name: String): AutoCloseable {
+            val key = File(directory, sanitize(name)).canonicalPath
+            if (!activeDownloads.add(key))
+                throw IOException("Dieser Modelltransfer beendet gerade einen früheren " +
+                    "Downloadversuch. Android kann danach erneut starten.")
+            return AutoCloseable { activeDownloads.remove(key) }
+        }
+
+        /** RFC 9110 unsatisfied-range total, never parsed from model-supplied data. */
+        internal fun completedRangeLength(value: String?): Long? {
+            val match = Regex("^bytes \\*/([0-9]{1,19})$").matchEntire(
+                value?.trim() ?: return null) ?: return null
+            return match.groupValues[1].toLongOrNull()?.takeIf { it > 0 }
+        }
+
         fun sanitize(raw: String): String {
             val clean = raw.substringAfterLast('/').substringBefore('?')
                 .replace(Regex("[^A-Za-z0-9._()-]"), "_").trim('.', '_').take(160)
@@ -285,11 +355,12 @@ class ModelStore(private val context: Context) {
                 }
             }
         }
-        fun sha256(file: File): String {
+        fun sha256(file: File, cancelled: AtomicBoolean? = null): String {
             val hash = MessageDigest.getInstance("SHA-256")
             file.inputStream().buffered().use { stream ->
                 val buffer = ByteArray(128 * 1024)
                 while (true) {
+                    if (cancelled?.get() == true) throw TransferCancelled()
                     val n = stream.read(buffer)
                     if (n < 0) break
                     hash.update(buffer, 0, n)
