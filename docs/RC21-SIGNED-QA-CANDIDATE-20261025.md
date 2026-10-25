@@ -22,3 +22,18 @@ Reference: GitHub issue #66 (invalid public RC20 and v2.2.0 releases), device is
 2. Build sign-matching QA APK from that exact main commit. Verify file locally, SHA sidecar and original signer without exposing secrets.
 3. Device install without wipe followed by real tests. Only then create a **new** immutable RC21 tag, an unpublished GitHub draft with exactly APK + sidecar, and run `rc-release-preflight.yml` for that tag.
 4. Publish only when all gates pass. `rc-release-audit.yml` is a *post*-publication check and does not prevent manual bypass; never interpret a published GitHub page as a verified APK. Do not create a semver `v2.2.0` from RC19 Gradle metadata.
+
+## GitHub draft-read permission correction, 25 Oct 2026
+
+First rc-release-preflight run 40240580529 failed metadata-only with
+Draft tag not accessible or not present in authenticated release list.
+The immutable RC21 tag and exact two-asset draft exist and independently passed
+the local authenticated audit. GitHub's releases/list API exposes drafts only
+to principals with push access, not a read-only GitHub Actions token.
+Official API documentation: https://docs.github.com/en/rest/releases/releases#list-releases
+
+The manually dispatched preflight job therefore requests contents: write
+for viewing that draft. Global permissions remain contents: read. Checkout
+disables credential persistence, and every step remains read-only: no release
+create/upload/edit, tag push, or APK modification. Rerun the same immutable
+RC21 tag's prepublish metadata and asset checks before publishing.

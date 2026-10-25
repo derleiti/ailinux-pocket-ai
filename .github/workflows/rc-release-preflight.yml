@@ -13,6 +13,11 @@ permissions:
 jobs:
   preflight:
     name: Validate draft tag, APK digest and RC17 upgrade signer
+    # GitHub only lists unpublished draft releases to tokens with push access.
+    # Global read-only permission is insufficient even for an authenticated
+    # metadata-only lookup. Scope contents:write to this manual QA job only.
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
