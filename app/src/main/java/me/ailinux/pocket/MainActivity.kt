@@ -1001,6 +1001,21 @@ class MainActivity : AppCompatActivity() {
         val memory = ActivityManager.MemoryInfo().also {
             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
         }
+        // A user warning is not permission to overload a device that the
+        // Android LMK already considers critically short of RAM. This guard
+        // runs BEFORE releasing the existing model or mutating files.
+        if (memory.lowMemory) {
+            diagnosticTrace = PocketDiagnostics.newTrace()
+            val refusal = ModelMemoryGuardException(
+                availableBytes = memory.availMem,
+                requiredBytes = ModelLoadSafety.minimumAvailableAfterUnload(file.length()),
+                androidLowMemory = true
+            )
+            failure(PocketDiagnostics.Domain.GGUF,
+                PocketDiagnostics.Step.MODEL_LOAD, refusal)
+            showError("GGUF: Android meldet Speicherdruck", refusal)
+            return
+        }
         if (!acknowledgedLargeModel && ModelLoadSafety.requiresConfirmation(file.length(), memory.availMem)) {
             AlertDialog.Builder(this)
                 .setTitle("Hoher RAM-Bedarf")
@@ -1124,7 +1139,20 @@ class MainActivity : AppCompatActivity() {
                 // Preserve the previously loaded model if preflight failed.
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT" else "Ladefehler")
-                showError("GGUF-Modellstart fehlgeschlagen", typed)
+                // The public code names a known failure family, not the
+                // private native exception text or a guessed backend cause.
+                val title = when (typed.diagnosticCode) {
+                    PocketDiagnostics.ErrorCode.GGUF_NATIVE_MEMORY ->
+                        "GGUF: Native Speicherallokation fehlgeschlagen"
+                    PocketDiagnostics.ErrorCode.GGUF_NATIVE_BACKEND ->
+                        "GGUF: Native Backend-Bibliothek nicht verfügbar"
+                    PocketDiagnostics.ErrorCode.GGUF_NATIVE_ARCH ->
+                        "GGUF: Modellarchitektur nicht unterstützt"
+                    PocketDiagnostics.ErrorCode.GGUF_NATIVE_FORMAT ->
+                        "GGUF: Modelldatei oder GGUF-Format ungültig"
+                    else -> "GGUF-Modellstart fehlgeschlagen"
+                }
+                showError(title, typed)
             } finally {
                 prefs.edit().remove(PREF_LOADING_MODEL)
                     .remove(PREF_LOADING_MODEL_STARTED_MS).apply()
