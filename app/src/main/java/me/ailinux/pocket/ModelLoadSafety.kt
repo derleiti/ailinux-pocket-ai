@@ -58,14 +58,34 @@ object ModelLoadSafety {
         fun addBounded(value: Long, extra: Long): Long =
             if (value > Long.MAX_VALUE - extra) Long.MAX_VALUE else value + extra
         val weights = modelSizeBytes.coerceAtLeast(0L)
-        val approximateNativePeak = if (weights > (Long.MAX_VALUE - twoGiB) / 2)
-            Long.MAX_VALUE else 2L * weights + twoGiB
+        // Approximate weight bytes plus a native/scheduler reserve. A
+        // 2x-weights multiplier made the Tensor-only 2.90 GiB Gemma model
+        // unstartable on typical 12 GiB devices before any device QA.
+        val approximateNativePeak = addBounded(weights, twoGiB)
         return maxOf(
             basic,
             6L * GIB,
             approximateNativePeak,
             addBounded(androidLowMemoryThresholdBytes.coerceAtLeast(0L), twoGiB)
         )
+    }
+
+    /** Never suppress a GPU/CPU fallback merely because NPU is high-risk.
+     * NPU-only AOT files still fail closed when their one compatible path
+     * cannot safely start; this is not permission to recompile on-device.
+     */
+    internal fun allowedLiteRtAttempts(
+        fileBytes: Long, availableBytes: Long,
+        androidLowMemory: Boolean, lowMemoryThresholdBytes: Long,
+        candidates: List<RuntimeHardware.Attempt>
+    ): List<RuntimeHardware.Attempt> {
+        if (androidLowMemory || insufficientAfterUnload(fileBytes, availableBytes))
+            return emptyList()
+        val tensorAllowed = !insufficientForLiteRtModel(
+            fileBytes, availableBytes, true, false, lowMemoryThresholdBytes)
+        return candidates.distinct().filter {
+            it != RuntimeHardware.Attempt.GOOGLE_TENSOR || tensorAllowed
+        }
     }
 
     fun insufficientForLiteRtModel(

@@ -1173,13 +1173,18 @@ class MainActivity : AppCompatActivity() {
                     // The Tensor-specific floor uses observed Pixel LMK evidence
                     // instead of assuming a multi-GB model needs only 0.5x
                     // its file size plus a small reserve.
-                    val tensorCandidate = RuntimeHardware.forModelFile(
+                    val deviceCandidates = RuntimeHardware.forModelFile(
                         file.name, RuntimeHardware.candidatesOnDevice()
-                    ).firstOrNull() == RuntimeHardware.Attempt.GOOGLE_TENSOR
-                    if (ModelLoadSafety.insufficientForLiteRtModel(
-                            file.length(), currentMemory.availMem,
-                            tensorCandidate, currentMemory.lowMemory,
-                            currentMemory.threshold)) {
+                    )
+                    require(deviceCandidates.isNotEmpty()) {
+                        "Dieses Modell hat auf dem Gerät keinen unterstützten LiteRT-Backendpfad."
+                    }
+                    val safeCandidates = ModelLoadSafety.allowedLiteRtAttempts(
+                        file.length(), currentMemory.availMem, currentMemory.lowMemory,
+                        currentMemory.threshold, deviceCandidates
+                    )
+                    val tensorCandidate = RuntimeHardware.Attempt.GOOGLE_TENSOR in deviceCandidates
+                    if (safeCandidates.isEmpty()) {
                         throw ModelMemoryGuardException(
                             availableBytes = currentMemory.availMem,
                             requiredBytes = ModelLoadSafety.minimumAvailableForLiteRtModel(
@@ -1187,9 +1192,18 @@ class MainActivity : AppCompatActivity() {
                             androidLowMemory = currentMemory.lowMemory
                         )
                     }
+                    if (tensorCandidate &&
+                        RuntimeHardware.Attempt.GOOGLE_TENSOR !in safeCandidates) {
+                        // Skip ONLY the unsafe NPU candidate; never silently
+                        // retry an NPU-only AOT graph through a fictitious GPU.
+                        trace(PocketDiagnostics.Domain.LITERT,
+                            PocketDiagnostics.Step.BACKEND_SKIPPED,
+                            PocketDiagnostics.State.INFO,
+                            code = PocketDiagnostics.ErrorCode.MEMORY)
+                    }
                     val prompt = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
                     LiteRtRuntime.load(applicationContext, file, prompt,
-                        mcpAgent.current()) { phase ->
+                        mcpAgent.current(), allowedAttempts = safeCandidates) { phase ->
                         // Diagnostics are best effort; never break a valid model start.
                         runCatching {
                             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)

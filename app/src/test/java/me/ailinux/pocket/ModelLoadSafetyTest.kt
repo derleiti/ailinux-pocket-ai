@@ -65,7 +65,8 @@ class ModelLoadSafetyTest {
         val gemmaBytes = 3_113_545_589L
         val minimum = ModelLoadSafety.minimumAvailableForLiteRtModel(
             gemmaBytes, true, androidLowMemoryThresholdBytes = gib)
-        assertTrue(minimum >= 2 * gemmaBytes + 2L * gib)
+        assertTrue(minimum >= gemmaBytes + 2L * gib)
+        assertEquals(6L * gib, minimum)
         assertFalse(ModelLoadSafety.insufficientForLiteRtModel(
             gemmaBytes, minimum, true, false, gib))
         assertTrue(ModelLoadSafety.insufficientForLiteRtModel(
@@ -80,6 +81,39 @@ class ModelLoadSafetyTest {
             ModelLoadSafety.minimumAvailableForLiteRtModel(Long.MAX_VALUE, true))
         assertEquals(Long.MAX_VALUE,
             ModelLoadSafety.minimumAvailableForLiteRtModel(gib, true, Long.MAX_VALUE))
+    }
+
+    @Test fun lowMemoryNpuDoesNotSuppressSupportedGpuFallback() {
+        val both = listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR,
+            RuntimeHardware.Attempt.GPU, RuntimeHardware.Attempt.CPU)
+        val fileBytes = 900L * 1024L * 1024L
+        val allowed = ModelLoadSafety.allowedLiteRtAttempts(
+            fileBytes, 4L * gib, false, gib, both)
+        assertEquals(listOf(RuntimeHardware.Attempt.GPU, RuntimeHardware.Attempt.CPU),
+            allowed)
+        val tensorOnly = ModelLoadSafety.allowedLiteRtAttempts(
+            fileBytes, 4L * gib, false, gib,
+            listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR))
+        assertTrue(tensorOnly.isEmpty())
+        // Android's own low-memory status blocks even GPU/CPU new loads.
+        assertTrue(ModelLoadSafety.allowedLiteRtAttempts(
+            fileBytes, 10L * gib, true, gib, both).isEmpty())
+        assertEquals(both, ModelLoadSafety.allowedLiteRtAttempts(
+            fileBytes, 8L * gib, false, gib, both))
+    }
+
+    @Test fun runtimeReceivesMemoryFilteredCandidatesBeforeNativeInitialization() {
+        val loader = java.io.File("src/main/java/me/ailinux/pocket/LiteRtRuntime.kt")
+            .readText()
+        val activity = java.io.File("src/main/java/me/ailinux/pocket/MainActivity.kt")
+            .readText()
+        assertTrue(loader.contains("allowedAttempts: List<RuntimeHardware.Attempt>?"))
+        assertTrue(loader.contains("safeSet == null || it in safeSet"))
+        val method = activity.substringAfter("private fun loadLiteRtModel(")
+            .substringBefore("private fun showMcpAgentMenu()")
+        assertTrue(method.contains("ModelLoadSafety.allowedLiteRtAttempts("))
+        assertTrue(method.contains("allowedAttempts = safeCandidates"))
+        assertTrue(method.contains("PocketDiagnostics.Step.BACKEND_SKIPPED"))
     }
 
     @Test fun failedModelLoadRefreshesLibrarySoNoStaleActiveModel() {

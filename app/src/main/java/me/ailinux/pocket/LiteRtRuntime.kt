@@ -193,6 +193,7 @@ internal class LiteRtRuntime private constructor(
     companion object {
         suspend fun load(context: Context, file: File, prompt: String,
                          session: McpAgentSession? = null,
+                         allowedAttempts: List<RuntimeHardware.Attempt>? = null,
                          onStage: (String) -> Unit = {}): LiteRtRuntime {
             require(file.isFile && file.name.endsWith(".litertlm", true)) {
                 "Nur lokal importierte LiteRT-LM-Modelle"
@@ -209,8 +210,13 @@ internal class LiteRtRuntime private constructor(
             try {
                 return withContext(dispatcher) {
                     val errors = mutableListOf<String>()
+                    // A memory preflight may explicitly exclude unsafe NPU,
+                    // while retaining a genuine GPU/CPU candidate. Do not
+                    // silently add excluded backends inside the native loader.
+                    val safeSet = allowedAttempts?.toSet()
                     val choices = RuntimeHardware.forModelFile(
                         file.name, RuntimeHardware.candidatesOnDevice())
+                        .filter { safeSet == null || it in safeSet }
                     require(choices.isNotEmpty()) { "Kein kompatibler Backend-Kandidat für " + file.name }
                     for (attempt in choices) {
                         currentCoroutineContext().ensureActive()
