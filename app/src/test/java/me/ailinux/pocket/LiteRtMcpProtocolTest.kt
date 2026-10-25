@@ -77,20 +77,33 @@ class LiteRtMcpProtocolTest {
     }
 
     @Test fun cancelledLiteRtTurnMustNotBeRecoveredAsNativeParserFailure() {
-        // Coroutine cancellation extends IllegalStateException on the JVM.
-        // A parser catch without this prior guard would swallow Stop/Home cancellation.
-        val stopped: Throwable = java.util.concurrent.CancellationException("user cancelled")
-        assertTrue(stopped is IllegalStateException)
+        val rejected = java.util.concurrent.atomic.AtomicInteger()
+        val cancellation = kotlinx.coroutines.CancellationException("user cancelled")
+        val error = assertThrows(kotlinx.coroutines.CancellationException::class.java) {
+            kotlinx.coroutines.runBlocking {
+                LiteRtNativeResponseBoundary.call(
+                    invokeNative = { throw cancellation },
+                    onInvalidNativeResponse = { rejected.incrementAndGet() }
+                )
+            }
+        }
+        assertSame(cancellation, error)
+        assertEquals(0, rejected.get())
+        for (nativeError in listOf(IllegalArgumentException("invalid"),
+            IllegalStateException("invalid"))) {
+            val actual = kotlinx.coroutines.runBlocking {
+                LiteRtNativeResponseBoundary.call(
+                    invokeNative = { throw nativeError },
+                    onInvalidNativeResponse = { rejected.incrementAndGet() }
+                )
+            }
+            assertNull(actual)
+        }
+        assertEquals(2, rejected.get())
         val bridge = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
             .substringAfter("private suspend fun runLiteRtToolbridge(")
             .substringBefore("private fun sendLiteRtMessage(")
-        val explicitRethrow = Regex(
-            """catch \(cancelled: CancellationException\)\s*\{\s*throw cancelled\s*\}\s*catch \(_: IllegalArgumentException\)"""
-        )
-        assertEquals("Every native ask/tool-feedback failure handler must preserve cancellation",
-            3, explicitRethrow.findAll(bridge).count())
-        assertEquals(3, Regex("""catch \(_: IllegalStateException\)""")
-            .findAll(bridge).count())
+        assertEquals(3, Regex("LiteRtNativeResponseBoundary\\.call\\(").findAll(bridge).count())
     }
 
     @Test fun nativeParserFailureBeforeToolCallIsHandledForInitialAndFollowup() {
@@ -98,17 +111,16 @@ class LiteRtMcpProtocolTest {
             .substringAfter("private suspend fun runLiteRtToolbridge(")
             .substringBefore("private fun sendLiteRtMessage(")
         assertTrue(source.indexOf("val catalog =") < source.indexOf("runtime.askMcp(request)"))
-        val initial = source.substringAfter("var turn = try {")
+        val initial = source.substringAfter("var turn = LiteRtNativeResponseBoundary.call(")
             .substringBefore("for (step in 0 until")
-        assertTrue(initial.contains("recoverNativeFailure()"))
-        assertTrue(initial.contains("catch (_: IllegalArgumentException)"))
-        assertTrue(initial.contains("catch (_: IllegalStateException)"))
+        assertTrue(initial.contains("runtime.askMcp(request)"))
+        assertTrue(initial.contains("onInvalidNativeResponse = { recoverNativeFailure() }"))
         val followup = source.substringAfter("val boundedFeedback =")
         assertTrue(followup.contains("runtime.toolFeedback(tool.name, boundedFeedback)"))
         assertTrue(followup.contains("recoverNativeFailure()"))
         assertTrue(source.contains("if (hadRealCall) {"))
         val recovery = source.substringAfter("suspend fun recoverNativeFailure() {")
-            .substringBefore("var turn = try {")
+            .substringBefore("var turn = LiteRtNativeResponseBoundary.call(")
         assertTrue(recovery.contains("if (hadRealCall) {"))
         assertTrue(recovery.contains("runtime.clearConversation()"))
         assertTrue(recovery.contains("tryHostDiscovery("))

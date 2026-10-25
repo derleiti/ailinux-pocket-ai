@@ -23,6 +23,27 @@ internal object LiteRtMcpProtocol {
     }
 }
 
+/** Single testable boundary for all native LiteRT response paths.
+ * Cancellation must reach the outer coroutine cancellation handler; only
+ * actual parser errors may reset the conversation.
+ */
+internal object LiteRtNativeResponseBoundary {
+    suspend fun <T : Any> call(
+        invokeNative: suspend () -> T,
+        onInvalidNativeResponse: suspend () -> Unit
+    ): T? = try {
+        invokeNative()
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (_: IllegalArgumentException) {
+        onInvalidNativeResponse()
+        null
+    } catch (_: IllegalStateException) {
+        onInvalidNativeResponse()
+        null
+    }
+}
+
 internal object LiteRtMcpPolicy {
     /** Privacy-safe classification; neither tool arguments nor prompts are logged. */
     enum class Fault {

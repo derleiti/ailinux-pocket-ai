@@ -2778,19 +2778,10 @@ class MainActivity : AppCompatActivity() {
                  else "Modell bitte neu laden."))
         }
 
-        var turn = try {
-            runtime.askMcp(request)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: IllegalArgumentException) {
-            recoverNativeFailure()
-            return
-        } catch (_: IllegalStateException) {
-            // The upstream Conversation parser can reject malformed native
-            // responses as IllegalStateException before exposing ToolCall.
-            recoverNativeFailure()
-            return
-        }
+        var turn = LiteRtNativeResponseBoundary.call(
+            invokeNative = { runtime.askMcp(request) },
+            onInvalidNativeResponse = { recoverNativeFailure() }
+        ) ?: return
         for (step in 0 until McpProgressiveBridge.MAX_STEPS) {
             check(mcpAgent.current() == active) {
                 "MCP-Konfiguration wurde während des LiteRT-Turns geändert."
@@ -2966,17 +2957,10 @@ class MainActivity : AppCompatActivity() {
                             val error = McpProgressiveBridge.localFailure(e.message.orEmpty())
                             evidence("⚠️ Werkzeugvorschlag verworfen: " +
                                 e.message.orEmpty().take(320))
-                            turn = try {
-                                runtime.toolFeedback(tool.name, error.toString())
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (_: IllegalArgumentException) {
-                                recoverNativeFailure()
-                                return
-                            } catch (_: IllegalStateException) {
-                                recoverNativeFailure()
-                                return
-                            }
+                            turn = LiteRtNativeResponseBoundary.call(
+                                invokeNative = { runtime.toolFeedback(tool.name, error.toString()) },
+                                onInvalidNativeResponse = { recoverNativeFailure() }
+                            ) ?: return
                             continue
                         }
                         setAnswer("🔐 LiteRT schlägt " + plan.source.title + " / " +
@@ -3071,17 +3055,10 @@ class MainActivity : AppCompatActivity() {
             val boundedFeedback = if (hadRealCall)
                 McpToolFeedback.nativePayload(tool, outcome)
             else outcome.toString().take(12_000)
-            turn = try {
-                runtime.toolFeedback(tool.name, boundedFeedback)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: IllegalArgumentException) {
-                recoverNativeFailure()
-                return
-            } catch (_: IllegalStateException) {
-                recoverNativeFailure()
-                return
-            }
+            turn = LiteRtNativeResponseBoundary.call(
+                invokeNative = { runtime.toolFeedback(tool.name, boundedFeedback) },
+                onInvalidNativeResponse = { recoverNativeFailure() }
+            ) ?: return
             trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_FOLLOWUP,
                 PocketDiagnostics.State.OK, tool = tool.name)
         }
