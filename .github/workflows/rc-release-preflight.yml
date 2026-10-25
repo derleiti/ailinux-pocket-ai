@@ -1,0 +1,68 @@
+name: Pocket AI RC Draft Prepublish QA
+# Manual, read-only gate. Does NOT create tags, upload artifacts or publish a
+# release. Human/Pixel device acceptance is a separate mandatory gate.
+on:
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: 'Existing immutable draft tag (e.g. v2.1.0-RC21)'
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  preflight:
+    name: Validate draft tag, APK digest and RC17 upgrade signer
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RC_TAG: ${{ inputs.rc_tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable tag and source without overwriting it
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/tests -p 'test_audit_rc_release.py' -v
+          [[ "$RC_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-RC[0-9]+$ ]] || {
+            echo "::error::Invalid immutable RC tag"; exit 1;
+          }
+          git cat-file -e "$RC_TAG^{commit}"
+          git show "$RC_TAG:app/build.gradle.kts" > "$RUNNER_TEMP/tagged-build.gradle.kts"
+          # The script checks the tag's versionName and asset names. A stale
+          # source tag fails without any APK download.
+          python3 scripts/audit_rc_release.py --prepublish --metadata-only \
+            --tag "$RC_TAG" --gradle "$RUNNER_TEMP/tagged-build.gradle.kts"
+      - name: Download exactly the two authenticated draft assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pocket-draft-assets"
+          gh release download "$RC_TAG" -R derleiti/ailinux-pocket-ai \
+            -D "$RUNNER_TEMP/pocket-draft-assets"
+      - name: Ensure Android build tools are installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          if [ ! -x "$ANDROID_HOME/build-tools/35.0.0/apksigner" ]; then
+            "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "build-tools;35.0.0" < <(yes)
+          fi
+      - name: Independently verify staged APK, SHA-256 and original RC17 signer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/audit_rc_release.py --prepublish \
+            --tag "$RC_TAG" --gradle "$RUNNER_TEMP/tagged-build.gradle.kts" \
+            --asset-dir "$RUNNER_TEMP/pocket-draft-assets"
+      - name: Record gates that still require physical Android QA
+        if: success()
+        run: |
+          echo "Draft $RC_TAG passed source, APK, checksum and signer checks." >> "$GITHUB_STEP_SUMMARY"
+          echo "NOT published. Pixel Tensor-G5, MCP E2E, memory and download QA still need real evidence." >> "$GITHUB_STEP_SUMMARY"
