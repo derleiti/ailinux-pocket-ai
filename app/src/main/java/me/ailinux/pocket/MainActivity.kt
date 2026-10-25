@@ -2769,19 +2769,68 @@ class MainActivity : AppCompatActivity() {
                 }
                 return
             }
-            require(turn.calls.size == 1) {
-                "Mehrere gleichzeitige MCP-Toolaufrufe nicht erlaubt."
-            }
             if (hadRealCall) {
-                // Never dispatch a second external call after a real receipt.
-                // Keep the first receipt visible instead of reporting a generic
-                // model exception or clearing the prior verified result.
+                // No more external dispatches, even if the model asks again.
                 setAnswer("🔧 MCP-Serverquittung oben. Weiterer Modell-Toolvorschlag " +
                     "blockiert: maximal ein externer Aufruf pro Anfrage.")
                 return
             }
+            val candidate = turn.calls.singleOrNull()
+            val invalid = if (candidate == null)
+                LiteRtMcpPolicy.Fault.MULTIPLE_CALLS
+            else runCatching {
+                LiteRtMcpPolicy.diagnoseRaw(
+                    candidate.name, candidate.arguments, active.tools)
+            }.getOrElse { LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA }
+            if (invalid != null) {
+                // Malformed 2B/4B output is a LOCAL planning failure. It must
+                // never escape as a generic LiteRT crash, nor reach tools/call.
+                val code = when (invalid) {
+                    LiteRtMcpPolicy.Fault.MULTIPLE_CALLS,
+                    LiteRtMcpPolicy.Fault.TOO_MANY_TOOLS ->
+                        PocketDiagnostics.ErrorCode.INVALID_NATIVE_TOOL_COUNT
+                    LiteRtMcpPolicy.Fault.UNKNOWN_TOOL_NAME ->
+                        PocketDiagnostics.ErrorCode.INVALID_NATIVE_TOOL_NAME
+                    LiteRtMcpPolicy.Fault.ARGUMENTS_NOT_JSON ->
+                        PocketDiagnostics.ErrorCode.INVALID_NATIVE_ARGUMENTS_JSON
+                    LiteRtMcpPolicy.Fault.ARGUMENTS_TOO_LARGE ->
+                        PocketDiagnostics.ErrorCode.INVALID_NATIVE_ARGUMENTS_SIZE
+                    LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA ->
+                        PocketDiagnostics.ErrorCode.INVALID_NATIVE_ARGUMENTS_SCHEMA
+                }
+                trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SCHEMA_CHECK,
+                    PocketDiagnostics.State.FAIL, code = code)
+                // The native tool request is unresolved. Close only that
+                // conversation and restore a fresh one on the SAME engine.
+                // Never pretend to restore its KV cache or past messages.
+                val recovered = withContext(NonCancellable) {
+                    runCatching { runtime.clearConversation() }.isSuccess
+                }
+                trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_RESET,
+                    if (recovered) PocketDiagnostics.State.OK else PocketDiagnostics.State.FAIL,
+                    code = if (recovered) PocketDiagnostics.ErrorCode.NONE
+                        else PocketDiagnostics.ErrorCode.MODEL_RUNTIME)
+                // Continue only through the original conservative host bridge.
+                // It still requires verified read-only metadata, current auth
+                // and a new explicit per-call approval before any dispatch.
+                if (recovered && progressive &&
+                    McpRequestRouting.expectsToolEvidence(request) &&
+                    tryHostDiscovery(active, request, checkNotNull(catalog),
+                        answer, answerIndex)) {
+                    setAnswer("⚠️ Nativer LiteRT-Toolvorschlag ungültig (" +
+                        code.name + "); Modellkonversation zurückgesetzt.\n" +
+                        answer.content)
+                    return
+                }
+                setAnswer("⚠️ LiteRT hat einen ungültigen MCP-Toolvorschlag erzeugt " +
+                    "(" + code.name + "). Kein tools/call ausgeführt. " +
+                    (if (recovered)
+                        "Native Konversation neu aufgebaut; bisheriger KV-Kontext verworfen."
+                    else "Konversation konnte nicht zurückgesetzt werden; Modell neu laden."))
+                return
+            }
             val (tool, args) = LiteRtMcpProtocol.validate(
-                turn.calls.single(), active.tools
+                checkNotNull(candidate), active.tools
             )
             trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
                 PocketDiagnostics.State.OK, tool = tool.name)
