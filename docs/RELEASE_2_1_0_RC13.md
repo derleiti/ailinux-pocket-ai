@@ -30,10 +30,23 @@ identity and must not be replaced by a GitHub Actions debug certificate.
 
 - Integration baseline: 364/364 local JVM tests, Android Lint green
   for source integration of PR #36, #37 and #38.
-- Release branch must pass complete arm64 build, signing identity check
-  against public RC12, version/ABI/manifest checks, GitHub CI and immutable
-  tag verification.
-- Public APK must be redownloaded over HTTPS and SHA-256 checked.
+- Release branch: 364/364 JUnit, :app:lintDebug, :app:assembleDebug
+  and scripts/verify-apk.sh passed locally on release commit 6ad3a20
+  (source tree unchanged from its parent except Gradle version and this doc).
+- Build/signature identity: package me.ailinux.pocket, versionCode 38,
+  versionName 2.1.0-RC13, arm64-v8a; signer certificate SHA-256
+  125766c26dd400e39804c7b97c36682d8a2c16caa134c58745a02aca0bd51187
+  is the same as the publicly downloaded RC12 certificate.
+- The expected SHA-256 for the specifically locally QA-signed release APK
+  AILinux-Pocket-AI-2.1.0-RC13-arm64-debug.apk is
+  e4b398de4ab72025c3d5aab4dc505f879a6585a6674d0fccb31ae029f54c9578.
+  This hash must match the SHA-256 of the asset downloaded through the
+  public GitHub release URL, not merely a locally generated checksum file.
+- After merging, tag exactly the verified main SHA. The GitHub tag-triggered
+  Android CI (not a successful run of a different commit) must have
+  conclusion=success and headSha == peeled v2.1.0-RC13 tag commit.
+  If the tag SHA, main SHA, CI headSha, or public APK hash differs,
+  keep the release as a draft and investigate rather than publishing it.
 
 ## Required physical Pixel QA (not implied by automated tests)
 
