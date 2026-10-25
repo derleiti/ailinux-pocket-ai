@@ -361,7 +361,11 @@ internal object TransferNotification {
         val progress = if (entry.total > 0)
             ((entry.done * 100 / entry.total).coerceIn(0, 100)).toInt() else 0
         val stateText = when(entry.state) {
-            "complete" -> "Downloaded and verified"
+            "complete" -> DownloadSchedulerState.completedNotification(
+                CompletedModelEvidence.present(
+                    java.io.File(context.filesDir, "models"), entry.name, entry.done),
+                entry.hash?.matches(Regex("[a-fA-F0-9]{64}")) == true
+            )
             "failed" -> "Failed: " + entry.error.take(65)
             "verifying" -> "Verifying model file..."
             "paused" -> "Paused. Open Pocket AI to resume."

@@ -34,6 +34,18 @@ internal object DownloadSchedulerState {
         val active: Boolean = false
     )
 
+    /**
+     * Small notification copy, distinct from the full diagnostics view.
+     * Never claim an installed model is verified solely because its
+     * historical journal says "complete".
+     */
+    fun completedNotification(fileMatchesJournal: Boolean, sha256CheckedAtTransfer: Boolean): String =
+        when {
+            !fileMatchesJournal -> "Model file missing or size mismatch; open Pocket AI"
+            sha256CheckedAtTransfer -> "Model present; SHA-256 checked during transfer"
+            else -> "Model present; size checked, SHA-256 unverified"
+        }
+
     fun describe(
         name: String,
         state: String,

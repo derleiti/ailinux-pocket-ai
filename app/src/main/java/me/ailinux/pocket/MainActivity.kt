@@ -1210,6 +1210,7 @@ class MainActivity : AppCompatActivity() {
         setModelLoading(true, file.name)
         setStatus("● LITERT · PRÜFE NPU / GPU / CPU …")
         diagnosticTrace = PocketDiagnostics.newTrace()
+        val modelLoadTrace = diagnosticTrace
         val modelLoadStarted = SystemClock.elapsedRealtime()
         trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD,
             PocketDiagnostics.State.START)
@@ -1277,9 +1278,21 @@ class MainActivity : AppCompatActivity() {
                             code = PocketDiagnostics.ErrorCode.MEMORY)
                     }
                     val prompt = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
+                    val phaseTimer = LiteRtBackendStages.Tracker()
                     LiteRtRuntime.load(applicationContext, file, prompt,
                         mcpAgent.current(), allowedAttempts = safeCandidates) { phase ->
-                        // Diagnostics are best effort; never break a valid model start.
+                        // Each diagnostic is independently best effort. Some
+                        // Android builds may reject the process-state summary;
+                        // that must not suppress the separate, allowlisted
+                        // LiteRT engine/conversation stage trace.
+                        phaseTimer.capture(phase, SystemClock.elapsedRealtime())?.let { timed ->
+                            runCatching {
+                                val stage = timed.evidence
+                                PocketDiagnostics.log(applicationContext, modelLoadTrace,
+                                    PocketDiagnostics.Domain.LITERT, stage.step, stage.state,
+                                    backend = stage.backend, durationMs = timed.durationMs)
+                            }
+                        }
                         runCatching {
                             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
                                 .setProcessStateSummary(("PocketAI load=" + file.name.take(45) +
@@ -2964,10 +2977,37 @@ class MainActivity : AppCompatActivity() {
                  else "Modell bitte neu laden."))
         }
 
-        var turn = LiteRtNativeResponseBoundary.call(
-            invokeNative = { runtime.askMcp(request) },
-            onInvalidNativeResponse = { recoverNativeFailure() }
-        ) ?: return
+        // Android reported a 12-minute LiteRT plan ending TIMEOUT without
+        // an MCP DISPATCH. Show one *soft* warning for a slow native planner,
+        // but never cancel JNI from the main thread, dispose the engine while
+        // it is running, or retry a possibly executed remote action.
+        val nativePlanStarted = SystemClock.elapsedRealtime()
+        val nativePlanTrace = diagnosticTrace
+        val slowPlanHandler = Handler(Looper.getMainLooper())
+        var initialNativePlanPending = true
+        val slowPlanNotice = Runnable {
+            val elapsed = SystemClock.elapsedRealtime() - nativePlanStarted
+            if (initialNativePlanPending && !isDestroyed &&
+                mcpAgent.current() == active &&
+                LiteRtSlowPlan.shouldWarn(nativePlanStarted,
+                    SystemClock.elapsedRealtime(), busy)) {
+                PocketDiagnostics.log(applicationContext, nativePlanTrace,
+                    PocketDiagnostics.Domain.LITERT,
+                    PocketDiagnostics.Step.MODEL_SLOW,
+                    PocketDiagnostics.State.INFO, durationMs = elapsed)
+                setStatus("● LITERT MCP · PLANUNG DAUERT LANGE · ■ ABBRECHEN")
+            }
+        }
+        slowPlanHandler.postDelayed(slowPlanNotice, LiteRtSlowPlan.NOTICE_AFTER_MS)
+        var turn = try {
+            LiteRtNativeResponseBoundary.call(
+                invokeNative = { runtime.askMcp(request) },
+                onInvalidNativeResponse = { recoverNativeFailure() }
+            )
+        } finally {
+            initialNativePlanPending = false
+            slowPlanHandler.removeCallbacks(slowPlanNotice)
+        } ?: return
         for (step in 0 until McpProgressiveBridge.MAX_STEPS) {
             check(mcpAgent.current() == active) {
                 "MCP-Konfiguration wurde während des LiteRT-Turns geändert."

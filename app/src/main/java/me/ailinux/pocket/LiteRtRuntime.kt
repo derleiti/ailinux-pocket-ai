@@ -282,6 +282,9 @@ internal class LiteRtRuntime private constructor(
                             LiteRtNativeLoadGuard.rethrowIfCancelled(problem) {
                                 if (initialized) candidate?.close()
                             }
+                            // Only a fixed enum-backed stage escapes this native
+                            // owner. Raw exception text remains off persistent logs.
+                            onStage("failed_" + attempt.name.lowercase(java.util.Locale.ROOT))
                             errors += attempt.name + ": " +
                                 (problem.message ?: problem.javaClass.simpleName).take(180)
                             // The LiteRT API prohibits closing an engine whose
@@ -290,6 +293,7 @@ internal class LiteRtRuntime private constructor(
                                 try { candidate?.close() } catch (_: Exception) {}
                             }
                         } catch (problem: LinkageError) {
+                            onStage("failed_" + attempt.name.lowercase(java.util.Locale.ROOT))
                             errors += attempt.name + ": Native Bibliothek nicht verfügbar (" +
                                 (problem.message ?: problem.javaClass.simpleName).take(140) + ")"
                             if (initialized) {
