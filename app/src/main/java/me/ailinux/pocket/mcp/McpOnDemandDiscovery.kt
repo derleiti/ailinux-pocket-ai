@@ -48,6 +48,7 @@ object McpOnDemandDiscovery {
         request: String,
         active: McpAgentSession
     ): McpAgentBridge.Decision.Proposed? {
+        if (McpRequestRouting.isExplanationOnly(request)) return null
         if (active.progressiveSources.isNotEmpty() || active.tools.isEmpty()) return null
         if (active.tools.map { it.name }.distinct().size != active.tools.size) return null
         val source = McpProgressiveBridge.Source(
@@ -66,13 +67,18 @@ object McpOnDemandDiscovery {
 
     fun propose(request: String, run: McpProgressiveBridge.Run): McpProgressiveBridge.RemoteCall? {
         // Pure explanation is never an instruction to query a server.
-        if (Regex("(?i)^\\s*(?:brumo[,!]?\\s+)?(?:erklär\\w*|erklaer\\w*|was\\s+(?:ist|bedeutet)|wie\\s+funktioniert|explain\\b)")
-                .containsMatchIn(request)) return null
+        if (McpRequestRouting.isExplanationOnly(request)) return null
         if (!mentionsExternal.containsMatchIn(request)) return null
         val terms = words.findAll(request.lowercase(Locale.ROOT)).map { it.value }
             .filter { it !in stop && !it.all(Char::isDigit) }.distinct().take(10).toList()
-        val requestedName = explicitTool.find(request)?.groupValues?.get(1)
-            ?.takeUnless { it in setOf("https", "http", "url", "website") }
+        val namedAlternatives = explicitTool.findAll(request)
+            .map { it.groupValues[1].lowercase(Locale.ROOT) }
+            .filterNot { it in setOf("https", "http", "url", "website") }
+            .distinct().take(2).toList()
+        // An instruction mentioning two explicit tool alternatives is NOT
+        // permission for the host to arbitrarily choose the first one.
+        if (namedAlternatives.size > 1) return null
+        val requestedName = namedAlternatives.singleOrNull()
             ?: intendedSafeTool(request)
         val query = requestedName ?: terms.joinToString(" ").take(120)
         if (query.isBlank()) return null

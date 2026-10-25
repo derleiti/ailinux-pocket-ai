@@ -39,6 +39,23 @@ class McpSelectedHostFallbackTest {
         assertSame(active.tools.single(), proposed.tool)
     }
 
+    @Test fun explanatorySentenceWithDelayedVerbCannotTriggerMcpAction() {
+        val request = "Kannst du mir den TriForce-Systemstatus erklären?"
+        assertTrue(McpRequestRouting.isExplanationOnly(request))
+        assertFalse(McpRequestRouting.expectsToolEvidence(request))
+        assertNull(McpOnDemandDiscovery.proposeSelected(request, session(tool())))
+    }
+
+    @Test fun alternativesNeverTriggerOneOfTwoExplicitToolNames() {
+        val selected = session(tool("status"), tool("device_info"))
+        assertNull(McpOnDemandDiscovery.proposeSelected(
+            "Nutze MCP Tool status oder Tool device_info", selected))
+        assertNull(McpOnDemandDiscovery.proposeSelected(
+            "MCP tool status, alternativ Tool device_info", selected))
+        assertNotNull(McpOnDemandDiscovery.proposeSelected(
+            "Bitte nutze das MCP Tool status", selected))
+    }
+
     @Test fun explanationOnlyAndUnrelatedPromptsNeverProposeAnExternalAction() {
         val active = session(tool())
         assertNull(McpOnDemandDiscovery.proposeSelected(

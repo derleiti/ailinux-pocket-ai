@@ -107,3 +107,15 @@ TriForce system status twice; (3) search and view details for a Discord tool;
 and confirm DISPATCH -> SERVER_RESULT; (6) inspect diagnostic error categories
 when the model proposes a wrong ID or a complex schema. Do not treat tools/list
 or DETAILS success as a remote tool call.
+
+## Review-identified intent boundary fixes
+
+- "Kannst du mir den TriForce-Systemstatus erklären?" is an explanation-only
+  question; it must not trigger even a proposed remote action. The same
+  explanation check is shared by host planning and the expected-evidence UI.
+- If the request explicitly mentions two different tools such as
+  "Tool status oder Tool device_info", the host must not silently select
+  the first option. The model may ask a clarification or present the
+  authorized candidate list; the host does not dispatch a call.
+- Both scenarios have reproducible JVM regression tests and were fixed
+  after receiving the corresponding CodeRabbit review feedback.
