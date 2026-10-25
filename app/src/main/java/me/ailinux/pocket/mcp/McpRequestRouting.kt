@@ -93,7 +93,8 @@ object McpRequestRouting {
         // An explicit MCP health check is still a direct app protocol probe.
         if (directHealth.containsMatchIn(normalized) &&
             !negatedHealthOnly.containsMatchIn(normalized)) return false
-        if (isReadOnlyInventory(normalized)) return false
+        if (isReadOnlyInventory(normalized) ||
+            McpArchitectureGuide.applies(normalized)) return false
         return true
     }
 
@@ -101,7 +102,8 @@ object McpRequestRouting {
     fun expectsToolEvidence(message: String): Boolean {
         val normalized = message.lowercase(Locale.ROOT)
         // Explaining a concept is not evidence that an external action ran.
-        if (isExplanationOnly(normalized) || isReadOnlyInventory(normalized)) return false
+        if (isExplanationOnly(normalized) || isReadOnlyInventory(normalized) ||
+            McpArchitectureGuide.applies(normalized)) return false
         return McpHealthCheck.requestedTarget(message) != null ||
             McpLogCheck.requested(message) ||
             McpQuickActions.requestedAction(message) is McpQuickActions.Selection.Request ||
