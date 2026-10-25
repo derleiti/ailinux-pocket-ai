@@ -101,6 +101,20 @@ internal object BackgroundModelDownloads {
      * exposes all reasons, API 34+ the first. This call is read-only and
      * must never reschedule work from a polling Activity.
      */
+    fun networkInfo(context: Context): DownloadSchedulerState.NetworkInfo? =
+        runCatching {
+            val manager = context.getSystemService(ConnectivityManager::class.java)
+            val caps = manager.getNetworkCapabilities(manager.activeNetwork)
+                ?: return@runCatching null
+            DownloadSchedulerState.NetworkInfo(
+                validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+                wifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                vpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+                metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+            )
+        }.getOrNull()
+
     fun snapshot(
         context: Context,
         entry: ModelDownloadJournal.Entry
@@ -164,7 +178,8 @@ internal object BackgroundModelDownloads {
             .coerceAtLeast(0L)
         return DownloadSchedulerState.describe(
             entry.name, entry.state, entry.wifiOnly, present,
-            reasons, age, entry.done, entry.total, entry.error
+            reasons, age, entry.done, entry.total, entry.error,
+            network = networkInfo(context)
         )
     }
 
@@ -244,7 +259,13 @@ internal object BackgroundModelDownloads {
         ModelDownloadJournal.write(context, entry)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                // NetworkRequest.Builder includes NOT_VPN by default. A
+                // UIDT should also work with a validated VPN/private-DNS
+                // network; otherwise Android may keep it queued forever,
+                // while ordinary MCP HTTPS requests succeed.
+                // Wi-Fi-only remains a separate transport constraint.
                 val network = NetworkRequest.Builder()
+                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
                     .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                     .apply {
                         if (wifiOnly) addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
