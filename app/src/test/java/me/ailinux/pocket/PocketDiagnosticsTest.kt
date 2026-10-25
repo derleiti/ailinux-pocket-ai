@@ -23,6 +23,41 @@ class PocketDiagnosticsTest {
         assertEquals(10, event.toolHash.length)
     }
 
+    @Test fun dstRollbackProducesTwoDifferentOffsetsForTheSameLocalHour() {
+        val old = java.time.Instant.parse("2026-10-25T00:30:00Z").toEpochMilli()
+        val repeated = java.time.Instant.parse("2026-10-25T01:30:00Z").toEpochMilli()
+        val offset = java.util.TimeZone.getTimeZone("Europe/Berlin")
+        val first = PocketDiagnostics.Event(old, "1234abcd", "12ab34cd",
+            PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD,
+            PocketDiagnostics.State.START)
+        val second = first.copy(time = repeated)
+        val before = first.line(offset)
+        val after = second.line(offset)
+        assertTrue(before.contains("2026-10-25T02:30:00.000+02:00"))
+        assertTrue(after.contains("2026-10-25T02:30:00.000+01:00"))
+        assertNotEquals(before, after)
+        // JSON keeps UTC epoch; changing formatting cannot modify history.
+        assertEquals(old, first.json().getLong("ts"))
+        assertEquals(repeated, second.json().getLong("ts"))
+        assertEquals(PocketDiagnostics.parse(first.json())?.time, old)
+    }
+
+    @Test fun diagnosticLinesExposeOffsetButNoDeviceTimeZoneIdentity() {
+        val event = PocketDiagnostics.Event(
+            java.time.Instant.parse("2026-10-25T22:10:03.154Z").toEpochMilli(),
+            "1111aaaa", "2222bbbb",
+            PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_ERROR,
+            PocketDiagnostics.State.FAIL, durationMs = 720_000L,
+            code = PocketDiagnostics.ErrorCode.TIMEOUT
+        )
+        val line = event.line(java.util.TimeZone.getTimeZone("Europe/Berlin"))
+        assertTrue(line.contains("2026-10-25T23:10:03.154+01:00"))
+        assertTrue(line.contains("ms=720000"))
+        assertTrue(line.contains("error=TIMEOUT"))
+        assertFalse(line.contains("Europe/Berlin"))
+        assertFalse(line.contains("Authorization"))
+    }
+
     @Test fun invalidJsonAndUntrustedFieldsAreRejectedOrDiscarded() {
         assertNull(PocketDiagnostics.parse(JSONObject()
             .put("id","alice@example.com").put("trace","ffffffff")))
