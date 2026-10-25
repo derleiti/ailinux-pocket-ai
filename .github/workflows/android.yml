@@ -23,6 +23,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Reject unresolved merge artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_merge_artifacts.py
+          python3 -m unittest discover -s scripts/tests -p 'test_merge_artifact_guard.py' -v
+      - name: Release PR must target main
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/pocket-')
+        env:
+          PR_BASE: ${{ github.base_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$PR_BASE" != "main" ]; then
+            echo "::error::Release branch must target main, not $PR_BASE. PR #57 did not update main."
+            exit 1
+          fi
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
