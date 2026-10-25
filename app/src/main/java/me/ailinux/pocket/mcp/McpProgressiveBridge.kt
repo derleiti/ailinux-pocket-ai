@@ -193,11 +193,71 @@ object McpProgressiveBridge {
         fun tool(id: String): RemoteCall? = toolIndex[id]
 
         /**
+         * Server selection comes from the ORIGINAL user message, never the
+         * model's search query or invented local tool id. Specific labels
+         * outrank generic "TriForce" shared by Workspace and DEV. If the
+         * user names more than one source, require clarification; one MCP
+         * execution cannot silently pick one of several requested sources.
+         *
+         * The actual source title is from the authenticated tools/list
+         * catalog; this function never accepts server text from a model.
+         */
+        private fun requestedSourceIds(userRequest: String?): Set<String>? {
+            if (userRequest.isNullOrBlank()) return null
+            val text = userRequest.lowercase(Locale.ROOT)
+            val kind = listOfNotNull(
+                "workspace".takeIf {
+                    Regex("\\b(?:workspace|arbeitsbereich)\\b").containsMatchIn(text)
+                },
+                "dev".takeIf {
+                    Regex("\\b(?:dev|developer)\\b").containsMatchIn(text)
+                },
+                "discord".takeIf {
+                    Regex("\\bdiscord\\b").containsMatchIn(text)
+                }
+            )
+            if (kind.isEmpty()) return null
+            require(kind.size == 1) {
+                "Mehrere MCP-Server ausdrücklich genannt: Auswahl vor Aufruf klären."
+            }
+            val marker = kind.single()
+            val selected = sources.filter { source ->
+                when (marker) {
+                    "workspace" -> Regex("\\bworkspace\\b", RegexOption.IGNORE_CASE)
+                        .containsMatchIn(source.title)
+                    "dev" -> Regex("\\bdev\\b", RegexOption.IGNORE_CASE)
+                        .containsMatchIn(source.title)
+                    else -> source.title.contains("discord", ignoreCase = true)
+                }
+            }.map { it.id }.toSet()
+            require(selected.isNotEmpty()) {
+                "Explizit angeforderter MCP-Server $marker ist nicht verbunden."
+            }
+            return selected
+        }
+
+        private fun requireRequestedSource(
+            sourceId: String,
+            userRequest: String?
+        ) {
+            val allowed = requestedSourceIds(userRequest)
+            require(allowed == null || sourceId in allowed) {
+                "MCP-Server entspricht nicht der ausdrücklich angeforderten " +
+                    "Quelle (Workspace/DEV/Discord). Keine Aktion ausgeführt."
+            }
+        }
+
+        /**
          * Deterministic local lexical ranking: no embedding account, LLM
          * request, personal data or network call needed for a search.
          */
-        fun search(query: String, limit: Int = MAX_RESULTS): JSONObject {
+        fun search(
+            query: String,
+            limit: Int = MAX_RESULTS,
+            originalRequest: String? = null
+        ): JSONObject {
             enforceFresh()
+            val requestedSourceIds = requestedSourceIds(originalRequest)
             val q = query.trim().take(120)
             require(q.isNotBlank()) { "Leerer MCP-Suchbegriff" }
             require(limit in 1..MAX_RESULTS)
@@ -229,6 +289,10 @@ object McpProgressiveBridge {
                 it in setOf("triforce", "discord", "workspace")
             }.distinct().singleOrNull()
             val ranked = toolIndex.entries.mapNotNull { (id, call) ->
+                // Don't even reveal other-server suggestions to a small
+                // model when the user's chosen source is unambiguous.
+                if (requestedSourceIds != null &&
+                    call.source.id !in requestedSourceIds) return@mapNotNull null
                 val name = call.tool.name.lowercase(Locale.ROOT)
                 val title = call.source.title.lowercase(Locale.ROOT)
                 val description = call.tool.description.lowercase(Locale.ROOT)
@@ -297,8 +361,12 @@ object McpProgressiveBridge {
                     "Suche und Ranking sind KEIN tools/call und keine Freigabe."))
         }
 
-        fun details(id: String): JSONObject {
+        fun details(id: String, originalRequest: String? = null): JSONObject {
             enforceFresh()
+            // Reject an incompatible selection before exposing the schema.
+            // A deliberately wrong prefix must not silently resolve by name.
+            if ('/' in id) requireRequestedSource(id.trim().substringBefore('/'),
+                originalRequest)
             val requested = id.trim()
             // Small 2B/4B models sometimes drop the local s1/ prefix after
             // search. Allow only a UNIQUE exact tool name from the IDs actually
@@ -315,6 +383,7 @@ object McpProgressiveBridge {
                     "verwende exakte tool_id inkl. s1/ bis s4/ aus mcp_search_tools"
             }
             val current = toolIndex[canonical] ?: error("Unbekannte tool_id")
+            requireRequestedSource(current.source.id, originalRequest)
             val full = current.tool.schema
             val preview = compactSchema(full)
             require(preview.toString().length <= 950) {
@@ -342,13 +411,17 @@ object McpProgressiveBridge {
         }
 
         /** Fail-closed actual tool-plan; callTool is NEVER invoked by this class. */
-        fun prepareCall(id: String, argumentsJson: String): RemoteCall {
+        fun prepareCall(
+            id: String, argumentsJson: String, originalRequest: String? = null
+        ): RemoteCall {
             enforceFresh()
+            requireRequestedSource(id.trim().substringBefore('/'), originalRequest)
             check(remoteCalls == 0) { "Maximal ein echter MCP-Aufruf pro Auftrag" }
             require(id in returned && id in detailed) {
                 "Vor dem echten Toolaufruf zuerst suchen und Details laden"
             }
             val located = toolIndex[id] ?: error("Werkzeug nicht mehr verfügbar")
+            requireRequestedSource(located.source.id, originalRequest)
             require(argumentsJson.length in 2..3000) {
                 "MCP-Toolargumente zu groß/leer"
             }

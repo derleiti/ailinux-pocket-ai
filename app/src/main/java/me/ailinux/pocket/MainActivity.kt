@@ -2067,7 +2067,8 @@ class MainActivity : AppCompatActivity() {
                         outcome = try {
                             runtime.search(
                                 args.getString("query"),
-                                args.optInt("limit", McpProgressiveBridge.MAX_RESULTS)
+                                args.optInt("limit", McpProgressiveBridge.MAX_RESULTS),
+                                request
                             )
                         } catch (issue: Exception) {
                             McpProgressiveBridge.localFailure(issue.message.orEmpty())
@@ -2085,7 +2086,7 @@ class MainActivity : AppCompatActivity() {
                     } else if (meta == McpProgressiveBridge.DETAILS) {
                         val detailsStart = SystemClock.elapsedRealtime()
                         outcome = try {
-                            runtime.details(args.getString("tool_id")).also { result ->
+                            runtime.details(args.getString("tool_id"), request).also { result ->
                                 trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
                                     if (result.optBoolean("isError", false))
                                         PocketDiagnostics.State.FAIL
@@ -2111,7 +2112,7 @@ class MainActivity : AppCompatActivity() {
                         val plan = try {
                             runtime.prepareCall(
                                 args.getString("tool_id"),
-                                args.getString("arguments_json")
+                                args.getString("arguments_json"), request
                             )
                         } catch (issue: Exception) {
                             failure(PocketDiagnostics.Domain.MCP,
@@ -2889,7 +2890,8 @@ class MainActivity : AppCompatActivity() {
                     McpProgressiveBridge.SEARCH -> {
                         val result = try {
                             run.search(args.getString("query"),
-                                args.optInt("limit", McpProgressiveBridge.MAX_RESULTS))
+                                args.optInt("limit", McpProgressiveBridge.MAX_RESULTS),
+                                request)
                         } catch (e: Exception) {
                             McpProgressiveBridge.localFailure(e.message.orEmpty())
                         }
@@ -2902,7 +2904,7 @@ class MainActivity : AppCompatActivity() {
                     McpProgressiveBridge.DETAILS -> {
                         val detailsStart = SystemClock.elapsedRealtime()
                         val result = try {
-                            run.details(args.getString("tool_id")).also { found ->
+                            run.details(args.getString("tool_id"), request).also { found ->
                                 trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
                                     if (found.optBoolean("isError", false))
                                         PocketDiagnostics.State.FAIL
@@ -2923,7 +2925,7 @@ class MainActivity : AppCompatActivity() {
                     McpProgressiveBridge.CALL -> {
                         val plan = try {
                             run.prepareCall(args.getString("tool_id"),
-                                args.getString("arguments_json"))
+                                args.getString("arguments_json"), request)
                         } catch (e: Exception) {
                             failure(PocketDiagnostics.Domain.MCP,
                                 PocketDiagnostics.Step.SCHEMA_CHECK, e)
