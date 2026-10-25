@@ -238,9 +238,10 @@ class ModelStore(private val context: Context) {
                 }
             }
         } catch (error: Exception) {
-            // A cancelled validation is resumable; genuinely corrupt files
-            // cannot ever be offered as a valid completed model.
-            if (error !is TransferCancelled) temp.delete()
+            // Never publish unverified data. Also do not destroy the user's
+            // potentially complete multi-GB .part on an inconclusive hash or
+            // header error: keep it for explicit inspection/retry/removal.
+            // The worker records FAILED; it must not retry forever.
             throw error
         }
         if (cancelled.get()) throw TransferCancelled()

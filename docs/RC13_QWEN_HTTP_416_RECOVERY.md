@@ -28,8 +28,10 @@ When a resumed HTTP Range starts at local EOF and returns 416:
 4. Without trusted SHA, require exact remote file length and current strong
    ETag identical to the saved .part validator; weak ETag/unknown length
    cannot authorize publication.
-5. Never treat a rounded UI "100%" as verified completion. Keep partials
-   and existing installed models intact until validation succeeds.
+5. Never treat a rounded UI "100%" as verified completion. Keep partials,
+   including rejected/corrupt ones, and installed models intact until
+   verification succeeds. On checksum mismatch mark the job FAILED and
+   require an explicit user action to retry or discard the partial.
 
 Regression tests cover missing 416 headers, exact size + trusted HF SHA,
 wrong size, contradictory range, invalid hash, weak or changed validators.
