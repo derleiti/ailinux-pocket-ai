@@ -376,30 +376,39 @@ class MainActivity : AppCompatActivity() {
         // cleared on a normal outcome. It survives abrupt Android process kills.
         val interruptedModel = prefs.getString(PREF_LOADING_MODEL, null)
         if (interruptedModel != null) {
-            prefs.edit().remove(PREF_LOADING_MODEL).apply()
-            val wasPackageUpdate = runCatching {
-                val mgr = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-                mgr.getHistoricalProcessExitReasons(packageName, 0, 1)
-                    .firstOrNull()?.reason == ApplicationExitInfo.REASON_PACKAGE_UPDATED
-            }.getOrDefault(false)
-            findViewById<View>(android.R.id.content).post {
+            val startedAtMs = prefs.getLong(PREF_LOADING_MODEL_STARTED_MS, 0L)
+            prefs.edit().remove(PREF_LOADING_MODEL)
+                .remove(PREF_LOADING_MODEL_STARTED_MS).apply()
+            // Query OS exit history off the UI thread; the previous exit may
+            // be an unrelated event, so require a matching timestamp.
+            lifecycleScope.launch {
+                val exitEvidence = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val mgr = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                        val nowMs = System.currentTimeMillis()
+                        mgr.getHistoricalProcessExitReasons(packageName, 0, 10)
+                            .asSequence().filter { it.processName == packageName }
+                            .mapNotNull { exit ->
+                                ModelExitEvidence.correlate(startedAtMs, exit.timestamp,
+                                    nowMs, exit.reason, exit.status)?.let { exit.timestamp to it }
+                            }
+                            .maxByOrNull { it.first }?.second
+                    }.getOrNull()
+                }
+                val wasPackageUpdate = exitEvidence?.kind == ModelExitEvidence.Kind.PACKAGE_UPDATED
+                val cause = exitEvidence?.explanation()
+                    ?: "Kein zeitlich zugeordneter Android-Exitgrund verfügbar; ein Crash ist nicht bewiesen."
                 if (!isFinishing && !isDestroyed) {
-                    AlertDialog.Builder(this)
+                    AlertDialog.Builder(this@MainActivity)
                         .setTitle(
                             if (wasPackageUpdate) "Modellstart durch App-Update unterbrochen"
                             else "Vorheriger Modellstart wurde unterbrochen"
                         )
                         .setMessage(
-                            if (wasPackageUpdate) {
-                                "Android hat die vorherige Pocket-AI-Version während des " +
-                                    "APK-Updates beendet. Das ist kein neuer Absturz. " +
-                                    "Versuche das Modell " + interruptedModel + " erneut zu laden. " +
-                                    "Die heruntergeladene GGUF-Datei bleibt gespeichert."
-                            } else {
-                                "Der Start von " + interruptedModel +
-                                    " wurde vor Abschluss beendet. Unter SETUP kannst du " +
-                                    "die Android-Prozessdiagnose prüfen. Das Modell wurde nicht gelöscht."
-                            }
+                            "Der Start von " + interruptedModel +
+                                " wurde vor Abschluss beendet.\n\n" + cause +
+                                "\n\nDie Modelldatei wurde nicht gelöscht. Details stehen " +
+                                "unter SETUP → Android-Prozessdiagnose."
                         )
                         .setNegativeButton("OK", null)
                         .setPositiveButton("Systemdiagnose") { _, _ -> showProcessExitInfo() }
@@ -973,7 +982,9 @@ class MainActivity : AppCompatActivity() {
                 // Persist before JNI starts, but commit() fsync can take
                 // hundreds of ms on a busy device: do it off the UI thread.
                 withContext(Dispatchers.IO) {
-                    check(prefs.edit().putString(PREF_LOADING_MODEL, file.name).commit()) {
+                    check(prefs.edit().putString(PREF_LOADING_MODEL, file.name)
+                        .putLong(PREF_LOADING_MODEL_STARTED_MS, System.currentTimeMillis())
+                        .commit()) {
                         "Prozessdiagnose-Marker konnte nicht gespeichert werden."
                     }
                     liteRtRuntime?.let { previous ->
@@ -1042,7 +1053,8 @@ class MainActivity : AppCompatActivity() {
                 setStatus(if (activeModel != null) "● BEREIT" else "Ladefehler")
                 showError("Modell/Chat-Template konnte nicht gestartet werden", error)
             } finally {
-                prefs.edit().remove(PREF_LOADING_MODEL).apply()
+                prefs.edit().remove(PREF_LOADING_MODEL)
+                    .remove(PREF_LOADING_MODEL_STARTED_MS).apply()
                 setModelLoading(false)
                 busy = false
                 renderChatState()
@@ -1085,7 +1097,9 @@ class MainActivity : AppCompatActivity() {
             try {
                 val loaded = withContext(Dispatchers.IO) {
                     ModelStore.validate(file)
-                    check(prefs.edit().putString(PREF_LOADING_MODEL, file.name).commit()) {
+                    check(prefs.edit().putString(PREF_LOADING_MODEL, file.name)
+                        .putLong(PREF_LOADING_MODEL_STARTED_MS, System.currentTimeMillis())
+                        .commit()) {
                         "Prozessdiagnose-Marker konnte nicht gespeichert werden."
                     }
                     // Only now alter runtime ownership. Invalid import files
@@ -1153,7 +1167,8 @@ class MainActivity : AppCompatActivity() {
                     else "LiteRT-LM Bibliothek nicht verfügbar")
                 showError("LiteRT-LM Bibliothek konnte nicht geladen werden", error)
             } finally {
-                prefs.edit().remove(PREF_LOADING_MODEL).apply()
+                prefs.edit().remove(PREF_LOADING_MODEL)
+                    .remove(PREF_LOADING_MODEL_STARTED_MS).apply()
                 setModelLoading(false)
                 busy = false
                 renderChatState()
@@ -3671,6 +3686,22 @@ class MainActivity : AppCompatActivity() {
                         }.ifBlank { "Keine gespeicherten Modell-Downloads." }
                     val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
                     val history = manager.getHistoricalProcessExitReasons(packageName, 0, 10)
+                    // Put the actual latest exit in the FIRST visible lines.
+                    // Long download journals previously pushed it beyond
+                    // Android Accessibility's bounded text preview.
+                    val latestExit = history.asSequence()
+                        .filter { it.processName == packageName }
+                        .maxByOrNull { it.timestamp }
+                    val latestHeadline = if (latestExit == null) {
+                        "Letzter Android-Prozess-Exit: kein Datensatz verfügbar."
+                    } else {
+                        val date = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.GERMANY)
+                            .format(Date(latestExit.timestamp))
+                        "Letzter Android-Prozess-Exit (nicht automatisch Ursache " +
+                            "des Modellstarts): " + date + " • " +
+                            ModelExitEvidence.newestExitSummary(
+                                latestExit.reason, latestExit.status)
+                    }
                     var tracesRead = 0
                     val entries = history.take(6).map { exit ->
                         val reasonName = when (exit.reason) {
@@ -3728,6 +3759,7 @@ class MainActivity : AppCompatActivity() {
                         "Android hat keine früheren Prozessabbrüche für Pocket AI erfasst."
                     } else entries.joinToString("\n\n---\n\n")
                     "ANDROID-PROZESSDIAGNOSE – normale Updates sind keine Abstürze; keine Übertragung\n\n" +
+                        latestHeadline + "\n\n" +
                         uiDelayReport + "\n\n" + bindReport +
                         "\n\n--- MODELL-DOWNLOAD / JOBSCHEDULER ---\n" +
                         downloadReport +
@@ -3878,5 +3910,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREF_ENABLE_THINKING = "enable_thinking"
         private const val PREF_LOADING_MODEL = "pocket_loading_model"
+        private const val PREF_LOADING_MODEL_STARTED_MS = "pocket_loading_started_ms"
     }
 }
