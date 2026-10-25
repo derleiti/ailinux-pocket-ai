@@ -215,7 +215,9 @@ class ModelStore(private val context: Context) {
                 sha256, cancelled, onVerifying, progress)
         } finally {
             connection?.disconnect()
-            if (temp.exists() && temp.length() in 1..32) temp.delete()
+            // Preserve even a short .part fragment and its validator after
+            // failures, cancellations and unknown network outcomes. Only a
+            // verified atomic install or an explicit user action may remove it.
             lease.close()
         }
     }
