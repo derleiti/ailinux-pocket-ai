@@ -45,6 +45,108 @@ class McpOnDemandDiscoveryTest {
             "Erkläre mir den Discord Verbindungsstatus", state))
     }
 
+    @Test fun naturalDevMcpStatusToolCallResolvesExactlyNamedProvider() {
+        val status = tool("status")
+        val providers = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1", "workspace-profile",
+                "https://api.ailinux.me/v1/mcp", "AILinux TriForce Workspace",
+                listOf(status)),
+            McpProgressiveBridge.Source("s2", "dev-profile",
+                "https://api.ailinux.me/dev/mcp", "AILinuX TriForce DEV MCP",
+                listOf(status)),
+            McpProgressiveBridge.Source("s3", "discord-profile",
+                "https://discord.ailinux.me/mcp", "AILinux Discord MCP",
+                listOf(tool("discord_connection_status")))
+        ))
+        val plan = McpOnDemandDiscovery.propose(
+            "prüf den truforce dev mcp status per mcp tool call", providers)
+        assertNotNull("User explicitly requested DEV provider + status, not generic tool call", plan)
+        assertEquals("s2/status", plan!!.toolId)
+        assertEquals("dev-profile", plan.source.profileId)
+        assertTrue(plan.hostFallback)
+        assertEquals(0, providers.remoteCalls)
+    }
+
+    @Test fun largeCatalogTargetsDevServerWithoutPromptingAllDefinitions() {
+        val a = (0 until 89).map {
+            tool("aihelper_telemetry_" + it)
+        } + tool("status")
+        val b = (0 until 79).map {
+            tool("dev_diagnostic_" + it)
+        } + tool("status")
+        val c = listOf(tool("discord_connection_status"), tool("current_time"))
+        val run = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1", "workspace-profile",
+                "https://api.ailinux.me/v1/mcp", "AILinuX TriForce Workspace", a),
+            McpProgressiveBridge.Source("s2", "dev-profile",
+                "https://api.ailinux.me/dev/mcp", "AILinuX TriForce DEV MCP", b),
+            McpProgressiveBridge.Source("s3", "discord-profile",
+                "https://discord.ailinux.me/mcp", "AILinuX Discord MCP", c)
+        ))
+        assertEquals(172, run.totalTools)
+        val candidate = McpOnDemandDiscovery.propose(
+            "Prüfe den Truforce DEV MCP Status per MCP Tool Call", run)
+        assertNotNull(candidate)
+        assertEquals("s2/status", candidate!!.toolId)
+        assertTrue(candidate.hostFallback)
+        assertEquals(0, run.remoteCalls)
+        assertEquals("{}", candidate.arguments.toString())
+    }
+
+    @Test fun ambiguousProviderForIdenticalToolNamesAbstainsWithoutDispatch() {
+        val sameName = tool("status")
+        val providers = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1", "p1",
+                "https://api.ailinux.me/v1/mcp", "AILinuX TriForce Workspace",
+                listOf(sameName)),
+            McpProgressiveBridge.Source("s2", "p2",
+                "https://example.test/mcp", "AILinuX TriForce DEV MCP",
+                listOf(sameName))
+        ))
+        assertNull(McpOnDemandDiscovery.propose(
+            "Prüfe mit MCP den TriForce-Systemstatus", providers))
+        assertEquals(0, providers.remoteCalls)
+    }
+
+    @Test fun genericToolCallWordIsNotAnExplicitMcpToolName() {
+        val state = run(listOf(tool("status")))
+        assertNotNull(McpOnDemandDiscovery.propose(
+            "Rufe den MCP Status über einen Tool Call ab", state))
+        assertNull(McpOnDemandDiscovery.propose(
+            "Erkläre mir bitte was ein MCP Tool Call ist", state))
+        assertEquals(0, state.remoteCalls)
+    }
+
+    @Test fun explicitDevMcpStatusTargetsOnlyTheNamedServerInAutoMode() {
+        val statusTool = tool("status")
+        val run = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1", "workspace", "https://example.test/ws",
+                "AILinux TriForce Workspace", listOf(statusTool)),
+            McpProgressiveBridge.Source("s2", "dev", "https://example.test/dev",
+                "TriForce DEV MCP", listOf(statusTool)),
+            McpProgressiveBridge.Source("s3", "discord", "https://example.test/discord",
+                "Discord MCP", listOf(tool("discord_connection_status")))
+        ))
+        val proposal = McpOnDemandDiscovery.propose(
+            "nutze das triforce dev mcp status tool", run)
+        assertNotNull("The explicit DEV server makes status unambiguous", proposal)
+        assertEquals("s2/status", proposal!!.toolId)
+        assertTrue(proposal.hostFallback)
+        assertEquals(0, run.remoteCalls)
+    }
+
+    @Test fun sameNamedToolsAcrossTwoServersWithoutSourceRemainAmbiguous() {
+        val same = tool("status")
+        val run = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1", "one", "https://example.test/one",
+                "TriForce Primary MCP", listOf(same)),
+            McpProgressiveBridge.Source("s2", "two", "https://example.test/two",
+                "TriForce DEV MCP", listOf(same))
+        ))
+        assertNull(McpOnDemandDiscovery.propose("MCP status prüfen",run))
+        assertEquals(0, run.remoteCalls)
+    }
+
     @Test fun exactCrawlRequestCreatesOnlyApprovedCandidateNotExecution() {
         val schema = JSONObject("""{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}""")
         val run = run(listOf(tool("crawl", schema)))

@@ -119,3 +119,36 @@ or DETAILS success as a remote tool call.
   authorized candidate list; the host does not dispatch a call.
 - Both scenarios have reproducible JVM regression tests and were fixed
   after receiving the corresponding CodeRabbit review feedback.
+
+
+## AUTO-MCP discovery and real 172-tool failure reproduction
+
+The Android RC10 diagnostic export confirms 172 tools across three live
+MCP servers and successful mcp_search_tools, followed by a LiteRT prose
+response without mcp_get_tool_details or tools/call. The host must continue
+an explicit safe read-only task after native planning fails.
+
+Additional RC11 corrections:
+- German compound terms such as Systemzustand/Verbindungsstatus and
+  spelled-out provider names find actual catalog results rather than
+  unrelated matching descriptions.
+- Strictly local s1/status namespace identifiers are shown, and a
+  uniquely matched tool name may be used for DETAILS only. CALL always
+  requires the canonical ID from the approved search/details steps.
+- Small-model detail previews remove descriptive schema metadata but
+  preserve every JSON Schema constraint (required, enum, minLength,
+  additionalProperties); full original schema is checked before dispatch.
+- An unambiguous ranked result can expose suggested_tool_id as a read-only
+  hint. This does not authorize or execute any call.
+- Natural user phrasing "Pruefe den Truforce DEV MCP Status per MCP Tool Call"
+  no longer interprets generic "tool call" as a tool named "call". When two
+  real servers advertise "status", an explicit distinctive provider token
+  (e.g. DEV) selects only that user's requested profile. Without a
+  distinctive provider hint, the host abstains; no arbitrary cross-server
+  dispatch or auto-approval.
+- Automated test builds a synthetic three-server, 172-tool snapshot with
+  duplicate status functions to reproduce the failure precisely.
+- App process diagnostics distinguish GGUF Jinja prefill status from real
+  LiteRT MCP binding and explain details errors using sanitized error codes.
+All such AUTO-MCP plans still demand a fresh on-device approval and real
+server receipt; a search result alone never counts as an action.

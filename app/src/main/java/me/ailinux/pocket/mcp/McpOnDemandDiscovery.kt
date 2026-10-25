@@ -17,6 +17,41 @@ object McpOnDemandDiscovery {
     private val webUrl = Regex("https://[^\\s<>\"\']+", RegexOption.IGNORE_CASE)
     private val explicitTool = Regex("(?:tool|werkzeug|function)[\\s:='\"\\u0060]+([a-z][a-z0-9_.-]{2,})", RegexOption.IGNORE_CASE)
     private val mentionsExternal = Regex("\\b(?:mcp|tool|werkzeug|triforce|discord|crawl|status|api|server)\\b", RegexOption.IGNORE_CASE)
+    // "per MCP tool call" describes the protocol, NOT an explicit tool
+    // called "call". Keep explicit function names only when meaningful.
+    private val genericActionWords = setOf(
+        "call", "calling", "aufruf", "ausführen", "ausfuehren",
+        "ausführung", "ausfuehrung", "request", "invoke", "toolcall",
+        "aktion", "action", "method"
+    )
+    private val titleTokens = Regex("[\\p{L}\\p{N}]{3,}")
+    private val genericServerWords = setOf("ailinux", "mcp", "server",
+        "endpoint", "api", "tool", "tools", "service", "services")
+
+    /**
+     * When multiple authorized MCP servers publish "status", a free-text
+     * request must identify a provider through a distinctive title token.
+     * Never pick the first status tool from an arbitrary source.
+     * The server field is from the authentic catalog, not model prose.
+     */
+    private fun disambiguateServer(
+        candidates: List<JSONObject>, request: String
+    ): JSONObject? {
+        val requestedTokens = titleTokens.findAll(request.lowercase(Locale.ROOT))
+            .map { it.value }.toSet()
+        fun ownTokens(candidate: JSONObject) =
+            titleTokens.findAll(candidate.optString("server").lowercase(Locale.ROOT))
+                .map { it.value }.filter { it !in genericServerWords }.toSet()
+        val matches = candidates.filter { candidate ->
+            val others = candidates.filterNot { it === candidate }
+                .flatMap { ownTokens(it) }.toSet()
+            ownTokens(candidate).any { token ->
+                token in requestedTokens && token !in others
+            }
+        }
+        return matches.singleOrNull()
+    }
+
 
     // The host knows only a small audited set of read-only contracts.
     // This selects a candidate name, NOT a permission to execute it.
@@ -73,7 +108,10 @@ object McpOnDemandDiscovery {
             .filter { it !in stop && !it.all(Char::isDigit) }.distinct().take(10).toList()
         val namedAlternatives = explicitTool.findAll(request)
             .map { it.groupValues[1].lowercase(Locale.ROOT) }
-            .filterNot { it in setOf("https", "http", "url", "website") }
+            .filterNot {
+                it in setOf("https", "http", "url", "website") ||
+                    it in genericActionWords
+            }
             .distinct().take(2).toList()
         // An instruction mentioning two explicit tool alternatives is NOT
         // permission for the host to arbitrarily choose the first one.
@@ -90,8 +128,26 @@ object McpOnDemandDiscovery {
         if (candidates.isEmpty()) return null
         // Explicit function name or unambiguous single result only.
         val chosen = when {
-            requestedName != null -> candidates.singleOrNull {
-                it.optString("name").equals(requestedName, ignoreCase = true)
+            requestedName != null -> {
+                val exact = candidates.filter {
+                    it.optString("name").equals(requestedName, ignoreCase = true)
+                }
+                when (exact.size) {
+                    0 -> null
+                    1 -> exact.single()
+                    else -> {
+                        // Don't infer a unique tool when search(limit=6)
+                        // might have omitted another server's same-name tool.
+                        val totalExact = run.sources.sumOf { source ->
+                            source.tools.count {
+                                it.name.equals(requestedName, ignoreCase = true)
+                            }
+                        }
+                        if (totalExact == exact.size)
+                            disambiguateServer(exact, request)
+                        else null
+                    }
+                }
             }
             candidates.size == 1 -> candidates.single()
             else -> candidates.filter { candidate ->
