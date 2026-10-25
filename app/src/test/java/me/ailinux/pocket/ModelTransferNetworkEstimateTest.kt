@@ -38,6 +38,17 @@ class ModelTransferNetworkEstimateTest {
         assertTrue(ModelTransferNetworkEstimate.forResume(1_000L, 1_001L).minChunkBytes > 0)
     }
 
+    @Test fun oldFileSizeMustNeverLeakIntoDifferentUrlUnderSameName() {
+        assertEquals(-1L, ModelTransferNetworkEstimate.knownTotalForSource(
+            -1L, 2_000_000_000L, false))
+        assertEquals(2_000_000_000L, ModelTransferNetworkEstimate.knownTotalForSource(
+            -1L, 2_000_000_000L, true))
+        assertEquals(400L, ModelTransferNetworkEstimate.knownTotalForSource(
+            400L, 2_000_000_000L, false))
+        assertEquals(-1L, ModelTransferNetworkEstimate.knownTotalForSource(
+            -1L, null, true))
+    }
+
     @Test fun schedulingUsesActualPartialNotEntireModelAgain() {
         val source = File("src/main/java/me/ailinux/pocket/ModelBackgroundDownloads.kt").readText()
         assertTrue(source.contains("ModelTransferNetworkEstimate.forResume("))

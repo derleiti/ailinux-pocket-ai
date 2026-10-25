@@ -255,9 +255,8 @@ internal object BackgroundModelDownloads {
             .takeIf { it.isFile }?.length() ?: 0L
         val entry = ModelDownloadJournal.Entry(id, name, model.url, model.sha256,
             wifiOnly, "queued", done = initialBytes,
-            total = if (model.bytes > 0) model.bytes else
-                previous?.takeIf { it.url == model.url }?.total
-                    ?: ModelTransferNetworkEstimate.UNKNOWN)
+            total = ModelTransferNetworkEstimate.knownTotalForSource(
+                model.bytes, previous?.total, previous?.url == model.url))
         ModelDownloadJournal.write(context, entry)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
