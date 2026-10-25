@@ -25,11 +25,21 @@ internal object RuntimeHardware {
         val gpuOnly = Regex("(?:^|[-_.])gpu(?:[-_.]|$)").containsMatchIn(lower)
         val tpuOnly = Regex("(?:^|[-_.])(?:npu|tpu|google_tensor|tensor_g5)(?:[-_.]|$)").containsMatchIn(lower) ||
             lower.contains("google_tensor") || lower.contains("tensor_g5")
+        // Google Tensor currently executes pre-compiled AOT graphs, not
+        // arbitrary .litertlm models compiled on the phone. On a Pixel the
+        // SoC can support NPU while the model graph does not. Never probe
+        // NPU just because the device happens to expose it: this incurred
+        // fast TENSOR_BACKEND failures and risky allocations in RC17/RC18.
+        // A filename marker is only a candidate hint, not proof the file
+        // is signed, compatible or compiled for this exact Tensor SoC.
+        // Real Engine.initialize + generation remain authoritative.
+        val gpuCandidates = listOf(Attempt.GPU, Attempt.CPU).filter { it in available }
         return when {
+            gpuOnly && tpuOnly -> emptyList() // contradictory graph hints
             gpuOnly || LiteRtModelCompatibility.isKnownGpuGraph(name) ->
-                listOf(Attempt.GPU, Attempt.CPU).filter { it in available }
+                gpuCandidates
             tpuOnly -> listOf(Attempt.GOOGLE_TENSOR).filter { it in available }
-            else -> available
+            else -> gpuCandidates // unknown provenance => no speculative NPU
         }
     }
 
@@ -58,7 +68,9 @@ internal object RuntimeHardware {
             "\nABI: " + Build.SUPPORTED_ABIS.joinToString(", ") +
             "\nVulkan-Hardware-Level: " + (vulkan?.toString() ?: "nicht erkannt") +
             "\n\nGGUF / Spark: llama.cpp CPU (stabil)." +
-            "\nLiteRT-LM: " + order +
+            "\nLiteRT-LM Hardwarekandidaten: " + order +
+            "\nUnbekannte LiteRT-Modelle: GPU / CPU (keine unbewiesene NPU-Probe)." +
+            "\nTensor-NPU nur fuer ausdruecklich Tensor-kompilierte Modellkandidaten." +
             "\n\nHardware-Erkennung ist noch KEIN TPU-Benchmark. " +
             "Die App zeigt das tatsächlich initialisierte LiteRT-Backend nach Modellstart."
     }
