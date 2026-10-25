@@ -76,6 +76,35 @@ class LiteRtMcpProtocolTest {
                 "mcp_search_tools", """{"query":"status"}""", List(6) { oneTool }))
     }
 
+    @Test fun nativeSchemaCauseIdentifiesOnlySafeFailureClassNotFieldValues() {
+        val tools = listOf(oneTool)
+        assertEquals(LiteRtMcpPolicy.SchemaCause.MISSING_REQUIRED,
+            LiteRtMcpPolicy.schemaCause("mcp_search_tools", mapOf("limit" to 3), tools))
+        assertEquals(LiteRtMcpPolicy.SchemaCause.UNKNOWN_FIELD,
+            LiteRtMcpPolicy.schemaCause("mcp_search_tools",
+                mapOf("query" to "status", "secret_field" to "hidden value"), tools))
+        assertEquals(LiteRtMcpPolicy.SchemaCause.WRONG_TYPE,
+            LiteRtMcpPolicy.schemaCause("mcp_search_tools", mapOf("query" to 4), tools))
+        assertEquals(LiteRtMcpPolicy.SchemaCause.OTHER,
+            LiteRtMcpPolicy.schemaCause("missing", mapOf("query" to "status"), tools))
+        val bounded = McpTool("mcp_search_tools", "safe local search",
+            JSONObject("""{"type":"object","properties":{"query":{"type":"string","minLength":2}},"required":["query"],"additionalProperties":false}"""))
+        assertEquals(LiteRtMcpPolicy.SchemaCause.INVALID_VALUE,
+            LiteRtMcpPolicy.schemaCause("mcp_search_tools", mapOf("query" to ""), listOf(bounded)))
+        val code = LiteRtMcpPolicy.schemaCause("mcp_search_tools",
+            mapOf("query" to "status", "private_token" to "VERY_PRIVATE"), tools)
+        assertEquals("UNKNOWN_FIELD", code.name)
+        assertFalse(code.toString().contains("VERY_PRIVATE"))
+        val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+            .substringAfter("private suspend fun runLiteRtToolbridge(")
+            .substringBefore("private fun sendLiteRtMessage(")
+        assertTrue(source.contains("LiteRtMcpPolicy.schemaCause("))
+        assertTrue(source.contains("PocketDiagnostics.ErrorCode.NATIVE_SCHEMA_UNKNOWN_FIELD"))
+        assertTrue(source.contains("code = traceCode"))
+        assertTrue(source.contains("code.name"))
+        assertFalse(source.contains("schemaCause(", ignoreCase = true) && source.contains("Log.d("))
+    }
+
     @Test fun nativeParserFailureBeforeToolCallIsHandledForInitialAndFollowup() {
         val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
             .substringAfter("private suspend fun runLiteRtToolbridge(")
