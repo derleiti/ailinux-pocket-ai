@@ -45,11 +45,31 @@ class McpUiBackgroundWorkTest {
         val loader = main.substringAfter("private fun loadModel(")
             .substringBefore("private fun showMcpAgentMenu()")
         assertTrue(loader.contains("withContext(Dispatchers.IO)"))
-        assertTrue(loader.contains("putString(PREF_LOADING_MODEL, file.name).commit()"))
-        assertTrue(loader.indexOf("withContext(Dispatchers.IO) {\n                    check(") <
-            loader.indexOf("putString(PREF_LOADING_MODEL, file.name).commit()"))
-        assertTrue(loader.indexOf("putString(PREF_LOADING_MODEL, file.name).commit()") <
-            loader.indexOf("engine.loadModel(file.absolutePath)"))
+        val marker = loader.indexOf("putString(PREF_LOADING_MODEL, file.name)")
+        val time = loader.indexOf("putLong(PREF_LOADING_MODEL_STARTED_MS, System.currentTimeMillis())")
+        val commit = loader.indexOf(".commit())", marker)
+        assertTrue("Model identity and timestamp must be persisted together",
+            marker >= 0 && time > marker && commit > time)
+        assertTrue(loader.indexOf("withContext(Dispatchers.IO) {\n                    check(") < marker)
+        assertTrue("Must durably persist before GGUF JNI load",
+            commit < loader.indexOf("engine.loadModel(file.absolutePath)"))
+        assertEquals("GGUF and LiteRT both need an exit timestamp",
+            2, Regex("putLong\\(PREF_LOADING_MODEL_STARTED_MS, System.currentTimeMillis\\(\\)\\)")
+                .findAll(loader).count())
+    }
+
+    @Test fun interruptedModelExitEvidenceIsReadOffMainWithoutGuessingCause() {
+        val main = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        val startup = main.substringAfter("val interruptedModel =")
+            .substringBefore("refreshLibrary()")
+        assertTrue(startup.contains("lifecycleScope.launch"))
+        assertTrue(startup.contains("withContext(Dispatchers.IO)"))
+        assertTrue(startup.indexOf("withContext(Dispatchers.IO)") <
+            startup.indexOf("getHistoricalProcessExitReasons("))
+        assertTrue(startup.contains("ModelExitEvidence.correlate("))
+        assertTrue(startup.contains("Kein zeitlich zugeordneter Android-Exitgrund"))
+        assertTrue(startup.contains("ein Crash ist nicht bewiesen"))
+        assertTrue(startup.contains(".remove(PREF_LOADING_MODEL_STARTED_MS)"))
     }
 
     @Test fun normalPackageUpdateIsStillNotLabeledAnAppCrash() {
