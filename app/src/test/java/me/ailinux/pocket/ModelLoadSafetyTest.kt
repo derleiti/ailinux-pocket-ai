@@ -42,6 +42,31 @@ class ModelLoadSafetyTest {
         assertFalse(message.contains("\\\\n"))
     }
 
+    @Test fun initialAndroidLowMemoryRefusesSwitchBeforeUnloadingOldEngine() {
+        val source = java.io.File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        val lite = source.substringAfter("private fun loadLiteRtModel(")
+            .substringBefore("private fun showMcpAgentMenu(")
+        val initialCheck = lite.indexOf("if (memory.lowMemory) {")
+        val shutdown = lite.indexOf("previousLiteRt.shutdown()")
+        val busy = lite.indexOf("busy = true")
+        assertTrue("Early Android low-memory guard must be present", initialCheck >= 0)
+        assertTrue("Keep the current engine and do not enter busy state",
+            initialCheck < busy)
+        assertTrue("Keep previous native runtime loaded", initialCheck < shutdown)
+        val guard = lite.substring(initialCheck, lite.indexOf("val initialCandidates", initialCheck))
+        assertTrue(guard.contains("androidLowMemory = true"))
+        assertTrue(guard.contains("return"))
+        assertFalse(guard.contains("activeModel = null"))
+        // Preserve the later, independent post-unload OS-pressure check.
+        assertTrue(lite.indexOf("currentMemory.lowMemory") > shutdown)
+        assertTrue(ModelLoadSafety.allowedLiteRtAttempts(
+            gib, 10L * gib, androidLowMemory = true,
+            lowMemoryThresholdBytes = gib,
+            candidates = listOf(RuntimeHardware.Attempt.GPU),
+            explicitlyAcceptedTensorRisk = true
+        ).isEmpty())
+    }
+
     @Test fun tensorPreflightUsesRealAndroidLowMemoryKillAsConservativeFloor() {
         val smallModel = 900L * 1024L * 1024L
         val tensorRequired = ModelLoadSafety.minimumAvailableForLiteRtModel(

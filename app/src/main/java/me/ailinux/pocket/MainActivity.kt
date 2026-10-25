@@ -1119,6 +1119,23 @@ class MainActivity : AppCompatActivity() {
         val memory = ActivityManager.MemoryInfo().also {
             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
         }
+        // Do not tear down a usable native engine when Android already
+        // reports critical memory pressure. This first guard is deliberately
+        // before confirmation, busy state and previous-runtime shutdown.
+        // A second OS memory check still runs AFTER the old engine unloads:
+        // Android's memory condition can change during the transition.
+        if (memory.lowMemory) {
+            diagnosticTrace = PocketDiagnostics.newTrace()
+            val refusal = ModelMemoryGuardException(
+                availableBytes = memory.availMem,
+                requiredBytes = ModelLoadSafety.minimumAvailableAfterUnload(file.length()),
+                androidLowMemory = true
+            )
+            failure(PocketDiagnostics.Domain.LITERT,
+                PocketDiagnostics.Step.MODEL_LOAD, refusal)
+            showError("LiteRT: Android meldet Speicherdruck", refusal)
+            return
+        }
         val initialCandidates = RuntimeHardware.forModelFile(
             file.name, RuntimeHardware.candidatesOnDevice()
         )
