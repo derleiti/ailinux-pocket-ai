@@ -82,7 +82,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation(project(":inference"))
     // Tested against the official Google Tensor G5 TPU sample dependency set.
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.12.0")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.0")
     implementation("com.google.ai.edge.litert:litert:2.3.0")
     testImplementation(libs.junit)
     // Real org.json is necessary in local JVM protocol integration tests;
