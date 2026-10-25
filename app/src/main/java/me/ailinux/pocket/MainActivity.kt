@@ -1119,11 +1119,27 @@ class MainActivity : AppCompatActivity() {
         val memory = ActivityManager.MemoryInfo().also {
             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
         }
+        val initialCandidates = RuntimeHardware.forModelFile(
+            file.name, RuntimeHardware.candidatesOnDevice()
+        )
+        val tensorMayBeUsed = RuntimeHardware.Attempt.GOOGLE_TENSOR in initialCandidates
+        val tensorWarningFloor = ModelLoadSafety.minimumAvailableForLiteRtModel(
+            file.length(), tensorMayBeUsed, memory.threshold)
+        val tensorRiskWarning = tensorMayBeUsed && memory.availMem < tensorWarningFloor
         if (!acknowledgedLargeModel &&
-            ModelLoadSafety.requiresConfirmation(file.length(), memory.availMem)) {
+            (ModelLoadSafety.requiresConfirmation(file.length(), memory.availMem) ||
+                tensorRiskWarning)) {
+            val riskNote = if (tensorRiskWarning)
+                "\n\nGoogle Tensor benötigt möglicherweise weitere Speicherpuffer. " +
+                    "Die vorsichtige Warnschwelle beträgt " +
+                    ModelStore.displaySize(tensorWarningFloor) +
+                    ". Ein manueller Versuch kann Androids Speicherschutz auslösen; " +
+                    "ein bestätigter Versuch wird bei akutem Speicherdruck " +
+                    "(lowMemory=true) dennoch gestoppt."
+            else ""
             AlertDialog.Builder(this)
                 .setTitle("Hoher RAM-Bedarf")
-                .setMessage(ModelLoadSafety.explain(file.length(), memory.availMem))
+                .setMessage(ModelLoadSafety.explain(file.length(), memory.availMem) + riskNote)
                 .setNegativeButton("Abbrechen", null)
                 .setPositiveButton("Trotzdem laden") { _, _ ->
                     loadLiteRtModel(file, acknowledgedLargeModel = true)
@@ -1181,7 +1197,8 @@ class MainActivity : AppCompatActivity() {
                     }
                     val safeCandidates = ModelLoadSafety.allowedLiteRtAttempts(
                         file.length(), currentMemory.availMem, currentMemory.lowMemory,
-                        currentMemory.threshold, deviceCandidates
+                        currentMemory.threshold, deviceCandidates,
+                        explicitlyAcceptedTensorRisk = acknowledgedLargeModel
                     )
                     val tensorCandidate = RuntimeHardware.Attempt.GOOGLE_TENSOR in deviceCandidates
                     if (safeCandidates.isEmpty()) {
@@ -1191,6 +1208,16 @@ class MainActivity : AppCompatActivity() {
                                 file.length(), tensorCandidate, currentMemory.threshold),
                             androidLowMemory = currentMemory.lowMemory
                         )
+                    }
+                    if (tensorCandidate && acknowledgedLargeModel &&
+                        ModelLoadSafety.insufficientForLiteRtModel(
+                            file.length(), currentMemory.availMem, true,
+                            currentMemory.lowMemory, currentMemory.threshold) &&
+                        RuntimeHardware.Attempt.GOOGLE_TENSOR in safeCandidates) {
+                        trace(PocketDiagnostics.Domain.LITERT,
+                            PocketDiagnostics.Step.BACKEND_RISK_ACCEPTED,
+                            PocketDiagnostics.State.INFO,
+                            code = PocketDiagnostics.ErrorCode.MEMORY)
                     }
                     if (tensorCandidate &&
                         RuntimeHardware.Attempt.GOOGLE_TENSOR !in safeCandidates) {

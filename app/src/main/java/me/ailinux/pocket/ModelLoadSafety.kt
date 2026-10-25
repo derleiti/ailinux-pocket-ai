@@ -58,13 +58,18 @@ object ModelLoadSafety {
         fun addBounded(value: Long, extra: Long): Long =
             if (value > Long.MAX_VALUE - extra) Long.MAX_VALUE else value + extra
         val weights = modelSizeBytes.coerceAtLeast(0L)
-        // Approximate weight bytes plus a native/scheduler reserve. A
-        // 2x-weights multiplier made the Tensor-only 2.90 GiB Gemma model
-        // unstartable on typical 12 GiB devices before any device QA.
-        val approximateNativePeak = addBounded(weights, twoGiB)
+        // Only a cautious WARN threshold, not a proven allocation upper
+        // bound. Scale with the model instead of blocking all 0.8B Tensor
+        // models behind a fixed 6 GiB threshold on 12 GiB Pixel devices.
+        // A user may explicitly accept an NPU attempt above the hard Android
+        // low-memory / non-Tensor floor; never silently force that choice.
+        val approximateNativePeak = addBounded(
+            if (weights > Long.MAX_VALUE / 2L) Long.MAX_VALUE else weights * 2L,
+            twoGiB
+        )
         return maxOf(
             basic,
-            6L * GIB,
+            3L * GIB,
             approximateNativePeak,
             addBounded(androidLowMemoryThresholdBytes.coerceAtLeast(0L), twoGiB)
         )
@@ -77,12 +82,14 @@ object ModelLoadSafety {
     internal fun allowedLiteRtAttempts(
         fileBytes: Long, availableBytes: Long,
         androidLowMemory: Boolean, lowMemoryThresholdBytes: Long,
-        candidates: List<RuntimeHardware.Attempt>
+        candidates: List<RuntimeHardware.Attempt>,
+        explicitlyAcceptedTensorRisk: Boolean = false
     ): List<RuntimeHardware.Attempt> {
         if (androidLowMemory || insufficientAfterUnload(fileBytes, availableBytes))
             return emptyList()
-        val tensorAllowed = !insufficientForLiteRtModel(
-            fileBytes, availableBytes, true, false, lowMemoryThresholdBytes)
+        val tensorAllowed = explicitlyAcceptedTensorRisk ||
+            !insufficientForLiteRtModel(
+                fileBytes, availableBytes, true, false, lowMemoryThresholdBytes)
         return candidates.distinct().filter {
             it != RuntimeHardware.Attempt.GOOGLE_TENSOR || tensorAllowed
         }
