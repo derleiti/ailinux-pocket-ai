@@ -82,6 +82,7 @@ class ModelStore(private val context: Context) {
     fun download(
         address: String, displayName: String, sha256: String?,
         cancelled: AtomicBoolean, onVerifying: () -> Unit = {},
+        onNetworkEstimate: (Long) -> Unit = {},
         progress: (TransferProgress) -> Unit
     ): File {
         val url = URL(address)
@@ -187,6 +188,12 @@ class ModelStore(private val context: Context) {
                 validatorFile.delete()
             }
             val total = connection.contentLengthLong.let { if (it >= 0) offset + it else -1L }
+            if (code == HttpURLConnection.HTTP_OK) {
+                // Range/If-Range may have restarted the entire response. Correct
+                // the UIDT hint before reading any of its replacement bytes.
+                onNetworkEstimate(ModelTransferNetworkEstimate.forResume(total, 0L)
+                    .expectedDownloadBytes)
+            }
             if (total > 0) checkStorage((total - offset).coerceAtLeast(0))
             progress(TransferProgress(offset, total))
             var written = offset

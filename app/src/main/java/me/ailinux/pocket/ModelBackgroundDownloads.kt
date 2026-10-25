@@ -255,7 +255,9 @@ internal object BackgroundModelDownloads {
             .takeIf { it.isFile }?.length() ?: 0L
         val entry = ModelDownloadJournal.Entry(id, name, model.url, model.sha256,
             wifiOnly, "queued", done = initialBytes,
-            total = if (model.bytes > 0) model.bytes else previous?.total ?: -1L)
+            total = if (model.bytes > 0) model.bytes else
+                previous?.takeIf { it.url == model.url }?.total
+                    ?: ModelTransferNetworkEstimate.UNKNOWN)
         ModelDownloadJournal.write(context, entry)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -392,6 +394,15 @@ class ModelTransferJobService : JobService() {
     private val cancelled = ConcurrentHashMap<Int, AtomicBoolean>()
     private val stopped = ConcurrentHashMap.newKeySet<Int>()
 
+    private fun updateRemainingNetworkBytes(params: JobParameters, name: String) {
+        val entry = ModelDownloadJournal.read(this, name) ?: return
+        val partBytes = java.io.File(ModelStore(this).dir, name + ".part")
+            .takeIf { it.isFile }?.length() ?: 0L
+        val hint = ModelTransferNetworkEstimate.forResume(entry.total, partBytes)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+            updateEstimatedNetworkBytes(params, hint.expectedDownloadBytes, 0L)
+    }
+
     override fun onStartJob(params: JobParameters): Boolean {
         val name = params.extras.getString("name") ?: return false
         val existing = ModelDownloadJournal.read(this, name) ?: return false
@@ -402,6 +413,7 @@ class ModelTransferJobService : JobService() {
         val ready = existing.copy(state = "running", error = "", lastStopReason = -1)
         ModelDownloadJournal.write(this, ready)
         try {
+            updateRemainingNetworkBytes(params, name)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
                 setNotification(params, params.jobId, TransferNotification.build(this, ready),
                     JOB_END_NOTIFICATION_POLICY_REMOVE)
@@ -419,6 +431,11 @@ class ModelTransferJobService : JobService() {
                 var lastUpdate = 0L
                 ModelStore(applicationContext).download(
                     existing.url, name, existing.hash, flag,
+                    onNetworkEstimate = { bytes ->
+                        if (!flag.get() && Build.VERSION.SDK_INT >=
+                            Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+                            updateEstimatedNetworkBytes(params, bytes, 0L)
+                    },
                     onVerifying = {
                         ModelDownloadJournal.change(applicationContext, name) {
                             if (it.state == "running") it.copy(state = "verifying") else it
@@ -459,7 +476,10 @@ class ModelTransferJobService : JobService() {
                 if (latest != null && latest.state !in setOf("running", "queued"))
                     TransferNotification.update(applicationContext, latest, false)
                 cancelled.remove(params.jobId)
-                if (!stopped.contains(params.jobId)) jobFinished(params, reschedule)
+                if (!stopped.contains(params.jobId)) {
+                    if (reschedule) updateRemainingNetworkBytes(params, name)
+                    jobFinished(params, reschedule)
+                }
             }
         }
         return true
@@ -473,6 +493,7 @@ class ModelTransferJobService : JobService() {
         if (!paused) ModelDownloadJournal.change(this, name) {
             it.copy(state = "queued", lastStopReason = params.stopReason)
         }
+        if (!paused) updateRemainingNetworkBytes(params, name)
         return !paused
     }
 
