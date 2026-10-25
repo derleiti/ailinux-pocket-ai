@@ -53,6 +53,13 @@ object McpOnDemandDiscovery {
     }
 
 
+    /** Safe, credential-free reason why host planning cannot suggest a tool. */
+    enum class Rejection {
+        EXPLANATION_ONLY, NO_EXTERNAL_TASK, NO_CATALOG_MATCH,
+        AMBIGUOUS_TOOL, UNVERIFIED_READONLY, ARGUMENTS_UNAVAILABLE,
+        TOOL_DETAILS_UNAVAILABLE
+    }
+
     // The host knows only a small audited set of read-only contracts.
     // This selects a candidate name, NOT a permission to execute it.
     private fun intendedSafeTool(request: String): String? {
@@ -100,10 +107,19 @@ object McpOnDemandDiscovery {
         )
     }
 
-    fun propose(request: String, run: McpProgressiveBridge.Run): McpProgressiveBridge.RemoteCall? {
-        // Pure explanation is never an instruction to query a server.
-        if (McpRequestRouting.isExplanationOnly(request)) return null
-        if (!mentionsExternal.containsMatchIn(request)) return null
+    fun propose(
+        request: String,
+        run: McpProgressiveBridge.Run,
+        onRejected: (Rejection) -> Unit = {}
+    ): McpProgressiveBridge.RemoteCall? {
+        fun reject(why: Rejection): McpProgressiveBridge.RemoteCall? {
+            onRejected(why)
+            return null
+        }
+        if (McpRequestRouting.isExplanationOnly(request))
+            return reject(Rejection.EXPLANATION_ONLY)
+        if (!mentionsExternal.containsMatchIn(request))
+            return reject(Rejection.NO_EXTERNAL_TASK)
         val terms = words.findAll(request.lowercase(Locale.ROOT)).map { it.value }
             .filter { it !in stop && !it.all(Char::isDigit) }.distinct().take(10).toList()
         val namedAlternatives = explicitTool.findAll(request)
@@ -115,17 +131,22 @@ object McpOnDemandDiscovery {
             .distinct().take(2).toList()
         // An instruction mentioning two explicit tool alternatives is NOT
         // permission for the host to arbitrarily choose the first one.
-        if (namedAlternatives.size > 1) return null
+        if (namedAlternatives.size > 1)
+            return reject(Rejection.AMBIGUOUS_TOOL)
         val requestedName = namedAlternatives.singleOrNull()
             ?: intendedSafeTool(request)
         val query = requestedName ?: terms.joinToString(" ").take(120)
-        if (query.isBlank()) return null
+        if (query.isBlank()) return reject(Rejection.NO_CATALOG_MATCH)
         val response = run.search(query)
-        if (response.optBoolean("isError")) return null
-        val payload = response.optJSONArray("content")?.optJSONObject(0)?.optString("text") ?: return null
-        val matches = JSONObject(payload).optJSONArray("matches") ?: return null
+        if (response.optBoolean("isError"))
+            return reject(Rejection.NO_CATALOG_MATCH)
+        val payload = response.optJSONArray("content")?.optJSONObject(0)?.optString("text")
+            ?: return reject(Rejection.NO_CATALOG_MATCH)
+        val matches = JSONObject(payload).optJSONArray("matches")
+            ?: return reject(Rejection.NO_CATALOG_MATCH)
         val candidates = (0 until matches.length()).mapNotNull { matches.optJSONObject(it) }
-        if (candidates.isEmpty()) return null
+        if (candidates.isEmpty())
+            return reject(Rejection.NO_CATALOG_MATCH)
         // Explicit function name or unambiguous single result only.
         val chosen = when {
             requestedName != null -> {
@@ -156,9 +177,9 @@ object McpOnDemandDiscovery {
                 Regex("(?i)(?:^|[^a-z0-9_])" + escaped + "(?:$|[^a-z0-9_])")
                     .containsMatchIn(request)
             }.singleOrNull()
-        } ?: return null
+        } ?: return reject(Rejection.AMBIGUOUS_TOOL)
         val id = chosen.optString("tool_id")
-        val tool = run.tool(id)?.tool ?: return null
+        val tool = run.tool(id)?.tool ?: return reject(Rejection.NO_CATALOG_MATCH)
         // Host fallback never guesses a side-effecting tool, even when the
         // caller might later approve it. Native model calls stay available.
         // An unknown tool cannot be classified read-only by its name.
@@ -166,23 +187,30 @@ object McpOnDemandDiscovery {
         // native tool calls still support all permitted MCP tools.
         if (tool.name !in setOf("crawl", "status", "discord_connection_status",
                 "current_time", "models", "device_info") ||
-            !tool.declaresReadOnly) return null
+            !tool.declaresReadOnly)
+            return reject(Rejection.UNVERIFIED_READONLY)
         // Never guess mandatory parameters; allow a single HTTPS URL only for
         // a schema requiring exactly one URL-like string property.
         val schema = tool.schema
         val mandatory = schema.optJSONArray("required")
         val args = JSONObject()
         if (mandatory != null && mandatory.length() > 0) {
-            if (mandatory.length() != 1) return null
+            if (mandatory.length() != 1)
+                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
             val field = mandatory.optString(0)
-            if (field !in setOf("url","uri","target_url")) return null
-            val prop = schema.optJSONObject("properties")?.optJSONObject(field) ?: return null
-            if (prop.optString("type") != "string") return null
-            val url = webUrl.find(request)?.value?.trimEnd('.', ',', ';', ')', ']', '}') ?: return null
+            if (field !in setOf("url","uri","target_url"))
+                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+            val prop = schema.optJSONObject("properties")?.optJSONObject(field)
+                ?: return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+            if (prop.optString("type") != "string")
+                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+            val url = webUrl.find(request)?.value?.trimEnd('.', ',', ';', ')', ']', '}')
+                ?: return reject(Rejection.ARGUMENTS_UNAVAILABLE)
             args.put(field,url)
         }
         val detail = run.details(id)
-        if (detail.optBoolean("isError")) return null
+        if (detail.optBoolean("isError"))
+            return reject(Rejection.TOOL_DETAILS_UNAVAILABLE)
         return run.prepareCall(id,args.toString()).copy(hostFallback = true)
     }
 }

@@ -147,6 +147,31 @@ class McpOnDemandDiscoveryTest {
         assertEquals(0, run.remoteCalls)
     }
 
+    @Test fun autoHostPlanRejectsAmbiguousSourcesWithSafeDiagnosticReason() {
+        val tool = tool("status")
+        val state = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1", "p1", "https://example.test/1",
+                "TriForce Workspace", listOf(tool)),
+            McpProgressiveBridge.Source("s2", "p2", "https://example.test/2",
+                "TriForce DEV MCP", listOf(tool))
+        ))
+        var reason: McpOnDemandDiscovery.Rejection? = null
+        assertNull(McpOnDemandDiscovery.propose(
+            "Prüfe MCP TriForce Status", state) { reason = it })
+        assertEquals(McpOnDemandDiscovery.Rejection.AMBIGUOUS_TOOL, reason)
+        assertEquals(0, state.remoteCalls)
+    }
+
+    @Test fun autoHostPlanRejectsUnknownReadOnlyRiskWithoutDispatch() {
+        val tool = tool("status", annotations = JSONObject())
+        val state = run(listOf(tool))
+        var reason: McpOnDemandDiscovery.Rejection? = null
+        assertNull(McpOnDemandDiscovery.propose(
+            "Rufe MCP Status ab", state) { reason = it })
+        assertEquals(McpOnDemandDiscovery.Rejection.UNVERIFIED_READONLY, reason)
+        assertEquals(0, state.remoteCalls)
+    }
+
     @Test fun exactCrawlRequestCreatesOnlyApprovedCandidateNotExecution() {
         val schema = JSONObject("""{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}""")
         val run = run(listOf(tool("crawl", schema)))

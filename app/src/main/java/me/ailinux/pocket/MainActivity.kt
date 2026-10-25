@@ -2521,8 +2521,53 @@ class MainActivity : AppCompatActivity() {
         answer: ChatMessage,
         answerIndex: Int
     ): Boolean {
-        val plan = runCatching { McpOnDemandDiscovery.propose(request, run) }.getOrNull()
-            ?: return false
+        var blocked: McpOnDemandDiscovery.Rejection? = null
+        val plan = try {
+            McpOnDemandDiscovery.propose(request, run) { blocked = it }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (problem: Exception) {
+            val id = failure(PocketDiagnostics.Domain.MCP,
+                PocketDiagnostics.Step.HOST_FALLBACK, problem)
+            answer.content = "⚠️ AUTO-MCP-Planung fehlgeschlagen: " +
+                getString(R.string.diagnostics_error,
+                    PocketDiagnostics.publicError(problem), id) +
+                "\nKeine Serveraktion ausgeführt."
+            chatAdapter.notifyItemChanged(answerIndex)
+            return true
+        }
+        if (plan == null) {
+            val reason = blocked ?: McpOnDemandDiscovery.Rejection.NO_CATALOG_MATCH
+            val code = when (reason) {
+                McpOnDemandDiscovery.Rejection.AMBIGUOUS_TOOL ->
+                    PocketDiagnostics.ErrorCode.AMBIGUOUS_TOOL
+                McpOnDemandDiscovery.Rejection.UNVERIFIED_READONLY ->
+                    PocketDiagnostics.ErrorCode.UNVERIFIED_READONLY
+                McpOnDemandDiscovery.Rejection.ARGUMENTS_UNAVAILABLE ->
+                    PocketDiagnostics.ErrorCode.ARGUMENTS_UNAVAILABLE
+                else -> PocketDiagnostics.ErrorCode.NO_SAFE_MATCH
+            }
+            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.HOST_FALLBACK,
+                PocketDiagnostics.State.REJECTED, code = code)
+            answer.content = when (reason) {
+                McpOnDemandDiscovery.Rejection.AMBIGUOUS_TOOL ->
+                    "⚠️ AUTO-MCP: mehrere mögliche Werkzeuge oder Server. " +
+                        "Bitte Server und Werkzeug eindeutig nennen."
+                McpOnDemandDiscovery.Rejection.UNVERIFIED_READONLY ->
+                    "⚠️ AUTO-MCP: keine verifizierte lesende Werkzeugfreigabe " +
+                        "für den sicheren App-Fallback vorhanden."
+                McpOnDemandDiscovery.Rejection.ARGUMENTS_UNAVAILABLE ->
+                    "⚠️ AUTO-MCP: erforderliche Werkzeugparameter fehlen oder " +
+                        "können nicht sicher abgeleitet werden."
+                McpOnDemandDiscovery.Rejection.TOOL_DETAILS_UNAVAILABLE ->
+                    "⚠️ AUTO-MCP: Werkzeugdetails konnten nicht vollständig " +
+                        "und sicher geladen werden."
+                else -> "⚠️ AUTO-MCP: kein eindeutig passendes, geprüftes " +
+                    "Werkzeug für diesen Auftrag gefunden."
+            } + "\nKein tools/call ausgeführt. Diagnose: HOST_FALLBACK / " + code.name
+            chatAdapter.notifyItemChanged(answerIndex)
+            return true
+        }
         if (mcpAgent.current() != active) return false
         trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
             PocketDiagnostics.State.OK, tool = plan.tool.name)

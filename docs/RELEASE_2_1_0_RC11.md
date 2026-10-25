@@ -152,3 +152,16 @@ Additional RC11 corrections:
   LiteRT MCP binding and explain details errors using sanitized error codes.
 All such AUTO-MCP plans still demand a fresh on-device approval and real
 server receipt; a search result alone never counts as an action.
+
+## Why AUTO discovery did not proceed after SEARCH in RC10
+
+The RC10 event sequence SEARCH OK followed by PLAN INFO could previously hide
+why the host could not offer a safe action. RC11 now emits an explicit
+MCP/HOST_FALLBACK event and a safe user-facing explanation if native function
+calling stops after discovery and the host cannot continue. Typed stop
+categories include AMBIGUOUS_TOOL (duplicate tool names/server targets),
+UNVERIFIED_READONLY (missing verified readOnlyHint), ARGUMENTS_UNAVAILABLE,
+TOOL_DETAILS_UNAVAILABLE, and NO_SAFE_MATCH. No raw prompts, names, URLs,
+credentials or server results are stored in this diagnostic category.
+Only when the exact source, risk annotation, full schema and arguments can
+be verified does the app ask for a new per-call approval.
