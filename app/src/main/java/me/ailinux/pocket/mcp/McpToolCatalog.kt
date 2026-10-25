@@ -31,6 +31,10 @@ object McpToolCatalog {
             .replace(Regex("\\s+"), " ")
         if (text.length !in 3..250) return null
         explicit.matchEntire(text)?.let { return it.groupValues[1].trim() }
+        // All other /mcp slash commands belong to their dedicated parser.
+        // A query asking to "list Discord tools" must not accidentally
+        // bypass the quick tools/call path and return an inventory instead.
+        if (text.startsWith("/mcp ")) return null
         // A short explicit catalogue request must not become a generic
         // LLM conversation, even when AUTO-BRIDGE is active.
         if (text.matches(Regex("(?:mcp\\s+)?(?:tools?|werkzeuge?|funktionen?)\\s+(?:mcp)?")) ||

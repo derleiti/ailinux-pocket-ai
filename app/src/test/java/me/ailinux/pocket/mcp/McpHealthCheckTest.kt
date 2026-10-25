@@ -56,6 +56,24 @@ class McpHealthCheckTest {
             McpHealthCheck.requestedTarget("/mcp status triforce"))
     }
 
+    @Test fun explicitSearchSlashCommandsCannotBeStolenByLogOrInventoryMatchers() {
+        val commands = listOf(
+            "/mcp search suche TriForce Logs",
+            "/mcp code-search zeige die Discord MCP Tools",
+            "/mcp memory-search kontrolliere TriForce Logdateien",
+            "/mcp search liste Discord Tools"
+        )
+        for (command in commands) {
+            assertNull(command, McpHealthCheck.requestedTarget(command))
+            assertFalse(command, McpLogCheck.requested(command))
+            assertNull(command, McpToolCatalog.requestedFilter(command))
+            assertTrue(command,
+                McpQuickActions.requestedAction(command) is McpQuickActions.Selection.Request)
+        }
+        assertTrue(McpLogCheck.requested("/mcp logs triforce"))
+        assertEquals("discord", McpToolCatalog.requestedFilter("/mcp tools discord"))
+    }
+
     @Test fun routesTheExactUnrecognizedPixelRequestWithoutMcpKeyword() {
         val requests = listOf(
             "check triforce dev server status",
