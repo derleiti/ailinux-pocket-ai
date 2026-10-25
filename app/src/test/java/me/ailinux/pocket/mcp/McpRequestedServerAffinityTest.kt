@@ -45,6 +45,24 @@ class McpRequestedServerAffinityTest {
         return ids
     }
 
+    @Test fun actualRc15PixelAutoPromptMustNotReadGermanPrepositionAsToolName() {
+        val state = run()
+        val request = "Brumo, prüfe über AUTO-MCP den aktuellen TriForce Workspace " +
+            "Systemstatus. Suche das echte status-Werkzeug auf dem Workspace-Server, " +
+            "lade sein Schema und frage mich vor dem tools/call ausdrücklich um " +
+            "Freigabe. Keine erfundenen Serverantworten."
+        var rejection: McpOnDemandDiscovery.Rejection? = null
+        val proposal = McpOnDemandDiscovery.propose(request, state) { rejection = it }
+        assertNotNull("Real RC15 device: SEARCH showed s1/status but " +
+            "HOST_FALLBACK / NO_SAFE_MATCH. Rejection was " + rejection, proposal)
+        assertEquals("s1/status", proposal!!.toolId)
+        assertEquals("workspace", proposal.source.profileId)
+        assertEquals("{}", proposal.arguments.toString())
+        assertTrue(proposal.hostFallback)
+        assertEquals("A search/proposal is NEVER a network tools/call",
+            0, state.remoteCalls)
+    }
+
     @Test fun workspaceRequestPrioritizesWorkspaceEvenWhenModelSearchQueryIsJustStatus() {
         val run = run()
         val request = "Brumo, pruefe per AUTO-MCP den TriForce Workspace Systemstatus"
