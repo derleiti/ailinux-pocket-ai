@@ -1166,6 +1166,17 @@ class MainActivity : AppCompatActivity() {
         val initialCandidates = RuntimeHardware.forModelFile(
             file.name, RuntimeHardware.candidatesOnDevice()
         )
+        // Contradictory GPU/NPU hints and unsupported Tensor-only graphs
+        // must fail BEFORE busy state, confirmation, or native teardown.
+        try {
+            LiteRtBackendPreflight.requireCompatible(initialCandidates)
+        } catch (error: LiteRtBackendUnavailable) {
+            diagnosticTrace = PocketDiagnostics.newTrace()
+            failure(PocketDiagnostics.Domain.LITERT,
+                PocketDiagnostics.Step.MODEL_LOAD, error)
+            showError("LiteRT: kein kompatibler Backendpfad", error)
+            return
+        }
         val tensorMayBeUsed = RuntimeHardware.Attempt.GOOGLE_TENSOR in initialCandidates
         val tensorWarningFloor = ModelLoadSafety.minimumAvailableForLiteRtModel(
             file.length(), tensorMayBeUsed, memory.threshold)
@@ -1252,9 +1263,9 @@ class MainActivity : AppCompatActivity() {
                     val deviceCandidates = RuntimeHardware.forModelFile(
                         file.name, RuntimeHardware.candidatesOnDevice()
                     )
-                    require(deviceCandidates.isNotEmpty()) {
-                        "Dieses Modell hat auf dem Gerät keinen unterstützten LiteRT-Backendpfad."
-                    }
+                    // Keep a fail-closed second check in case capabilities
+                    // change between preflight and model initialization.
+                    LiteRtBackendPreflight.requireCompatible(deviceCandidates)
                     val safeCandidates = ModelLoadSafety.allowedLiteRtAttempts(
                         file.length(), currentMemory.availMem, currentMemory.lowMemory,
                         currentMemory.threshold, deviceCandidates
