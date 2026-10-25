@@ -2780,6 +2780,8 @@ class MainActivity : AppCompatActivity() {
 
         var turn = try {
             runtime.askMcp(request)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: IllegalArgumentException) {
             recoverNativeFailure()
             return
@@ -2966,6 +2968,8 @@ class MainActivity : AppCompatActivity() {
                                 e.message.orEmpty().take(320))
                             turn = try {
                                 runtime.toolFeedback(tool.name, error.toString())
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
                             } catch (_: IllegalArgumentException) {
                                 recoverNativeFailure()
                                 return
@@ -3069,6 +3073,8 @@ class MainActivity : AppCompatActivity() {
             else outcome.toString().take(12_000)
             turn = try {
                 runtime.toolFeedback(tool.name, boundedFeedback)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: IllegalArgumentException) {
                 recoverNativeFailure()
                 return
