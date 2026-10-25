@@ -2977,10 +2977,37 @@ class MainActivity : AppCompatActivity() {
                  else "Modell bitte neu laden."))
         }
 
-        var turn = LiteRtNativeResponseBoundary.call(
-            invokeNative = { runtime.askMcp(request) },
-            onInvalidNativeResponse = { recoverNativeFailure() }
-        ) ?: return
+        // Android reported a 12-minute LiteRT plan ending TIMEOUT without
+        // an MCP DISPATCH. Show one *soft* warning for a slow native planner,
+        // but never cancel JNI from the main thread, dispose the engine while
+        // it is running, or retry a possibly executed remote action.
+        val nativePlanStarted = SystemClock.elapsedRealtime()
+        val nativePlanTrace = diagnosticTrace
+        val slowPlanHandler = Handler(Looper.getMainLooper())
+        var initialNativePlanPending = true
+        val slowPlanNotice = Runnable {
+            val elapsed = SystemClock.elapsedRealtime() - nativePlanStarted
+            if (initialNativePlanPending && !isDestroyed &&
+                mcpAgent.current() == active &&
+                LiteRtSlowPlan.shouldWarn(nativePlanStarted,
+                    SystemClock.elapsedRealtime(), busy)) {
+                PocketDiagnostics.log(applicationContext, nativePlanTrace,
+                    PocketDiagnostics.Domain.LITERT,
+                    PocketDiagnostics.Step.MODEL_SLOW,
+                    PocketDiagnostics.State.INFO, durationMs = elapsed)
+                setStatus("● LITERT MCP · PLANUNG DAUERT LANGE · ■ ABBRECHEN")
+            }
+        }
+        slowPlanHandler.postDelayed(slowPlanNotice, LiteRtSlowPlan.NOTICE_AFTER_MS)
+        var turn = try {
+            LiteRtNativeResponseBoundary.call(
+                invokeNative = { runtime.askMcp(request) },
+                onInvalidNativeResponse = { recoverNativeFailure() }
+            )
+        } finally {
+            initialNativePlanPending = false
+            slowPlanHandler.removeCallbacks(slowPlanNotice)
+        } ?: return
         for (step in 0 until McpProgressiveBridge.MAX_STEPS) {
             check(mcpAgent.current() == active) {
                 "MCP-Konfiguration wurde während des LiteRT-Turns geändert."
