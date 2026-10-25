@@ -76,6 +76,23 @@ class LiteRtMcpProtocolTest {
                 "mcp_search_tools", """{"query":"status"}""", List(6) { oneTool }))
     }
 
+    @Test fun cancelledLiteRtTurnMustNotBeRecoveredAsNativeParserFailure() {
+        // Coroutine cancellation extends IllegalStateException on the JVM.
+        // A parser catch without this prior guard would swallow Stop/Home cancellation.
+        val stopped: Throwable = java.util.concurrent.CancellationException("user cancelled")
+        assertTrue(stopped is IllegalStateException)
+        val bridge = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+            .substringAfter("private suspend fun runLiteRtToolbridge(")
+            .substringBefore("private fun sendLiteRtMessage(")
+        val explicitRethrow = Regex(
+            """catch \(cancelled: CancellationException\)\s*\{\s*throw cancelled\s*\}\s*catch \(_: IllegalArgumentException\)"""
+        )
+        assertEquals("Every native ask/tool-feedback failure handler must preserve cancellation",
+            3, explicitRethrow.findAll(bridge).count())
+        assertEquals(3, Regex("""catch \(_: IllegalStateException\)""")
+            .findAll(bridge).count())
+    }
+
     @Test fun nativeParserFailureBeforeToolCallIsHandledForInitialAndFollowup() {
         val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
             .substringAfter("private suspend fun runLiteRtToolbridge(")
