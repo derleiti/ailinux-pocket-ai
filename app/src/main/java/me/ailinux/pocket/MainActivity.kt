@@ -276,11 +276,27 @@ class MainActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.urlButton).setOnClickListener { promptDirectUrl() }
         cancelDownload.setOnClickListener {
             val name = backgroundTransferName
-            if (name != null) {
+            if (name == null) { cancelTransfer.set(true); return@setOnClickListener }
+            val entry = ModelDownloadJournal.read(this, name) ?: return@setOnClickListener
+            val status = BackgroundModelDownloads.snapshot(this, entry)
+            if (status.canResume) {
+                if (status.requiresConfirmation) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Downloadjob neu einplanen?")
+                        .setMessage("Android verwaltet diesen Auftrag noch. " +
+                            "Nur den wartenden Job neu einplanen? Die vorhandene " +
+                            "Teildatei und ihr Validator bleiben erhalten.")
+                        .setNegativeButton("Abbrechen", null)
+                        .setPositiveButton("Neu einplanen") { _, _ ->
+                            resumeBackgroundDownload(name, true)
+                        }.show()
+                } else resumeBackgroundDownload(name, false)
+            } else {
                 BackgroundModelDownloads.pause(this, name)
                 toast("Download pausiert. Teil-Datei bleibt erhalten.")
                 updateBackgroundTransferUi()
-            } else cancelTransfer.set(true)
+                refreshLibrary()
+            }
         }
 
         sendButton.setOnClickListener {
@@ -853,6 +869,19 @@ class MainActivity : AppCompatActivity() {
             card.addView(content)
             modelsContainer.addView(card)
         }
+        val partNames = store.partials().map { it.name.removeSuffix(".part") }.toSet()
+        ModelDownloadJournal.all(this).filter {
+            it.state in setOf("paused", "failed") &&
+                it.name !in partNames && it.url.isNotBlank() &&
+                !File(store.dir, it.name).exists()
+        }.forEach { entry ->
+            val label = simpleLabel(BackgroundModelDownloads.snapshot(this, entry).label)
+            modelsContainer.addView(label)
+            val resume = smallButton("Download fortsetzen", false)
+            resume.isEnabled = !busy && !transferBusy
+            resume.setOnClickListener { resumeBackgroundDownload(entry.name) }
+            modelsContainer.addView(resume)
+        }
         store.partials().forEach { part ->
             val name = part.name.removeSuffix(".part")
             val journal = ModelDownloadJournal.read(this, name)
@@ -863,13 +892,15 @@ class MainActivity : AppCompatActivity() {
                 setPadding(dp(12), dp(12), dp(12), dp(12))
                 setBackgroundResource(R.drawable.bg_panel)
             }
-            val runningNow = journal?.state in setOf("queued", "running") ||
-                DownloadPresentation.isActivePartial(
+            val runningNow = journal?.state in setOf("running", "verifying") ||
+                (journal == null && DownloadPresentation.isActivePartial(
                     part.name, activeTransferName, transferBusy
-                )
-            val partialLabel = simpleLabel(DownloadPresentation.partialStatus(
-                name, part.length(), runningNow
-            ))
+                ))
+            val partialLabel = simpleLabel(
+                if (journal?.state == "queued") "↓ " +
+                    BackgroundModelDownloads.snapshot(this, journal).label
+                else DownloadPresentation.partialStatus(name, part.length(), runningNow)
+            )
             line.addView(partialLabel)
             if (runningNow) {
                 activePartialLabel = partialLabel
@@ -878,9 +909,10 @@ class MainActivity : AppCompatActivity() {
                     val resume = smallButton("Fortsetzen", false)
                     resume.isEnabled = !transferBusy
                     resume.setOnClickListener {
-                        startDownload(RemoteModel(
+                        if (journal != null) resumeBackgroundDownload(name)
+                        else startDownload(RemoteModel(
                             name, source, -1,
-                            journal?.hash ?: prefs.getString("pending_sha_" + name, null)
+                            prefs.getString("pending_sha_" + name, null)
                         ))
                     }
                     line.addView(resume)
@@ -3081,37 +3113,55 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun resumeBackgroundDownload(name: String, requeue: Boolean = false) {
+        try {
+            BackgroundModelDownloads.resume(this, name, requeue)
+            backgroundTransferName = name
+            activeTransferName = name
+            transferBusy = true
+            toast("Android-Downloadjob neu eingeplant; bestehende Teildatei bleibt erhalten.")
+            updateBackgroundTransferUi()
+            refreshLibrary()
+        } catch (error: Exception) {
+            showError("Download konnte nicht fortgesetzt werden", error)
+            updateBackgroundTransferUi()
+        }
+    }
+
     /** Display a persisted OS job state; do not cancel work on onStop(). */
     private fun updateBackgroundTransferUi() {
         val name = backgroundTransferName
             ?: BackgroundModelDownloads.latestActive(this)?.name ?: return
         val entry = ModelDownloadJournal.read(this, name) ?: return
-        if (entry.state in setOf("queued", "running")) {
+        val snapshot = BackgroundModelDownloads.snapshot(this, entry)
+        if (entry.state in setOf("queued", "running", "verifying", "paused", "failed")) {
             backgroundTransferName = name
             activeTransferName = name
-            transferBusy = true
-            setDownloadUi(
-                if (entry.state == "queued") "Download wartet auf Android/Netzwerk: " + name
-                else "Hintergrunddownload: " + name + " · " +
-                    ModelStore.displaySize(entry.done) +
-                    if (entry.total > 0) " / " + ModelStore.displaySize(entry.total) else "",
-                true
+            // A stale, *unscheduled* queue is recoverable, not an active
+            // download. An Android-held scheduled job remains an active task.
+            transferBusy = snapshot.active && !(
+                snapshot.canResume && !snapshot.requiresConfirmation
             )
+            setDownloadUi(snapshot.label, snapshot.active || snapshot.canResume)
+            cancelDownload.text = when {
+                snapshot.canResume && snapshot.requiresConfirmation -> "Job neu einplanen"
+                snapshot.canResume -> "Download fortsetzen"
+                entry.state == "verifying" -> "Dateiprüfung läuft"
+                else -> "Download pausieren"
+            }
+            cancelDownload.isEnabled = snapshot.canResume ||
+                entry.state in setOf("running", "queued")
+            downloadProgress.visibility = if (snapshot.active) View.VISIBLE else View.GONE
             downloadProgress.isIndeterminate = entry.total <= 0
             if (entry.total > 0) downloadProgress.progress =
                 ((entry.done * 100 / entry.total).coerceIn(0, 100)).toInt()
             return
         }
         if (name != backgroundTransferName) return
-        val message = when (entry.state) {
-            "complete" -> "✓ Modell installiert und geprüft: " + name
-            "paused" -> "⏸ Download pausiert: " + name
-            else -> "⚠ Download fehlgeschlagen: " + entry.error.take(100)
-        }
         backgroundTransferName = null
         activeTransferName = null
         transferBusy = false
-        setDownloadUi(message, false)
+        setDownloadUi(snapshot.label, false)
         if (entry.state == "complete") {
             prefs.edit().remove("pending_url_" + name).remove("pending_sha_" + name).apply()
         }
@@ -3415,6 +3465,17 @@ class MainActivity : AppCompatActivity() {
         val bindReport = "GGUF-MCP (nativer Prefill): " +
             lastMcpBindingReport.removePrefix("MCP-BINDUNG: ") +
             "\n" + liteRtBinding
+        val downloadReport = ModelDownloadJournal.all(applicationContext)
+            .sortedByDescending { it.updatedAtMs }
+            .take(4).joinToString("\n") { entry ->
+                val view = BackgroundModelDownloads.snapshot(this, entry)
+                "Job-ID " + entry.id + " · " + view.label +
+                    "\nJournal: " + entry.state +
+                    ", Versuche: " + entry.attempts +
+                    ", Stop-Reason-Code: " + entry.lastStopReason +
+                    ", wiederaufnehmbar: " + view.canResume +
+                    ", Bestätigung notwendig: " + view.requiresConfirmation
+            }.ifBlank { "Keine gespeicherten Modell-Downloads." }
         button.isEnabled = false
         button.text = "Analysiere Android-Tombstones …"
         lifecycleScope.launch {
@@ -3480,6 +3541,8 @@ class MainActivity : AppCompatActivity() {
                     } else entries.joinToString("\n\n---\n\n")
                     "ANDROID-PROZESSDIAGNOSE – normale Updates sind keine Abstürze; keine Übertragung\n\n" +
                         uiDelayReport + "\n\n" + bindReport +
+                        "\n\n--- MODELL-DOWNLOAD / JOBSCHEDULER ---\n" +
+                        downloadReport +
                         "\n\n---\n\n" + historical +
                         "\n\n--- MCP/MODELL-EVENTS ---\n\n" +
                         PocketDiagnostics.report(applicationContext).take(12_000)

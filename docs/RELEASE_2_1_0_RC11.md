@@ -165,3 +165,80 @@ TOOL_DETAILS_UNAVAILABLE, and NO_SAFE_MATCH. No raw prompts, names, URLs,
 credentials or server results are stored in this diagnostic category.
 Only when the exact source, risk annotation, full schema and arguments can
 be verified does the app ask for a new per-call approval.
+
+## P0 - persistent Android 17 model download waiting without progress
+
+Reproduced on the paired Android 17 Pixel in RC10: Model Library displays
+"Download wartet auf Android/Netzwerk: Qwen3_1.7B.litertlm" and no progress.
+The existing code preserved "queued" in a local journal but did not inspect
+JobScheduler reasons or distinguish an OS-held job from a dropped job.
+
+RC11 download changes:
+- API34+ Android UIDT pending reason from getPendingJobReason; all reasons on
+  API36+. Job presence and network constraints are checked separately.
+- Show **Wartet auf WLAN**, **Wartet auf Netzwerk**, Android device/policy
+  restrictions, insufficient storage, executing-but-unsynced job, or
+  **Android-Job verloren**. Never assert internet failure without evidence.
+- Stale queued/running/verifying journals with missing Android job are now
+  explicitly resumable by user action. An existing OS-held job is never
+  silently rescheduled; retry requires confirmation after an unexplained
+  long wait. Paused/failed downloads can be resumed even without .part.
+- Preserve the private partial file, HTTP Range validator, source URL and
+  expected hash. No automatic model file delete and no final-model overwrite.
+- Expose last job stop reason and the state (without endpoint/token) in the
+  user-copyable Android diagnostic report.
+- Mark file verification separately from transfer, include initial bytes at
+  resume, fail visibly on notification/worker initialization errors, and
+  respect cancellation during SHA-256 verification.
+- API33 WorkManager implementation remains; no Android-background policy
+  exemptions or unbounded wakelocks added.
+
+Release gates for this patch: unit/JVM regression tests, Android Lint,
+assemble ARM64, APK metadata/signature matching RC10, peer review and CI.
+**Real Android device download resume/completion, screen-off and network
+interruption are NOT implied by successful JVM tests.** Explicitly verify
+on the paired Pixel after the RC11 candidate update and keep GitHub issue
+#27 open until actual Download -> Verification -> Installed with a verified
+full-file result has been observed.
+
+The observed RC10 MCP logs in the same time window do not include
+JobScheduler/network download events, and a user-initiated termination
+or Spark-X GPU low-memory event is not a Qwen download failure.
+
+
+## Android 17: Qwen model download waiting for Android/Network (P0)
+
+Real RC10 Pixel report showed Download wartet auf Android/Netzwerk for
+Qwen3_1.7B.litertlm without progress. The cause was NOT contained
+in the exported process diagnostics: those logs had model/MCP/exit events
+but no JobScheduler pending reason, download-HTTP status or worker lifecycle.
+Do not misclassify OS app updates as crashes or model errors as transfer errors.
+
+Changes on the recovery branch:
+- State-specific Android UIDT pending reasons (API 34+); full reason set on
+  API 36+; distinguish Wi-Fi, connectivity, storage, OS restriction,
+  optimization, executing and missing scheduled job.
+- App-private journal records update timestamps, OS stop-reason code, byte
+  progress and model verification separately, surfaced in process diagnostics.
+- User can explicitly resume paused/failed/lost queued/stale running jobs,
+  even before the first partial byte has arrived; a scheduled-but-waiting
+  requeue requires a confirmation. No background auto-loop or duplicated call.
+- Preserve existing part bytes and Range validators, resume with If-Range
+  when safe; a full-but-unpublished part with HTTP 416 can only finish
+  after exact length and independently verified SHA-256 or an exact current
+  ETag/Last-Modified validator.
+- Completed models are published atomically, without replacing a previously
+  installed file. Actual installed state follows header/hash validation.
+- Pause and cancel during verification leave a reusable partial, and clear
+  failure messages distinguish scheduling and HTTP failures.
+- Android 13 WorkManager fallback stays in place; Android 14+ uses UIDT with
+  bounded exponential scheduler backoff. These cannot override force-stop,
+  Doze, or OS battery/network constraints.
+- Tests cover job loss, network and WLAN constraints, restrictions,
+  temporary stopped jobs, verification/cancel, 416 header parsing, HTTP
+  safety invariants and in-place resume contract.
+
+Physical acceptance not yet verified: install RC11 over RC10, preserve
+model/chat state, inspect JobScheduler pending reasons and successfully
+transfer/verify the real Qwen model with screen locked and app backgrounded.
+Even a green Android build does not prove this large download finishes.
