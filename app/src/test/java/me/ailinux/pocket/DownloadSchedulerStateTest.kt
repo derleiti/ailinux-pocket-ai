@@ -10,10 +10,12 @@ class DownloadSchedulerStateTest {
         reasons: Set<DownloadSchedulerState.Reason> = emptySet(),
         wifiOnly: Boolean = false,
         age: Long = 30_000L,
-        done: Long = 0L
+        done: Long = 0L,
+        completedFilePresent: Boolean? = null
     ) = DownloadSchedulerState.describe(
         "Qwen3_1.7B.litertlm", state, wifiOnly,
-        hasJob, reasons, age, done, 2_400_000_000L, ""
+        hasJob, reasons, age, done, 2_400_000_000L, "",
+        completedFilePresent = completedFilePresent
     )
 
     @Test fun missingAndroidJobMustOfferExplicitResumeEvenBeforePartFileExists() {
@@ -93,7 +95,36 @@ class DownloadSchedulerStateTest {
     @Test fun verifyingAndCompleteAreNotInstalledPrematurely() {
         assertTrue(status(state = "verifying").label.contains("Prüfung"))
         assertFalse(status(state = "verifying").canResume)
-        assertTrue(status(state = "complete").label.contains("Installiert"))
+        val historical = status(state = "complete")
+        assertTrue(historical.label.contains("Dateibestand ungeprüft"))
+        assertFalse(historical.label.contains("Installiert"))
+        assertFalse(historical.canResume)
+        val present = status(state = "complete", completedFilePresent = true)
+        assertTrue(present.label.contains("Modelldatei vorhanden"))
+        assertTrue(present.label.contains("kein erneuter SHA-256-Test"))
+        val missing = status(state = "complete", completedFilePresent = false)
+        assertTrue(missing.label.contains("fehlt"))
+        assertFalse(missing.canResume)
+        assertFalse(missing.active)
+    }
+
+    @Test fun completedJournalChecksRealFileAndExpectedBytesWithoutDeleting() {
+        val dir = java.nio.file.Files.createTempDirectory("pocket-completed-").toFile()
+        try {
+            val name = "Qwen3_1.7B.litertlm"
+            val file = java.io.File(dir, name)
+            assertFalse(CompletedModelEvidence.present(dir, name, 64))
+            file.writeBytes(ByteArray(64))
+            assertTrue(CompletedModelEvidence.present(dir, name, 64))
+            assertFalse(CompletedModelEvidence.present(dir, name, 65))
+            assertTrue(CompletedModelEvidence.present(dir, name, 0))
+            assertFalse(CompletedModelEvidence.present(dir, "../Qwen3_1.7B.litertlm", 64))
+            assertFalse(CompletedModelEvidence.present(dir, "not-a-model.txt", 64))
+            assertTrue(file.exists())
+        } finally {
+            dir.listFiles()?.forEach { it.delete() }
+            dir.delete()
+        }
     }
 
     @Test fun failedJobOffersExplicitRetry() {
