@@ -15,6 +15,36 @@ class McpOnDemandDiscoveryTest {
         annotations: JSONObject = JSONObject().put("readOnlyHint", true)
     ) = McpTool(name, "Tool for $name", schema, annotations)
 
+    @Test fun autoModeCanPlanNamedReadOnlyToolAmong172WithoutSendingTheCatalog() {
+        val tri = (0 until 89).map {
+            tool("ailinux_component_$it")
+        } + tool("status")
+        val discord = (0 until 49).map {
+            tool("discord_feature_$it")
+        } + tool("discord_connection_status")
+        val workspace = (0 until 32).map {
+            tool("workspace_item_$it")
+        }
+        val state = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1", "tri", "https://example.test/mcp",
+                "TriForce", tri),
+            McpProgressiveBridge.Source("s2", "discord", "https://example.test/discord",
+                "Discord", discord),
+            McpProgressiveBridge.Source("s3", "workspace", "https://example.test/ws",
+                "Workspace", workspace)
+        ))
+        assertEquals(172, state.totalTools)
+        val triPlan = McpOnDemandDiscovery.propose(
+            "Brumo, frage mit MCP den TriForce-Systemzustand ab", state)
+        assertEquals("s1/status", triPlan?.toolId)
+        val discordPlan = McpOnDemandDiscovery.propose(
+            "Prüfe per MCP den Discord Verbindungsstatus", state)
+        assertEquals("s2/discord_connection_status", discordPlan?.toolId)
+        assertEquals(0, state.remoteCalls)
+        assertNull(McpOnDemandDiscovery.propose(
+            "Erkläre mir den Discord Verbindungsstatus", state))
+    }
+
     @Test fun exactCrawlRequestCreatesOnlyApprovedCandidateNotExecution() {
         val schema = JSONObject("""{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}""")
         val run = run(listOf(tool("crawl", schema)))

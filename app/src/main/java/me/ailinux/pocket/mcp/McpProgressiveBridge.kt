@@ -24,6 +24,46 @@ object McpProgressiveBridge {
     const val MAX_CATALOG_TOOLS_PER_SERVER = 4000
     const val MAX_CATALOG_PAGES = 80
     const val CATALOG_LIFETIME_MS = 10 * 60 * 1000L
+    /** Metadata-only fields have no validation semantics in our schema subset. */
+    private val schemaMetadata = setOf(
+        "description", "title", "examples", "default", "deprecated",
+        "readOnly", "writeOnly", "\$schema", "\$id", "x-mcp-header"
+    )
+
+    /**
+     * Token-aware preview: remove descriptions and other non-assertion
+     * metadata while retaining EVERY validation constraint (required,
+     * properties, types, enums, bounds, additionalProperties, nested items).
+     * The original full schema remains on the host and MUST be revalidated.
+     */
+    private fun compactSchema(schema: JSONObject): JSONObject =
+        JSONObject().also { out ->
+            val keys = schema.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                if (key in schemaMetadata) continue
+                val original = schema.opt(key)
+                when (key) {
+                    // The names inside "properties" are USER PARAMETER NAMES.
+                    // A field named "title" or "description" is NOT metadata.
+                    "properties" -> {
+                        val properties = schema.getJSONObject(key)
+                        val mapped = JSONObject()
+                        val names = properties.keys()
+                        while (names.hasNext()) {
+                            val name = names.next()
+                            mapped.put(name, compactSchema(properties.getJSONObject(name)))
+                        }
+                        out.put(key, mapped)
+                    }
+                    // Only array item schemas are schema nodes. Never mutate
+                    // enum or const literal JSON objects (validation values).
+                    "items" -> out.put(key, compactSchema(schema.getJSONObject(key)))
+                    else -> out.put(key, original)
+                }
+            }
+        }
+
     private val toolName = Regex("^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
     private val word = Regex("[\\p{L}\\p{N}_-]{2,}")
     private val equivalents = mapOf(
@@ -35,7 +75,11 @@ object McpProgressiveBridge {
         "nachrichten" to "message", "logs" to "logs", "protokolle" to "logs",
         "suche" to "search", "suchen" to "search", "finden" to "search",
         "konto" to "account", "kanal" to "channel", "sprachchat" to "voice",
-        "status" to "status", "discord" to "discord", "triforce" to "triforce"
+        "status" to "status", "discord" to "discord", "triforce" to "triforce",
+        "systemstatus" to "status", "systemzustand" to "status",
+        "serverzustand" to "status", "verbindungsstatus" to "connection",
+        "healthcheck" to "status", "verbindungsprüfung" to "connection",
+        "verbindungspruefung" to "connection"
     )
 
     data class Source(
@@ -166,9 +210,24 @@ object McpProgressiveBridge {
                     "prüfen", "pruefe", "pruefen", "liste", "list",
                     "test", "teste", "werkzeuge", "werkzeug", "funktionen")
             }
-            val terms = if (generalOverview) emptyList() else rawTerms.flatMap {
+            // Compound German words and local MCP tool identifiers must
+            // work even when the model sends "TriForce-Systemzustand" or
+            // "Discord_Verbindungsstatus" as ONE search term. Keep the
+            // full token for exact matches and also expand its components.
+            val expanded = rawTerms.flatMap { raw ->
+                listOf(raw) + raw.split('-', '_').filter { it.length >= 3 }
+            }
+            val terms = if (generalOverview) emptyList() else expanded.flatMap {
                 listOf(it, equivalents[it] ?: it)
-            }.distinct().filter { it !in setOf("mcp", "tools", "tool", "server") }
+            }.distinct().filter {
+                it !in setOf("mcp", "tools", "tool", "server")
+            }
+            // A provider mentioned unambiguously in the query is more
+            // important than a generic name such as "status" on another
+            // server. If two providers are named, abstain from preference.
+            val sourceHint = expanded.filter {
+                it in setOf("triforce", "discord", "workspace")
+            }.distinct().singleOrNull()
             val ranked = toolIndex.entries.mapNotNull { (id, call) ->
                 val name = call.tool.name.lowercase(Locale.ROOT)
                 val title = call.source.title.lowercase(Locale.ROOT)
@@ -177,7 +236,11 @@ object McpProgressiveBridge {
                     (if (name.contains(term)) 10 else 0) +
                     (if (title.contains(term)) 4 else 0) +
                     (if (description.contains(term)) 2 else 0)
-                } + if (q.contains(name, ignoreCase = true)) 20 else 0
+                } + (if (name in terms) 22 else 0) +
+                    (if (sourceHint != null && title.contains(sourceHint)) 12 else 0) +
+                    (if (Regex("(^|[^\\p{L}\\p{N}_])" +
+                        Regex.escape(name) + "($|[^\\p{L}\\p{N}_])",
+                        RegexOption.IGNORE_CASE).containsMatchIn(q)) 20 else 0)
                 if (terms.isNotEmpty() && score == 0) null else Triple(id, call, score)
             }.sortedWith(compareByDescending<Triple<String, RemoteCall, Int>> { it.third }
                 .thenBy { it.first })
@@ -203,6 +266,16 @@ object McpProgressiveBridge {
                 }
                 result
             } else ranked.take(limit)
+            // This is a non-executing rank hint from the real catalog only.
+            // Never advertise a guess if two server tools are similarly
+            // relevant. The model must still fetch DETAILS before preparing
+            // tools/call, and the host validates the full source and schema.
+            val top = ranked.firstOrNull()
+            val next = ranked.getOrNull(1)
+            val suggestedId = if (!generalOverview && top != null &&
+                top.third >= 12 && (next == null || top.third - next.third >= 8) &&
+                hits.any { it.first == top.first }
+            ) top.first else null
             val matches = JSONArray()
             for ((id, call, _) in hits) {
                 returned.add(id)
@@ -217,30 +290,55 @@ object McpProgressiveBridge {
                 .put("total_tools", toolIndex.size)
                 .put("connected_servers", sources.size)
                 .put("matches", matches)
-                .put("next_step", "Nutze mcp_get_tool_details mit exakter tool_id " +
-                    "oder fasse diese Liste ohne behauptete Toolausführung zusammen."))
+                .put("suggested_tool_id", suggestedId ?: JSONObject.NULL)
+                .put("suggestion_is_not_authorization", true)
+                .put("next_step", "Lade mcp_get_tool_details mit exakter lokaler tool_id " +
+                    "(optional suggested_tool_id falls eindeutig). " +
+                    "Suche und Ranking sind KEIN tools/call und keine Freigabe."))
         }
 
         fun details(id: String): JSONObject {
             enforceFresh()
-            require(id in returned) { "tool_id wurde noch nicht durch MCP-Suche angezeigt" }
-            val current = toolIndex[id] ?: error("Unbekannte tool_id")
-            val schema = current.tool.schema.toString()
-            require(schema.length <= 950) {
-                "Schema zu groß für lokales 4B-Modell; Tool manuell verwenden"
+            val requested = id.trim()
+            // Small 2B/4B models sometimes drop the local s1/ prefix after
+            // search. Allow only a UNIQUE exact tool name from the IDs actually
+            // returned in this run. A wrong server prefix must NOT redirect.
+            val canonical = when {
+                requested in returned -> requested
+                '/' !in requested -> returned.filter {
+                    it.substringAfter('/') == requested
+                }.singleOrNull()
+                else -> null
             }
-            // Grant the detail gate only when the complete schema could
-            // actually be returned to the local model.
-            detailed.add(id)
+            require(canonical != null) {
+                "tool_id wurde nicht eindeutig durch MCP-Suche angezeigt; " +
+                    "verwende exakte tool_id inkl. s1/ bis s4/ aus mcp_search_tools"
+            }
+            val current = toolIndex[canonical] ?: error("Unbekannte tool_id")
+            val full = current.tool.schema
+            val preview = compactSchema(full)
+            require(preview.toString().length <= 950) {
+                "Schema zu groß für lokales 4B-Modell, auch ohne Beschreibungen; " +
+                    "Tool manuell verwenden"
+            }
+            // Only set the detail gate if a complete constraint-preserving
+            // model-visible preview was actually possible.
+            detailed.add(canonical)
             return localResult(JSONObject()
                 .put("origin", "Pocket AI: echte, noch nicht ausgeführte MCP-Tooldefinition")
-                .put("tool_id", id)
+                .put("tool_id", canonical)
+                .put("id_namespace", "local")
+                .put("server", clean(current.source.title, 48))
                 .put("description", clean(current.tool.description, 145))
-                .put("inputSchema", current.tool.schema)
+                .put("inputSchema", preview)
+                .put("inputSchema_compacted", preview.toString() != full.toString())
+                .put("original_schema_bytes",
+                    full.toString().toByteArray(Charsets.UTF_8).size)
                 .put("readOnlyHint", current.tool.declaresReadOnly)
                 .put("risk_hint_is_not_authorization", true)
-                .put("next_step", "mcp_call_tool(tool_id, arguments_json als JSON-Text). " +
-                    "Die App fragt vor dem Aufruf um Freigabe."))
+                .put("next_step", "Für echtes tools/call nutze mcp_call_tool " +
+                    "mit der hier genannten exakten tool_id und validiertem JSON. " +
+                    "Die App prüft das vollständige Originalschema und fragt um Freigabe."))
         }
 
         /** Fail-closed actual tool-plan; callTool is NEVER invoked by this class. */

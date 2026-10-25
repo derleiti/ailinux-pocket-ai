@@ -63,3 +63,47 @@ and signing checks must run on the exact merged/tagged commit.
 Known outstanding issues: background inference, fully translated UI/RTL,
 large-scale model index and complete Tensor G5 model compatibility matrix.
 These are not claimed fixed in RC11.
+
+## AUTO-MCP discovery and diagnostics improvements from live system trace
+
+The user-provided RC10 Android system report recorded 172 tools across three
+MCP servers and the following incomplete local sequence:
+MCP SEARCH OK -> MCP DETAILS FAIL -> LITERT PLAN INFO. No tools/call or server
+receipt occurred in that trace. This is a local discovery/schema issue, not
+evidence of a remote MCP outage or LiteRT OOM.
+
+The RC11 auto-bridge now:
+
+- Normalizes German compound queries like TriForce-Systemzustand and
+  Discord-Verbindungsstatus, splitting identifier separators and applying
+  bounded locale-independent synonyms.
+- Gives exact tool-name matches and explicitly named source providers
+  priority; no accidental substring boost for status inside
+  Verbindungsstatus. The index was tested with 172 synthetic tools over
+  TriForce, Discord and Workspace. Ambiguous matches yield no single
+  recommended ID.
+- Returns suggested_tool_id only for a unique high-confidence genuine
+  search hit, explicitly marked NOT an authorization. Search always returns
+  at most six summaries, never all 172 schemas.
+- Allows a uniquely resolved, previously searched unprefixed tool name
+  in local DETAILS (e.g. status -> s1/status), but CALL still requires the
+  exact local namespaced ID and prior details validation. Wrong server prefixes
+  or name collisions fail closed.
+- Compacts long schema descriptions and other metadata WITHOUT discarding
+  required/enum/const/nested validation constraints or a user parameter
+  coincidentally named title/description/default. Full original schema
+  remains on the host and is revalidated before dispatch.
+- Rejects genuinely oversized validation schemas rather than silently
+  truncating assertions; exposes CATALOG_EXPIRED, SCHEMA_TOO_LARGE and
+  NOT_FOUND diagnostics. A model that omits tools/call records MODEL_TOOL_MISSING.
+- Makes the process diagnostic explicitly distinguish native GGUF prefill
+  from active LiteRT MCP sessions, and includes the most recent events first.
+
+All these are source/test-backed improvements, NOT a substitute for live
+RC11 AUTO-MCP testing on the paired Android device. Required tests:
+(1) use the same 3-server AUTO selection with ~172 tools; (2) ask for
+TriForce system status twice; (3) search and view details for a Discord tool;
+(4) deny one action and confirm no dispatch; (5) approve a read-only action
+and confirm DISPATCH -> SERVER_RESULT; (6) inspect diagnostic error categories
+when the model proposes a wrong ID or a complex schema. Do not treat tools/list
+or DETAILS success as a remote tool call.

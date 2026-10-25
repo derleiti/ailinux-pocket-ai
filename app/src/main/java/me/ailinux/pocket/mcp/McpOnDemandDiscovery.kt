@@ -26,9 +26,9 @@ object McpOnDemandDiscovery {
             Regex("\\b(?:crawl|crawle|crawlen)\\b").containsMatchIn(lower) &&
                 webUrl.containsMatchIn(request) -> "crawl"
             Regex("\\bdiscord\\b").containsMatchIn(lower) &&
-                Regex("\\b(?:status|verbindung|connection)\\b")
+                Regex("\\b(?:status|verbindung|verbindungsstatus|connection|connectionstatus)\\b")
                     .containsMatchIn(lower) -> "discord_connection_status"
-            Regex("\\b(?:status|systemstatus|serverzustand)\\b")
+            Regex("\\b(?:status|systemstatus|systemzustand|serverstatus|serverzustand)\\b")
                 .containsMatchIn(lower) &&
                 Regex("\\b(?:mcp|triforce|tri-force|ailinux|server)\\b")
                     .containsMatchIn(lower) -> "status"

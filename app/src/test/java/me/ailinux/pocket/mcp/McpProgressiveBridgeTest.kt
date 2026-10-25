@@ -102,7 +102,52 @@ class McpProgressiveBridgeTest {
         assertTrue(ids.any { it.startsWith("s1/") })
         assertTrue(ids.any { it.startsWith("s2/") })
         assertFalse(r.toString().contains("server_log_cleanup"))
+        assertTrue(r.isNull("suggested_tool_id"))
         assertTrue(r.getString("next_step").contains("mcp_get_tool_details"))
+    }
+
+    @Test fun largeMultiServerCatalogFindsExactStatusAndDiscordToolsAcrossLanguages() {
+        val statusTool = McpTool("status", "Gesamtstatus des TriForce Systems",
+            JSONObject().put("type", "object"), JSONObject().put("readOnlyHint", true))
+        val triTools = (0 until 89).map {
+            McpTool("ailinux_component_$it", "AILinux service component data",
+                JSONObject().put("type", "object"))
+        } + statusTool
+        val discordTools = (0 until 49).map {
+            McpTool("discord_feature_$it", "Discord tool list", JSONObject().put("type", "object"))
+        } + McpTool("discord_connection_status", "Discord OAuth Verbindung prüfen",
+            JSONObject().put("type", "object"))
+        val workspaceTools = (0 until 32).map {
+            McpTool("workspace_item_$it", "Workspace index entry",
+                JSONObject().put("type", "object"))
+        }
+        val state = McpProgressiveBridge.Run(listOf(
+            triForce().copy(tools = triTools),
+            discord().copy(tools = discordTools),
+            McpProgressiveBridge.Source("s3", "workspace", "https://example.test/mcp",
+                "Workspace", workspaceTools)
+        ))
+        assertEquals(172, state.totalTools)
+        val checks = listOf(
+            "TriForce-Systemzustand abfragen" to "s1/status",
+            "Prüfe den AILinux Systemstatus" to "s1/status",
+            "Pruefe Discord Verbindungsstatus" to "s2/discord_connection_status",
+            "Discord connection check" to "s2/discord_connection_status"
+        )
+        for ((query, expected) in checks) {
+            val result = report(state.search(query, 5))
+            val list = result.getJSONArray("matches")
+            assertTrue("Query '$query' missed $expected", (0 until list.length()).any {
+                list.getJSONObject(it).getString("tool_id") == expected
+            })
+            assertEquals("Tool selection must remain an authentic catalog ID", 172,
+                result.getInt("total_tools"))
+            assertEquals("Unambiguous rank hint for query: " + query,
+                expected, result.optString("suggested_tool_id", "missing"))
+            assertTrue(result.getBoolean("suggestion_is_not_authorization"))
+        }
+        // Search snapshots are not tool execution.
+        assertEquals(0, state.remoteCalls)
     }
 
     @Test fun userVisibleSearchResultShowsCompleteNamesWithoutTruncatedJson() {
@@ -168,8 +213,10 @@ class McpProgressiveBridgeTest {
         assertThrows(IllegalArgumentException::class.java) {
             state.prepareCall("s2/guild_info", "{}")
         }
-        val matches = report(state.search("guild_info", 5)).getJSONArray("matches")
+        val searchResult = report(state.search("guild_info", 5))
+        val matches = searchResult.getJSONArray("matches")
         assertEquals(2, matches.length())
+        assertTrue(searchResult.isNull("suggested_tool_id"))
         state.details("s2/guild_info")
         assertThrows(IllegalArgumentException::class.java) {
             state.prepareCall("s2/guild_info", "{}")
@@ -214,11 +261,98 @@ class McpProgressiveBridgeTest {
         }
     }
 
+    @Test fun largeDescriptionsDoNotHideSafeToolParametersFromSmallModels() {
+        val schema = JSONObject().put("type", "object")
+            .put("properties", JSONObject().put("query", JSONObject()
+                .put("type", "string").put("description", "x".repeat(1500))
+                .put("minLength", 4)))
+            .put("required", JSONArray().put("query"))
+            .put("additionalProperties", false)
+        val state = McpProgressiveBridge.Run(listOf(
+            triForce().copy(tools = listOf(McpTool("query_status", "Search status", schema)))))
+        state.search("query_status")
+        val compact = report(state.details("s1/query_status"))
+        assertEquals("s1/query_status", compact.getString("tool_id"))
+        assertTrue(compact.getBoolean("inputSchema_compacted"))
+        assertTrue(compact.getInt("original_schema_bytes") > 950)
+        val preview = compact.getJSONObject("inputSchema")
+        val field = preview.getJSONObject("properties").getJSONObject("query")
+        assertFalse(field.has("description"))
+        assertEquals(4, field.getInt("minLength"))
+        assertEquals("query", preview.getJSONArray("required").getString(0))
+        assertFalse(preview.getBoolean("additionalProperties"))
+        assertThrows(IllegalArgumentException::class.java) {
+            state.prepareCall("s1/query_status", "{}")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.prepareCall("s1/query_status", """{"query":"x"}""")
+        }
+        val plan = state.prepareCall("s1/query_status", """{"query":"valid"}""")
+        assertEquals("valid", plan.arguments.getString("query"))
+    }
+
+    @Test fun compactSchemaNeverDropsUserPropertiesCalledTitleOrDescription() {
+        val nested = JSONObject().put("type", "object")
+            .put("properties", JSONObject().put("description", JSONObject()
+                .put("type", "string").put("description", "long metadata ".repeat(100))))
+            .put("required", JSONArray().put("description"))
+        val schema = JSONObject().put("type", "object")
+            .put("properties", JSONObject()
+                .put("title", JSONObject().put("type","string")
+                    .put("description", "long title metadata ".repeat(100)))
+                .put("description", JSONObject().put("type","string"))
+                .put("default", JSONObject().put("type","boolean"))
+                .put("data", nested))
+            .put("required", JSONArray().put("title").put("description").put("data"))
+            .put("additionalProperties", false)
+        val state = McpProgressiveBridge.Run(listOf(
+            triForce().copy(tools = listOf(McpTool("submit_data","Read data",schema)))))
+        state.search("submit_data")
+        val detail = report(state.details("s1/submit_data"))
+        val props = detail.getJSONObject("inputSchema").getJSONObject("properties")
+        assertTrue(props.has("title"))
+        assertTrue(props.has("description"))
+        assertTrue(props.has("default"))
+        assertTrue(props.has("data"))
+        assertTrue(props.getJSONObject("data")
+            .getJSONObject("properties").has("description"))
+        assertThrows(IllegalArgumentException::class.java) {
+            state.prepareCall("s1/submit_data",
+                """{"title":"ok","description":"ok","data":{}}""")
+        }
+    }
+
+    @Test fun uniqueNameOnlyDetailsResolveToSearchedCanonicalLocalId() {
+        val state = run()
+        state.search("status", 6)
+        val details = report(state.details("status"))
+        assertEquals("s1/status", details.getString("tool_id"))
+        assertEquals("local", details.getString("id_namespace"))
+        assertThrows(IllegalArgumentException::class.java) {
+            state.prepareCall("status", "{}")
+        }
+        assertEquals("s1/status", state.prepareCall("s1/status", "{}").toolId)
+    }
+
+    @Test fun ambiguousNameOrInventedServerPrefixNeverRedirectsDetails() {
+        val state = run()
+        state.search("guild_info", 6)
+        assertThrows(IllegalArgumentException::class.java) { state.details("guild_info") }
+        assertThrows(IllegalArgumentException::class.java) {
+            state.details("s4/guild_info")
+        }
+        assertEquals("s2/guild_info",
+            report(state.details("s2/guild_info")).getString("tool_id"))
+    }
+
     @Test fun oversizedSchemasAreNeverMarkedDetailedForExecution() {
-        val large = McpTool("huge_tool", "Large schema", JSONObject()
+        val hugeEnum = JSONArray().apply {
+            repeat(140) { put("unique-value-number-" + it.toString().padStart(3, '0')) }
+        }
+        val large = McpTool("huge_tool", "Huge validation enum", JSONObject()
             .put("type", "object")
             .put("properties", JSONObject().put("query", JSONObject()
-                .put("type", "string").put("description", "x".repeat(1100)))))
+                .put("type", "string").put("enum", hugeEnum))))
         val source = triForce().copy(tools = listOf(large))
         val state = McpProgressiveBridge.Run(listOf(source))
         assertEquals(1, state.totalTools)
