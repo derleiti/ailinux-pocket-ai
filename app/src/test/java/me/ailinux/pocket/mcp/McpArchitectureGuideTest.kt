@@ -11,13 +11,11 @@ class McpArchitectureGuideTest {
             "Wie würdest du einem Qwen-0.8B Modell 172 MCP Tools auf 3 Servern beibringen?",
             "Wie implementiere ich Progressive-Disclosure für MCP-Werkzeuge auf Android?",
             "How would you teach a small Android model to use MCP tools across 3 servers?",
-fix/pocket-rc18-mcp-architecture-guide-20261025
-            "Erkläre die Architektur zum Einbinden von MCP-Tools in eine kleine Offline-KI."
-
             "Erkläre die Architektur zum Einbinden von MCP-Tools in eine kleine Offline-KI.",
             "Erkläre mir MCP, ohne externe Werkzeuge zu benutzen.",
-            "Explain MCP without invoking external tools."
-main
+            "Explain MCP without invoking external tools.",
+            "How do I get started with MCP integration?",
+            "How do I create an MCP integration?"
         )) {
             assertTrue("conceptual routing: $request", McpArchitectureGuide.applies(request))
             assertFalse("no native MCP agent for app architecture: $request",
@@ -33,16 +31,17 @@ main
             "Brumo, prüfe den TriForce-Systemstatus über MCP.",
             "Wie integriere ich MCP? Prüfe danach den Discord-Status.",
             "How to integrate MCP tools and check Discord connection",
-fix/pocket-rc18-mcp-architecture-guide-20261025
-
             "How do I integrate MCP and send a message to Discord?",
             "How do I integrate MCP and post to Discord?",
             "How do I integrate MCP and delete a message?",
+            "Wie integriere ich MCP? Poste danach eine Nachricht.",
+            "Erkläre MCP und schicke eine Nachricht.",
+            "Wie integriere ich MCP? Schreibe danach eine Nachricht.",
+            "How do I integrate MCP and read a message?",
             "How do I design a functions API?",
             "Erkläre MCP und nutze danach den TriForce-Systemstatus.",
             "Explain MCP and use the workspace status tool.",
             "How to integrate tools with an Android app?",
-main
             "Wie trainiere ich ein Google Tensor Modell auf Android?",
             "Prüfe die Verbindung zu einem MCP-Server und lies die Logs."
         )) assertFalse(request, McpArchitectureGuide.applies(request))
@@ -50,8 +49,6 @@ main
             "Wie integriere ich MCP? Prüfe danach den Discord-Status.", true))
         assertTrue(McpRequestRouting.expectsToolEvidence(
             "Wie integriere ich MCP? Prüfe danach den Discord-Status."))
-fix/pocket-rc18-mcp-architecture-guide-20261025
-
         assertTrue(McpRequestRouting.useModelAgent(
             "How do I integrate MCP and send a message to Discord?", true))
     }
@@ -71,7 +68,6 @@ fix/pocket-rc18-mcp-architecture-guide-20261025
             .substringBefore("private fun exportModel(")
         assertTrue(send.indexOf("McpArchitectureGuide.applies(text)") <
             send.indexOf("sendLiteRtMessage(text)"))
-main
     }
 
     @Test fun snapshotCountsAreDynamicAndExplicitlyNotLive() {

@@ -19,6 +19,27 @@ class Rc19MemoryGuardPreUnloadTest {
         assertFalse(load.contains("explicitlyAcceptedTensorRisk = acknowledgedLargeModel"))
     }
 
+    @Test fun tensorOnlyMemoryRefusalPreservesActiveModelEvenAfterAcknowledgement() {
+        val main = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        val load = main.substringAfter("private fun loadLiteRtModel(")
+            .substringBefore("private fun sendLiteRtMessage(")
+        val early = load.indexOf("if (tensorRiskWarning &&")
+        val confirmation = load.indexOf("if (!acknowledgedLargeModel")
+        assertTrue("Tensor-only refusal must run independently of acknowledgement",
+            early in 0 until confirmation)
+        assertTrue("Refuse before entering busy state", early < load.indexOf("busy = true"))
+        assertTrue("Refuse before native shutdown", early < load.indexOf("previousLiteRt.shutdown()"))
+        assertTrue("Keep activeModel", early < load.indexOf("activeModel = null"))
+        val guard = load.substring(early, confirmation)
+        assertTrue("Compatible GPU/CPU paths must remain available", guard.contains(
+            "initialCandidates.all { it == RuntimeHardware.Attempt.GOOGLE_TENSOR }"))
+        assertTrue(guard.contains("ModelMemoryGuardException("))
+        assertTrue(guard.contains("requiredBytes = tensorWarningFloor"))
+        assertTrue(guard.contains("showError("))
+        assertTrue(guard.contains("return"))
+        assertFalse(guard.contains("activeModel ="))
+    }
+
     @Test fun twoStagePreflightDocumentsSingleHardTensorLimit() {
         val docs = File("../docs/RC18-DIAGNOSTIC-RELIABILITY-20261025.md").readText()
         assertTrue(docs.contains("6 GiB"))
