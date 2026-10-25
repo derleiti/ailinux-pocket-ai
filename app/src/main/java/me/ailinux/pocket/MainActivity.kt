@@ -847,6 +847,7 @@ class MainActivity : AppCompatActivity() {
             }
             content.addView(title)
             val isActive = activeModel?.absolutePath == file.absolutePath
+            val projectorAsset = ModelCompatibility.isProjectorFilename(file.name)
             // A historical complete journal may refer to a deleted/replaced
             // file. Do not offer it as a verified installed model just
             // because the filename and extension still match.
@@ -861,9 +862,16 @@ class MainActivity : AppCompatActivity() {
                     "⚠ Datei und Downloadjournal stimmen nicht überein. " +
                     "Bitte vor dem Laden unabhängig prüfen."
                 ))
+            if (projectorAsset)
+                content.addView(simpleLabel(
+                    "Visionprojektor (mmproj) · nicht einzeln ladbar. " +
+                    "Für multimodale Inferenz ist ein passendes Textmodell " +
+                    "mit einem dafür geeigneten Loader erforderlich."
+                ))
             val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             val load = smallButton(if (isActive) "✓ Aktiv" else "▶ Laden", isActive)
-            load.isEnabled = !busy && !transferBusy && !isActive && !completedMismatch
+            load.isEnabled = !busy && !transferBusy && !isActive &&
+                !completedMismatch && !projectorAsset
             load.setOnClickListener { loadModel(file) }
             buttons.addView(load)
             val export = smallButton("Export", false)
@@ -997,6 +1005,18 @@ class MainActivity : AppCompatActivity() {
             loadLiteRtModel(file, acknowledgedLargeModel)
             return
         }
+        // A mmproj GGUF is a companion vision encoder, NOT a text
+        // language model. Reject before releasing an existing LiteRT
+        // conversation or calling llama_model_load_from_file().
+        if (ModelCompatibility.isProjectorFilename(file.name)) {
+            diagnosticTrace = PocketDiagnostics.newTrace()
+            val typed = GgufLoadFailure(
+                GgufLoadFailure.Phase.METADATA, GgufProjectorException())
+            failure(PocketDiagnostics.Domain.GGUF,
+                PocketDiagnostics.Step.MODEL_LOAD, typed)
+            showError("GGUF-Visionprojektor: kein eigenständiges Sprachmodell", typed)
+            return
+        }
         if (!::engine.isInitialized) { toast("Engine initialisiert noch."); return }
         val memory = ActivityManager.MemoryInfo().also {
             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
@@ -1040,7 +1060,10 @@ class MainActivity : AppCompatActivity() {
             var startupPhase = GgufLoadFailure.Phase.METADATA
             try {
                 val inspection = withContext(Dispatchers.IO) { ModelCompatibility.inspect(file) }
-                inspection.incompatibleReason?.let { throw IllegalArgumentException(it) }
+                inspection.incompatibleReason?.let {
+                    if (inspection.projectorOnly) throw GgufProjectorException()
+                    throw IllegalArgumentException(it)
+                }
                 setStatus("Lade " + (inspection.architecture ?: "GGUF") + " …")
                 // Persist before JNI starts, but commit() fsync can take
                 // hundreds of ms on a busy device: do it off the UI thread.
@@ -1068,6 +1091,23 @@ class MainActivity : AppCompatActivity() {
                         else -> Unit
                     }
                     previousModelUnloaded = true
+                    startupPhase = GgufLoadFailure.Phase.MEMORY_PREFLIGHT
+                    // GGUF did not previously have a SECOND RAM check after
+                    // releasing the old LiteRT runtime. Never rely on the
+                    // initial user confirmation to override Android LMK.
+                    val afterUnload = ActivityManager.MemoryInfo().also {
+                        (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
+                            .getMemoryInfo(it)
+                    }
+                    if (afterUnload.lowMemory ||
+                        ModelLoadSafety.insufficientAfterUnload(
+                            file.length(), afterUnload.availMem)) {
+                        throw ModelMemoryGuardException(
+                            availableBytes = afterUnload.availMem,
+                            requiredBytes = ModelLoadSafety.minimumAvailableAfterUnload(
+                                file.length()),
+                            androidLowMemory = afterUnload.lowMemory)
+                    }
                     startupPhase = GgufLoadFailure.Phase.NATIVE_MODEL_LOAD
                     try {
                         engine.loadModel(file.absolutePath)
@@ -1210,19 +1250,51 @@ class MainActivity : AppCompatActivity() {
             file.length(), tensorMayBeUsed, memory.threshold)
         val tensorRiskWarning = tensorMayBeUsed && ModelLoadSafety.insufficientForLiteRtModel(
             file.length(), memory.availMem, true, memory.lowMemory, memory.threshold)
-        // A Tensor-only graph has no safe fallback below the hard floor.
-        // Refuse before acknowledgement or releasing the current session.
-        if (tensorRiskWarning &&
-            initialCandidates.all { it == RuntimeHardware.Attempt.GOOGLE_TENSOR }) {
-            diagnosticTrace = PocketDiagnostics.newTrace()
-            val refusal = ModelMemoryGuardException(
-                availableBytes = memory.availMem,
-                requiredBytes = tensorWarningFloor
-            )
-            failure(PocketDiagnostics.Domain.LITERT,
-                PocketDiagnostics.Step.MODEL_LOAD, refusal)
-            showError("LiteRT: Zu wenig RAM für Modellwechsel", refusal)
-            return
+        // A Tensor-only AOT graph has NO GPU/CPU substitute. If an old
+        // session is active, the snapshot includes its allocations and is
+        // not a reliable post-unload figure. Ask BEFORE releasing the old
+        // engine, then measure again after shutdown. No NPU call can skip
+        // that mandatory second guard, even with user confirmation.
+        val tensorOnly = initialCandidates.size == 1 &&
+            initialCandidates[0] == RuntimeHardware.Attempt.GOOGLE_TENSOR
+        val previousSessionReady = liteRtRuntime?.hasConversation == true ||
+            (::engine.isInitialized &&
+                engine.state.value is InferenceEngine.State.ModelReady)
+        if (tensorRiskWarning && tensorOnly) {
+            if (ModelLoadSafety.canOfferTensorRecheckAfterUnload(
+                    tensorRiskWarning, tensorOnly, previousSessionReady)) {
+                if (!acknowledgedLargeModel) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Tensor G5: RAM nach Modellwechsel prüfen")
+                        .setMessage(
+                            "Aktuell " + ModelStore.displaySize(memory.availMem) +
+                            " verfügbar; die konservative NPU-Schutzschwelle liegt bei " +
+                            ModelStore.displaySize(tensorWarningFloor) + ".\n\n" +
+                            "Das aktuell geladene Modell belegt möglicherweise " +
+                            "noch Speicher. Soll Pocket AI die bisherige " +
+                            "Modellsitzung beenden und den tatsächlichen RAM " +
+                            "danach erneut prüfen?\n\n" +
+                            "Falls die Schwelle weiterhin nicht erreicht wird, " +
+                            "startet die NPU NICHT und es ist zunächst kein " +
+                            "Modell mehr aktiv. Modell- und .part-Dateien " +
+                            "werden nicht gelöscht.")
+                        .setNegativeButton("Bisheriges Modell behalten", null)
+                        .setPositiveButton("Entladen und neu prüfen") { _, _ ->
+                            loadLiteRtModel(file, acknowledgedLargeModel = true)
+                        }.show()
+                    return
+                }
+            } else {
+                diagnosticTrace = PocketDiagnostics.newTrace()
+                val refusal = ModelMemoryGuardException(
+                    availableBytes = memory.availMem,
+                    requiredBytes = tensorWarningFloor
+                )
+                failure(PocketDiagnostics.Domain.LITERT,
+                    PocketDiagnostics.Step.MODEL_LOAD, refusal)
+                showError("LiteRT: Tensor-NPU-Schutzschwelle erreicht", refusal)
+                return
+            }
         }
         if (!acknowledgedLargeModel &&
             (ModelLoadSafety.requiresConfirmation(file.length(), memory.availMem) ||
@@ -4129,10 +4201,20 @@ class MainActivity : AppCompatActivity() {
         // Arbitrary exception messages can contain signed URLs and auth headers.
         val details = if (isReport)
             error.message.orEmpty().take(15000)
-        else if (error is ModelMemoryGuardException)
-            ModelLoadSafety.explainRefusal(error) + "\n\n" +
+        else if (error is ModelMemoryGuardException ||
+            error is GgufLoadFailure && error.cause is ModelMemoryGuardException) {
+            val memoryFailure = (if (error is ModelMemoryGuardException) error
+                else (error as GgufLoadFailure).cause as ModelMemoryGuardException)
+            ModelLoadSafety.explainRefusal(memoryFailure) + "\n\n" +
                 getString(R.string.diagnostics_error, PocketDiagnostics.publicError(error), id)
-        else getString(R.string.diagnostics_error, PocketDiagnostics.publicError(error), id)
+        } else if (error is GgufLoadFailure &&
+            error.cause is GgufProjectorException) {
+            "Die ausgewählte GGUF-Datei ist ein Visionprojektor (mmproj), " +
+                "kein eigenständiges Textmodell. Dafür wird zusätzlich das " +
+                "passende Sprachmodell und ein multimodaler Loader benötigt. " +
+                "Die Datei wurde nicht verändert.\n\n" +
+                getString(R.string.diagnostics_error, PocketDiagnostics.publicError(error), id)
+        } else getString(R.string.diagnostics_error, PocketDiagnostics.publicError(error), id)
         AlertDialog.Builder(this).setTitle(title)
             .setMessage(details)
             .setNeutralButton("Diagnose kopieren") { _, _ ->
