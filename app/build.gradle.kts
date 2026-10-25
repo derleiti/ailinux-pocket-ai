@@ -27,8 +27,8 @@ android {
         applicationId = "me.ailinux.pocket"
         minSdk = 33
         targetSdk = 35
-        versionCode = 42
-        versionName = "2.1.0-RC17"
+        versionCode = 43
+        versionName = "2.1.0-RC18"
         buildConfigField("String", "LITERT_LM_VERSION", "\"$liteRtLmVersion\"")
         ndk { abiFilters += "arm64-v8a" }
     }
