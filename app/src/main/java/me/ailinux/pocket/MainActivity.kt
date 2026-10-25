@@ -2700,7 +2700,6 @@ class MainActivity : AppCompatActivity() {
     ) {
         trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.PLAN,
             PocketDiagnostics.State.START)
-        var turn = runtime.askMcp(request)
         var hadRealCall = false
         var lastServerResult: JSONObject? = null
         val progressive = active.progressiveSources.isNotEmpty()
@@ -2718,6 +2717,55 @@ class MainActivity : AppCompatActivity() {
         fun setAnswer(text: String) {
             answer.content = text
             chatAdapter.notifyItemChanged(answerIndex)
+        }
+
+        // LiteRT-LM 0.12.0 may throw while parsing native JSON into Message,
+        // BEFORE ToolCall is returned. The post-return validator cannot see
+        // those failures. Handle them without exposing model text or tool args.
+        suspend fun recoverNativeFailure() {
+            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SCHEMA_CHECK,
+                PocketDiagnostics.State.FAIL,
+                code = PocketDiagnostics.ErrorCode.INVALID_NATIVE_ARGUMENTS_SCHEMA)
+            val recovered = withContext(NonCancellable) {
+                runCatching { runtime.clearConversation() }.isSuccess
+            }
+            trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_RESET,
+                if (recovered) PocketDiagnostics.State.OK else PocketDiagnostics.State.FAIL,
+                code = if (recovered) PocketDiagnostics.ErrorCode.NONE
+                    else PocketDiagnostics.ErrorCode.MODEL_RUNTIME)
+            if (hadRealCall) {
+                // The prior, separately displayed receipt remains authoritative.
+                // An uncertain or confirmed network action is NEVER replayed.
+                setAnswer("🔧 Echte MCP-Serverquittung oben. LiteRT-Fortsetzung " +
+                    "lieferte einen ungültigen nativen Antwortzustand; kein weiterer Aufruf. " +
+                    (if (recovered) "Lokale Konversation zurückgesetzt."
+                     else "Modell bitte neu laden."))
+                return
+            }
+            if (recovered && progressive &&
+                McpRequestRouting.expectsToolEvidence(request) &&
+                tryHostDiscovery(active, request, checkNotNull(catalog),
+                    answer, answerIndex)) {
+                setAnswer("⚠️ LiteRT-Antwortformat ungültig; lokale Konversation " +
+                    "zurückgesetzt.\n" + answer.content)
+                return
+            }
+            setAnswer("⚠️ LiteRT hat eine ungültige native MCP-Antwort erzeugt " +
+                "(INVALID_NATIVE_ARGUMENTS_SCHEMA). Kein automatischer tools/call. " +
+                (if (recovered) "Konversation ohne alten KV-Kontext wiederhergestellt."
+                 else "Modell bitte neu laden."))
+        }
+
+        var turn = try {
+            runtime.askMcp(request)
+        } catch (_: IllegalArgumentException) {
+            recoverNativeFailure()
+            return
+        } catch (_: IllegalStateException) {
+            // The upstream Conversation parser can reject malformed native
+            // responses as IllegalStateException before exposing ToolCall.
+            recoverNativeFailure()
+            return
         }
         for (step in 0 until McpProgressiveBridge.MAX_STEPS) {
             check(mcpAgent.current() == active) {
@@ -2769,19 +2817,68 @@ class MainActivity : AppCompatActivity() {
                 }
                 return
             }
-            require(turn.calls.size == 1) {
-                "Mehrere gleichzeitige MCP-Toolaufrufe nicht erlaubt."
-            }
             if (hadRealCall) {
-                // Never dispatch a second external call after a real receipt.
-                // Keep the first receipt visible instead of reporting a generic
-                // model exception or clearing the prior verified result.
+                // No more external dispatches, even if the model asks again.
                 setAnswer("🔧 MCP-Serverquittung oben. Weiterer Modell-Toolvorschlag " +
                     "blockiert: maximal ein externer Aufruf pro Anfrage.")
                 return
             }
+            val candidate = turn.calls.singleOrNull()
+            val invalid = if (candidate == null)
+                LiteRtMcpPolicy.Fault.MULTIPLE_CALLS
+            else runCatching {
+                LiteRtMcpPolicy.diagnoseRaw(
+                    candidate.name, candidate.arguments, active.tools)
+            }.getOrElse { LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA }
+            if (invalid != null) {
+                // Malformed 2B/4B output is a LOCAL planning failure. It must
+                // never escape as a generic LiteRT crash, nor reach tools/call.
+                val code = when (invalid) {
+                    LiteRtMcpPolicy.Fault.MULTIPLE_CALLS,
+                    LiteRtMcpPolicy.Fault.TOO_MANY_TOOLS ->
+                        PocketDiagnostics.ErrorCode.INVALID_NATIVE_TOOL_COUNT
+                    LiteRtMcpPolicy.Fault.UNKNOWN_TOOL_NAME ->
+                        PocketDiagnostics.ErrorCode.INVALID_NATIVE_TOOL_NAME
+                    LiteRtMcpPolicy.Fault.ARGUMENTS_NOT_JSON ->
+                        PocketDiagnostics.ErrorCode.INVALID_NATIVE_ARGUMENTS_JSON
+                    LiteRtMcpPolicy.Fault.ARGUMENTS_TOO_LARGE ->
+                        PocketDiagnostics.ErrorCode.INVALID_NATIVE_ARGUMENTS_SIZE
+                    LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA ->
+                        PocketDiagnostics.ErrorCode.INVALID_NATIVE_ARGUMENTS_SCHEMA
+                }
+                trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SCHEMA_CHECK,
+                    PocketDiagnostics.State.FAIL, code = code)
+                // The native tool request is unresolved. Close only that
+                // conversation and restore a fresh one on the SAME engine.
+                // Never pretend to restore its KV cache or past messages.
+                val recovered = withContext(NonCancellable) {
+                    runCatching { runtime.clearConversation() }.isSuccess
+                }
+                trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_RESET,
+                    if (recovered) PocketDiagnostics.State.OK else PocketDiagnostics.State.FAIL,
+                    code = if (recovered) PocketDiagnostics.ErrorCode.NONE
+                        else PocketDiagnostics.ErrorCode.MODEL_RUNTIME)
+                // Continue only through the original conservative host bridge.
+                // It still requires verified read-only metadata, current auth
+                // and a new explicit per-call approval before any dispatch.
+                if (recovered && progressive &&
+                    McpRequestRouting.expectsToolEvidence(request) &&
+                    tryHostDiscovery(active, request, checkNotNull(catalog),
+                        answer, answerIndex)) {
+                    setAnswer("⚠️ Nativer LiteRT-Toolvorschlag ungültig (" +
+                        code.name + "); Modellkonversation zurückgesetzt.\n" +
+                        answer.content)
+                    return
+                }
+                setAnswer("⚠️ LiteRT hat einen ungültigen MCP-Toolvorschlag erzeugt " +
+                    "(" + code.name + "). Kein tools/call ausgeführt. " +
+                    (if (recovered)
+                        "Native Konversation neu aufgebaut; bisheriger KV-Kontext verworfen."
+                    else "Konversation konnte nicht zurückgesetzt werden; Modell neu laden."))
+                return
+            }
             val (tool, args) = LiteRtMcpProtocol.validate(
-                turn.calls.single(), active.tools
+                checkNotNull(candidate), active.tools
             )
             trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
                 PocketDiagnostics.State.OK, tool = tool.name)
@@ -2833,7 +2930,15 @@ class MainActivity : AppCompatActivity() {
                             val error = McpProgressiveBridge.localFailure(e.message.orEmpty())
                             evidence("⚠️ Werkzeugvorschlag verworfen: " +
                                 e.message.orEmpty().take(320))
-                            turn = runtime.toolFeedback(tool.name, error.toString())
+                            turn = try {
+                                runtime.toolFeedback(tool.name, error.toString())
+                            } catch (_: IllegalArgumentException) {
+                                recoverNativeFailure()
+                                return
+                            } catch (_: IllegalStateException) {
+                                recoverNativeFailure()
+                                return
+                            }
                             continue
                         }
                         setAnswer("🔐 LiteRT schlägt " + plan.source.title + " / " +
@@ -2928,7 +3033,15 @@ class MainActivity : AppCompatActivity() {
             val boundedFeedback = if (hadRealCall)
                 McpToolFeedback.nativePayload(tool, outcome)
             else outcome.toString().take(12_000)
-            turn = runtime.toolFeedback(tool.name, boundedFeedback)
+            turn = try {
+                runtime.toolFeedback(tool.name, boundedFeedback)
+            } catch (_: IllegalArgumentException) {
+                recoverNativeFailure()
+                return
+            } catch (_: IllegalStateException) {
+                recoverNativeFailure()
+                return
+            }
             trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_FOLLOWUP,
                 PocketDiagnostics.State.OK, tool = tool.name)
         }

@@ -50,6 +50,90 @@ class LiteRtMcpProtocolTest {
         }
     }
 
+    @Test fun classifyInvalidTinyModelNativeCallsWithoutLoggingParameters() {
+        val tools = listOf(oneTool)
+        assertNull(LiteRtMcpPolicy.diagnoseRaw(
+            "mcp_search_tools", """{"query":"status"}""", tools))
+        assertNull(LiteRtMcpPolicy.diagnoseRaw(
+            "mcp_search_tools", mapOf("query" to "system status"), tools))
+        assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA,
+            LiteRtMcpPolicy.diagnoseRaw(
+                "mcp_search_tools", mapOf("limit" to 3), tools))
+        assertEquals(LiteRtMcpPolicy.Fault.UNKNOWN_TOOL_NAME,
+            LiteRtMcpPolicy.diagnoseRaw(
+                "status", """{"query":"status"}""", tools))
+        assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_NOT_JSON,
+            LiteRtMcpPolicy.diagnoseRaw(
+                "mcp_search_tools", "not json", tools))
+        assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA,
+            LiteRtMcpPolicy.diagnoseRaw(
+                "mcp_search_tools", "{}", tools))
+        assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_TOO_LARGE,
+            LiteRtMcpPolicy.diagnoseRaw(
+                "mcp_search_tools", "{\"query\":\"" + "x".repeat(3500) + "\"}", tools))
+        assertEquals(LiteRtMcpPolicy.Fault.TOO_MANY_TOOLS,
+            LiteRtMcpPolicy.diagnoseRaw(
+                "mcp_search_tools", """{"query":"status"}""", List(6) { oneTool }))
+    }
+
+    @Test fun nativeParserFailureBeforeToolCallIsHandledForInitialAndFollowup() {
+        val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+            .substringAfter("private suspend fun runLiteRtToolbridge(")
+            .substringBefore("private fun sendLiteRtMessage(")
+        assertTrue(source.indexOf("val catalog =") < source.indexOf("runtime.askMcp(request)"))
+        val initial = source.substringAfter("var turn = try {")
+            .substringBefore("for (step in 0 until")
+        assertTrue(initial.contains("recoverNativeFailure()"))
+        assertTrue(initial.contains("catch (_: IllegalArgumentException)"))
+        assertTrue(initial.contains("catch (_: IllegalStateException)"))
+        val followup = source.substringAfter("val boundedFeedback =")
+        assertTrue(followup.contains("runtime.toolFeedback(tool.name, boundedFeedback)"))
+        assertTrue(followup.contains("recoverNativeFailure()"))
+        assertTrue(source.contains("if (hadRealCall) {"))
+        val recovery = source.substringAfter("suspend fun recoverNativeFailure() {")
+            .substringBefore("var turn = try {")
+        assertTrue(recovery.contains("if (hadRealCall) {"))
+        assertTrue(recovery.contains("runtime.clearConversation()"))
+        assertTrue(recovery.contains("tryHostDiscovery("))
+        assertTrue(recovery.contains("kein weiterer Aufruf"))
+    }
+
+    @Test fun rejectWrongNativeArgumentsJsonTypeBeforeExternalDispatch() {
+        val call = McpTool("mcp_call_tool", "Local bridge",
+            JSONObject("""{"type":"object","properties":{
+                "tool_id":{"type":"string"},
+                "arguments_json":{"type":"string"}
+                },"required":["tool_id","arguments_json"],
+                "additionalProperties":false}"""))
+        assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA,
+            LiteRtMcpPolicy.diagnoseRaw(
+                "mcp_call_tool", """{"tool_id":"s3/status","arguments_json":{}}""",
+                listOf(call)))
+        assertNull(LiteRtMcpPolicy.diagnoseRaw(
+            "mcp_call_tool", """{"tool_id":"s3/status","arguments_json":"{}"}""",
+            listOf(call)))
+        assertEquals(LiteRtMcpPolicy.Fault.ARGUMENTS_SCHEMA,
+            LiteRtMcpPolicy.diagnoseRaw(
+                "mcp_call_tool", """{"tool_id":"s3/status"}""", listOf(call)))
+    }
+
+    @Test fun invalidNativeProposalResetsOnlyConversationAndNeverDispatches() {
+        val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+            .substringAfter("private suspend fun runLiteRtToolbridge(")
+            .substringBefore("private fun sendLiteRtMessage(")
+        val guard = source.indexOf("val invalid =")
+        val execute = source.indexOf("mcpAgent.executeAuto(")
+        assertTrue("validation must run before dispatch", guard >= 0 && guard < execute)
+        val section = source.substringAfter("if (invalid != null) {")
+            .substringBefore("val (tool, args) =")
+        assertTrue(section.contains("PocketDiagnostics.Step.SCHEMA_CHECK"))
+        assertTrue(section.contains("runtime.clearConversation()"))
+        assertTrue(section.contains("PocketDiagnostics.Step.MODEL_RESET"))
+        assertTrue(section.contains("Kein tools/call ausgeführt"))
+        assertFalse(section.contains("mcpAgent.executeAuto("))
+        assertFalse(section.contains("mcpAgent.execute("))
+    }
+
     @Test fun nativeProviderMayNeverRunToolsAutomatically() {
         val source = File("src/main/java/me/ailinux/pocket/LiteRtRuntime.kt").readText()
         assertTrue(source.contains("automaticToolCalling = false"))
