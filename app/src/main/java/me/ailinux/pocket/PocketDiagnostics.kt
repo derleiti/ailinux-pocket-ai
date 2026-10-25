@@ -93,7 +93,8 @@ internal object PocketDiagnostics {
         if (error is me.ailinux.pocket.mcp.McpExecutionUncertain &&
             error.cause != null) return classify(error.cause!!)
         if (error is kotlinx.coroutines.CancellationException) return ErrorCode.CANCELLED
-        if (error is OutOfMemoryError) return ErrorCode.MEMORY
+        if (error is OutOfMemoryError || error is ModelMemoryGuardException)
+            return ErrorCode.MEMORY
         val klass = error.javaClass.simpleName.lowercase(Locale.ROOT)
         val message = error.message.orEmpty().lowercase(Locale.ROOT)
         return when {
