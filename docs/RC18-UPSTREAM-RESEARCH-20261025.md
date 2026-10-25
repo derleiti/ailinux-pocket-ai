@@ -103,3 +103,21 @@ Findings:
 - Combined PR #56 integrates #54 and #55; do not duplicate cherry-picks. Only merge after current combined CI, CodeRabbit, GitGuardian, code diff and signer checks pass. A successful build is not device E2E.
 - Trigger the new main workflow only AFTER the controlled merge, per user instruction. Keep public RC17 unchanged until signed RC18 and Pixel QA.
 - After every failure, record trace ID, UTC epoch and local offset; do not log prompts, auth tokens, raw server responses or private tool arguments.
+
+## Exact official Gemma 4 E2B Google Tensor G5 bundle (critical QA fingerprint)
+
+Official Google page: https://developers.google.com/edge/tensor-sdk/slm-compilation
+
+Canonical LiteRT Community file:
+https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/blob/main/gemma-4-E2B-it_Google_Tensor_G5.litertlm
+
+- Artifact name: gemma-4-E2B-it_Google_Tensor_G5.litertlm
+- Published revision containing this upload: 9262660 (2026-07-10).
+- Exact byte length: 3,113,545,589 (about 2.90 GiB; some UI displays this as 2.90 GB).
+- Published SHA-256: af1082986639ecde7db95d91be6fe54f8b6b458104734c5bafc204e69d6852dc
+- The public file was replaced in the community repository on that revision: its older LFS pointer was 3,953,110,901 bytes. Always verify model revision and digest rather than trusting identical filenames.
+- Source revision and digest are test references; do not download a duplicate 3-GB model unless the already installed file fails the **independent** hash or metadata checks. A matching length alone does not prove a matching SHA.
+- The official Tensor SDK guidance explicitly recommends a pre-compiled SLM bundle on Tensor G5. Do not try to JIT-compile this file on the phone.
+
+Upstream community repro: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/discussions/32
+This thread reported an NPU dispatch-library-not-found failure on a Pixel 10 Pro using Gemma E2B. It is directly relevant to our TENSOR_BACKEND diagnostics but not proof that every Pocket AI G5 failure has this cause. First inspect the native library installation path, actual dispatcher ABI and loaded model hash, then run a real NPU generation test.
