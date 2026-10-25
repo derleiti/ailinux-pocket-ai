@@ -10,7 +10,7 @@ internal object ModelExitEvidence {
     enum class Kind {
         LOW_MEMORY, NATIVE_CRASH, JVM_CRASH, ANR, SIGKILL,
         OTHER_SIGNAL, RESOURCE_LIMIT, INITIALIZATION_FAILURE,
-        PACKAGE_UPDATED, USER_REQUESTED, UNKNOWN
+        PACKAGE_UPDATED, USER_REQUESTED, SELF_EXIT, UNKNOWN
     }
 
     data class Match(val kind: Kind, val status: Int) {
@@ -25,6 +25,9 @@ internal object ModelExitEvidence {
             Kind.INITIALIZATION_FAILURE -> "Android meldet eine Prozess-Initialisierungsstörung."
             Kind.PACKAGE_UPDATED -> "Android meldet ein App-Update; das ist kein Crash."
             Kind.USER_REQUESTED -> "Android meldet eine Nutzeraktion; kein Crash-Nachweis."
+            Kind.SELF_EXIT ->
+                "Android meldet einen vom App-Prozess selbst ausgelösten Exit (Status $status); " +
+                    "kein Crash-Nachweis."
             Kind.UNKNOWN -> "Android kennt keinen eindeutig zuordenbaren Exit-Grund."
         }
     }
@@ -38,6 +41,7 @@ internal object ModelExitEvidence {
         ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> Kind.RESOURCE_LIMIT
         ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> Kind.INITIALIZATION_FAILURE
         ApplicationExitInfo.REASON_PACKAGE_UPDATED -> Kind.PACKAGE_UPDATED
+        ApplicationExitInfo.REASON_EXIT_SELF -> Kind.SELF_EXIT
         ApplicationExitInfo.REASON_USER_REQUESTED,
         ApplicationExitInfo.REASON_USER_STOPPED -> Kind.USER_REQUESTED
         else -> Kind.UNKNOWN

@@ -37,6 +37,20 @@ class ModelExitEvidenceTest {
             .contains("kein Crash-Nachweis"))
     }
 
+    @Test fun ownProcessExitIsNotAnUnknownFailureOrUserAction() {
+        val self = match(ApplicationExitInfo.REASON_EXIT_SELF, 7)!!
+        assertEquals(ModelExitEvidence.Kind.SELF_EXIT, self.kind)
+        assertTrue(self.explanation().contains("Status 7"))
+        assertTrue(self.explanation().contains("kein Crash-Nachweis"))
+        assertFalse(self.explanation().contains("Nutzeraktion"))
+        assertNotEquals(ModelExitEvidence.Kind.UNKNOWN, self.kind)
+        assertTrue(ModelExitEvidence.newestExitSummary(
+            ApplicationExitInfo.REASON_EXIT_SELF, 0).contains("selbst ausgelösten Exit"))
+        val report = java.io.File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        assertTrue(report.contains(
+            "ApplicationExitInfo.REASON_EXIT_SELF ->"))
+    }
+
     @Test fun neverClaimsAncientOrFutureExitToBeTheModelFailure() {
         val reason = ApplicationExitInfo.REASON_CRASH_NATIVE
         assertNull(ModelExitEvidence.correlate(0, start+1, now, reason, 0))
