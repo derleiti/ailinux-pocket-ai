@@ -19,6 +19,15 @@ internal object ModelTransferNetworkEstimate {
         val known: Boolean get() = expectedDownloadBytes >= 0L
     }
 
+    /** A cached total is bound to the original download URL, not a filename. */
+    internal fun knownTotalForSource(
+        incomingSize: Long, priorSize: Long?, sameSource: Boolean
+    ): Long = when {
+        incomingSize > 0L -> incomingSize
+        sameSource && priorSize != null && priorSize > 0L -> priorSize
+        else -> UNKNOWN
+    }
+
     fun forResume(totalBytes: Long, existingPartBytes: Long): Hint {
         if (totalBytes <= 0L || existingPartBytes < 0L ||
             existingPartBytes > totalBytes) {
