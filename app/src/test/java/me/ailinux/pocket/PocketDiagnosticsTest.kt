@@ -52,6 +52,19 @@ class PocketDiagnosticsTest {
             PocketDiagnostics.classify(Exception("HTTP 401 unauthorized")))
     }
 
+    @Test fun memorySafetyGuardIsNotMisreportedAsUnknownNativeCrash() {
+        val error = ModelMemoryGuardException(
+            availableBytes = 1500L * 1024L * 1024L,
+            requiredBytes = 2600L * 1024L * 1024L
+        )
+        assertEquals(PocketDiagnostics.ErrorCode.MEMORY, PocketDiagnostics.classify(error))
+        assertEquals("ModelMemoryGuardException / MEMORY", PocketDiagnostics.publicError(error))
+        assertFalse(PocketDiagnostics.publicError(error).contains("1500"))
+        // An unrelated IOException must not be re-labelled as a RAM failure.
+        assertNotEquals(PocketDiagnostics.ErrorCode.MEMORY,
+            PocketDiagnostics.classify(java.io.IOException("Unspecified I/O error")))
+    }
+
     @Test fun localDiscoveryFailuresAreTypedWithoutLoggingToolIds() {
         val expired = IllegalArgumentException("MCP-Katalog ist abgelaufen. Auto-Bridge neu verbinden.")
         val missing = IllegalArgumentException(

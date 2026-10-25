@@ -1123,11 +1123,9 @@ class MainActivity : AppCompatActivity() {
                         (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
                     }
                     if (ModelLoadSafety.insufficientAfterUnload(file.length(), currentMemory.availMem)) {
-                        throw IOException(
-                            "Nach dem Modellwechsel sind nur " +
-                                ModelStore.displaySize(currentMemory.availMem) +
-                                " RAM verfügbar. Neues Modell zur Vermeidung eines Android-Low-Memory-Abbruchs " +
-                                "nicht gestartet. Andere Apps schließen oder kleineres Modell wählen."
+                        throw ModelMemoryGuardException(
+                            availableBytes = currentMemory.availMem,
+                            requiredBytes = ModelLoadSafety.minimumAvailableAfterUnload(file.length())
                         )
                     }
                     val prompt = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
@@ -1161,7 +1159,11 @@ class MainActivity : AppCompatActivity() {
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT"
                     else "LiteRT-LM konnte nicht gestartet werden")
-                showError("LiteRT-Modell/Backend fehlgeschlagen", error)
+                showError(
+                    if (error is ModelMemoryGuardException) "LiteRT: Zu wenig RAM für Modellwechsel"
+                    else "LiteRT-Modell/Backend fehlgeschlagen",
+                    error
+                )
             } catch (error: LinkageError) {
                 failure(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD, error)
                 if (previousModelUnloaded) activeModel = null
@@ -1174,6 +1176,9 @@ class MainActivity : AppCompatActivity() {
                 setModelLoading(false)
                 busy = false
                 renderChatState()
+                // The previous native engine may have been unloaded before
+                // a failed transition. Never leave a stale "✓ Aktiv" button.
+                refreshLibrary()
             }
         }
     }
@@ -3873,6 +3878,9 @@ class MainActivity : AppCompatActivity() {
         // Arbitrary exception messages can contain signed URLs and auth headers.
         val details = if (isReport)
             error.message.orEmpty().take(15000)
+        else if (error is ModelMemoryGuardException)
+            ModelLoadSafety.explainRefusal(error) + "\n\n" +
+                getString(R.string.diagnostics_error, PocketDiagnostics.publicError(error), id)
         else getString(R.string.diagnostics_error, PocketDiagnostics.publicError(error), id)
         AlertDialog.Builder(this).setTitle(title)
             .setMessage(details)
