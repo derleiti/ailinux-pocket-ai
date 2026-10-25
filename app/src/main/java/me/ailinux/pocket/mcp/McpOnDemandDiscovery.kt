@@ -126,6 +126,12 @@ object McpOnDemandDiscovery {
             return reject(Rejection.EXPLANATION_ONLY)
         if (!mentionsExternal.containsMatchIn(request))
             return reject(Rejection.NO_EXTERNAL_TASK)
+        // A natural-language crawl task necessarily needs a URL. Malformed
+        // text such as "httpsailinux.me" must produce a parameter error,
+        // NOT an ambiguous-tool hint and NEVER a guessed remote URL.
+        if (Regex("\\b(?:crawl|crawle|crawlen)\\b", RegexOption.IGNORE_CASE)
+                .containsMatchIn(request) && !webUrl.containsMatchIn(request))
+            return reject(Rejection.ARGUMENTS_UNAVAILABLE)
         val terms = words.findAll(request.lowercase(Locale.ROOT)).map { it.value }
             .filter { it !in stop && !it.all(Char::isDigit) }.distinct().take(10).toList()
         val namedAlternatives = explicitTool.findAll(request)

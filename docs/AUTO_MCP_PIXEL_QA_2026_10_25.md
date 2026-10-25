@@ -22,6 +22,10 @@
 - An explicit "workspace status" user action must select only the Workspace
   source. The host may propose only an authenticated read-only status tool
   and still needs fresh user approval. No cross-server rerouting is allowed.
+- Another live RC12 prompt attempted "crawl ... httpsailinux.me" and was
+  refused with HOST_FALLBACK / AMBIGUOUS_TOOL. The literal text is not a
+  valid HTTPS URL; the corrected planner must report missing/invalid
+  arguments without guessing an intended site or executing any call.
 
 ## Implementation and regression checks
 

@@ -186,6 +186,27 @@ class McpOnDemandDiscoveryTest {
         assertEquals(0, providers.remoteCalls)
     }
 
+    @Test fun malformedCrawlUrlsAreParameterErrorsWithoutAnyCall() {
+        val state = run(listOf(tool("crawl", JSONObject()
+            .put("type", "object")
+            .put("properties", JSONObject().put("url",
+                JSONObject().put("type", "string")))
+            .put("required", org.json.JSONArray().put("url")))))
+        for (request in listOf(
+            "crawl über triforce dev mcp httpsailinux.me",
+            "crawle die Website http://ailinux.me über MCP",
+            "crawl httpsailinux.me"
+        )) {
+            var rejection: McpOnDemandDiscovery.Rejection? = null
+            assertNull(request, McpOnDemandDiscovery.propose(request, state) {
+                rejection = it
+            })
+            assertEquals(request, McpOnDemandDiscovery.Rejection.ARGUMENTS_UNAVAILABLE,
+                rejection)
+        }
+        assertEquals(0, state.remoteCalls)
+    }
+
     @Test fun genericToolCallWordIsNotAnExplicitMcpToolName() {
         val state = run(listOf(tool("status")))
         assertNotNull(McpOnDemandDiscovery.propose(
