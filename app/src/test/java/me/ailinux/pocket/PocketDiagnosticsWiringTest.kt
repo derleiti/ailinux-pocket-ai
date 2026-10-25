@@ -22,6 +22,17 @@ class PocketDiagnosticsWiringTest {
         assertTrue(diag.contains("UNCONFIRMED"))
     }
 
+    @Test fun androidDiagnosticDistinguishesLiteRtFromGgufAndShowsNewestFirst() {
+        assertTrue(main.contains("GGUF-MCP (nativer Prefill)"))
+        assertTrue(main.contains("LiteRT-MCP: aktiver, direkt ausgewählter Toolkontext"))
+        assertTrue(main.contains("LiteRT-MCP: aktiver Progressive-Katalog"))
+        assertTrue(main.contains("PocketDiagnostics.report(applicationContext).take(12_000)"))
+        assertTrue(main.contains("report.take(12_000)"))
+        assertFalse(main.contains("PocketDiagnostics.report(applicationContext).takeLast(12_000)"))
+        assertTrue(main.contains("PocketDiagnostics.Step.MODEL_TOOL_MISSING"))
+        assertTrue(main.contains("PocketDiagnostics.classify(e)"))
+    }
+
     @Test fun irreversibleDispatchGetsDurableMarkerBeforeNetworkAttempt() {
         val auto = agent.substringAfter("suspend fun executeAuto(")
             .substringBefore("suspend fun requestApproval(")

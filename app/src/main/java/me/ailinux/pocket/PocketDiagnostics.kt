@@ -30,13 +30,15 @@ internal object PocketDiagnostics {
         DISCOVERY_START, DISCOVERY_DONE, SEARCH, DETAILS, PLAN, PROPOSAL,
         APPROVAL_REQUEST, APPROVAL_ACCEPT, APPROVAL_DENY,
         AUTH_CHECK, SCHEMA_CHECK, DISPATCH, SERVER_RESULT, REMOTE_ERROR,
-        MODEL_FOLLOWUP, INPUT_REQUIRED, CANCELLED, ENGINE_ERROR, DIAGNOSTIC
+        MODEL_FOLLOWUP, MODEL_TOOL_MISSING, INPUT_REQUIRED, CANCELLED,
+        ENGINE_ERROR, DIAGNOSTIC
     }
     enum class State { START, OK, INFO, REJECTED, FAIL, UNCONFIRMED }
     enum class ErrorCode {
         NONE, TIMEOUT, HTTP_AUTH, HTTP_DENIED, HTTP_FAILURE, NETWORK,
         MODEL_KV, TENSOR_BACKEND, MEMORY, CANCELLED, SCHEMA, MCP_PROTOCOL,
-        NOT_FOUND, NATIVE_CRASH, MODEL_RUNTIME, UNKNOWN
+        NOT_FOUND, CATALOG_EXPIRED, SCHEMA_TOO_LARGE, NATIVE_CRASH,
+        MODEL_RUNTIME, UNKNOWN
     }
     data class Event(
         val time: Long, val id: String, val trace: String,
@@ -87,6 +89,12 @@ internal object PocketDiagnostics {
         val klass = error.javaClass.simpleName.lowercase(Locale.ROOT)
         val message = error.message.orEmpty().lowercase(Locale.ROOT)
         return when {
+            "katalog ist abgelaufen" in message -> ErrorCode.CATALOG_EXPIRED
+            "schema zu groß" in message || "schema too large" in message ->
+                ErrorCode.SCHEMA_TOO_LARGE
+            "tool_id wurde noch nicht" in message || "unbekannte tool_id" in message ->
+                ErrorCode.NOT_FOUND
+            error is org.json.JSONException -> ErrorCode.SCHEMA
             "no kv cache inputs found" in message -> ErrorCode.MODEL_KV
             ("google_tensor" in message || "tensor" in message) &&
                 ("not_found" in message || "create engine" in message) -> ErrorCode.TENSOR_BACKEND

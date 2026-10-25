@@ -1970,6 +1970,10 @@ class MainActivity : AppCompatActivity() {
                     trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PLAN,
                         if (hadRealCall) PocketDiagnostics.State.OK
                         else PocketDiagnostics.State.INFO)
+                    if (!hadRealCall && McpRequestRouting.expectsToolEvidence(request))
+                        trace(PocketDiagnostics.Domain.GGUF,
+                            PocketDiagnostics.Step.MODEL_TOOL_MISSING,
+                            PocketDiagnostics.State.INFO)
                     // Native discovery may already have searched or loaded details.
                     // If a real call did not follow, continue the SAME
                     // authorized plan through the approved host fallback.
@@ -2049,14 +2053,20 @@ class MainActivity : AppCompatActivity() {
                     } else if (meta == McpProgressiveBridge.DETAILS) {
                         val detailsStart = SystemClock.elapsedRealtime()
                         outcome = try {
-                            runtime.details(args.getString("tool_id"))
+                            runtime.details(args.getString("tool_id")).also { result ->
+                                trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
+                                    if (result.optBoolean("isError", false))
+                                        PocketDiagnostics.State.FAIL
+                                    else PocketDiagnostics.State.OK,
+                                    durationMs = SystemClock.elapsedRealtime() - detailsStart)
+                            }
                         } catch (issue: Exception) {
+                            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
+                                PocketDiagnostics.State.FAIL,
+                                durationMs = SystemClock.elapsedRealtime() - detailsStart,
+                                code = PocketDiagnostics.classify(issue))
                             McpProgressiveBridge.localFailure(issue.message.orEmpty())
                         }
-                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
-                            if (outcome.optBoolean("isError", false))
-                                PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK,
-                            durationMs = SystemClock.elapsedRealtime() - detailsStart)
                         showEvidence(
                             "📋 MCP-Tooldetails aus dem geprüften Katalog " +
                             "(nicht ausgeführt):\n" +
@@ -2640,6 +2650,10 @@ class MainActivity : AppCompatActivity() {
                 trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.PLAN,
                     if (hadRealCall) PocketDiagnostics.State.OK
                     else PocketDiagnostics.State.INFO)
+                if (!hadRealCall && McpRequestRouting.expectsToolEvidence(request))
+                    trace(PocketDiagnostics.Domain.LITERT,
+                        PocketDiagnostics.Step.MODEL_TOOL_MISSING,
+                        PocketDiagnostics.State.INFO)
                 val summary = turn.text.ifBlank { "Keine Modellantwort erzeugt." }
                 val invalidClaim = McpLogCheck.modelOnlyAuditClaim(request, summary) ||
                     McpHealthCheck.modelOnlyClaim(summary) ||
@@ -2712,13 +2726,22 @@ class MainActivity : AppCompatActivity() {
                         result
                     }
                     McpProgressiveBridge.DETAILS -> {
-                        val result = try { run.details(args.getString("tool_id")) }
-                        catch (e: Exception) {
+                        val detailsStart = SystemClock.elapsedRealtime()
+                        val result = try {
+                            run.details(args.getString("tool_id")).also { found ->
+                                trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
+                                    if (found.optBoolean("isError", false))
+                                        PocketDiagnostics.State.FAIL
+                                    else PocketDiagnostics.State.OK,
+                                    durationMs = SystemClock.elapsedRealtime() - detailsStart)
+                            }
+                        } catch (e: Exception) {
+                            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
+                                PocketDiagnostics.State.FAIL,
+                                durationMs = SystemClock.elapsedRealtime() - detailsStart,
+                                code = PocketDiagnostics.classify(e))
                             McpProgressiveBridge.localFailure(e.message.orEmpty())
                         }
-                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
-                            if (result.optBoolean("isError",false))
-                                PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK)
                         evidence("📋 Werkzeugdefinition (nicht ausgeführt):\n" +
                             result.toString().take(1500))
                         result
@@ -3326,7 +3349,27 @@ class MainActivity : AppCompatActivity() {
     private fun showProcessExitInfo() {
         val button = findViewById<MaterialButton>(R.id.crashDiagnosticsButton)
         val uiDelayReport = uiResponsiveness.report()
-        val bindReport = lastMcpBindingReport
+        // GGUF native prefill progress is independent of a live LiteRT MCP
+        // function session. Show both instead of a misleading "no binding".
+        val activeMcp = mcpAgent.current()
+        val liteRtBinding = when {
+            liteRtRuntime == null || activeModel?.name?.endsWith(".litertlm", true) != true ->
+                "LiteRT-MCP: kein geladenes LiteRT-Modell in diesem Prozess."
+            activeMcp == null ->
+                "LiteRT-MCP: Modell geladen, Agent ausgeschaltet."
+            activeMcp.progressiveSources.isNotEmpty() ->
+                "LiteRT-MCP: aktiver Progressive-Katalog, " +
+                    activeMcp.progressiveSources.size + " verbundene Quellen, " +
+                    activeMcp.progressiveSources.sumOf { it.tools.size } +
+                    " echte Tooldefinitionen (lokale Meta-Tools: " +
+                    activeMcp.tools.size + ")."
+            else ->
+                "LiteRT-MCP: aktiver, direkt ausgewählter Toolkontext mit " +
+                    activeMcp.tools.size + " Werkzeugen."
+        }
+        val bindReport = "GGUF-MCP (nativer Prefill): " +
+            lastMcpBindingReport.removePrefix("MCP-BINDUNG: ") +
+            "\n" + liteRtBinding
         button.isEnabled = false
         button.text = "Analysiere Android-Tombstones …"
         lifecycleScope.launch {
@@ -3394,7 +3437,7 @@ class MainActivity : AppCompatActivity() {
                         uiDelayReport + "\n\n" + bindReport +
                         "\n\n---\n\n" + historical +
                         "\n\n--- MCP/MODELL-EVENTS ---\n\n" +
-                        PocketDiagnostics.report(applicationContext).takeLast(12_000)
+                        PocketDiagnostics.report(applicationContext).take(12_000)
                 }
                 if (!isFinishing && !isDestroyed) {
                     showError("Android-Prozessdiagnose", IllegalStateException(report))
@@ -3414,7 +3457,7 @@ class MainActivity : AppCompatActivity() {
             if (inChat) {
                 // Host-side record, NOT model-generated diagnostic evidence.
                 displayMcpToolResult("⌁ LOKALE MCP/MODELL-DIAGNOSE\n" +
-                    report.takeLast(12_000))
+                    report.take(12_000))
                 return@launch
             }
             if (isFinishing || isDestroyed) return@launch
