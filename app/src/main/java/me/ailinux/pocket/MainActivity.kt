@@ -1085,6 +1085,10 @@ class MainActivity : AppCompatActivity() {
             try {
                 val loaded = withContext(Dispatchers.IO) {
                     ModelStore.validate(file)
+                    // Reject known incompatible runtime/model pairs BEFORE
+                    // unloading the previously working model or touching JNI.
+                    LiteRtModelCompatibility.requireSupported(
+                        file.name, BuildConfig.LITERT_LM_VERSION)
                     check(prefs.edit().putString(PREF_LOADING_MODEL, file.name).commit()) {
                         "Prozessdiagnose-Marker konnte nicht gespeichert werden."
                     }

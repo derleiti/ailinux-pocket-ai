@@ -26,7 +26,8 @@ internal object RuntimeHardware {
         val tpuOnly = Regex("(?:^|[-_.])(?:npu|tpu|google_tensor|tensor_g5)(?:[-_.]|$)").containsMatchIn(lower) ||
             lower.contains("google_tensor") || lower.contains("tensor_g5")
         return when {
-            gpuOnly -> listOf(Attempt.GPU, Attempt.CPU).filter { it in available }
+            gpuOnly || LiteRtModelCompatibility.isKnownGpuGraph(name) ->
+                listOf(Attempt.GPU, Attempt.CPU).filter { it in available }
             tpuOnly -> listOf(Attempt.GOOGLE_TENSOR).filter { it in available }
             else -> available
         }

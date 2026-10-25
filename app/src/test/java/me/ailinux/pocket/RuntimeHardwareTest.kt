@@ -35,6 +35,19 @@ class RuntimeHardwareTest {
             RuntimeHardware.forModelFile("qwen-mixed-4b_Google_Tensor_G5.litertlm", all))
     }
 
+    @Test fun upstreamQwen3CommunityFilesSkipUnverifiedTensorBackend() {
+        val available = RuntimeHardware.candidates("Google", "Pixel 10", "Tensor G5")
+        val expected = listOf(RuntimeHardware.Attempt.GPU, RuntimeHardware.Attempt.CPU)
+        assertEquals(expected, RuntimeHardware.forModelFile(
+            "Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm", available))
+        assertEquals(expected, RuntimeHardware.forModelFile(
+            "Qwen3_1.7B.litertlm", available))
+        // Only the allowlisted upstream artifacts skip Google Tensor.
+        assertEquals(available, RuntimeHardware.forModelFile("another-qwen.litertlm", available))
+        assertEquals(listOf(RuntimeHardware.Attempt.GOOGLE_TENSOR),
+            RuntimeHardware.forModelFile("gemma-4-E2B-it_Google_Tensor_G5.litertlm", available))
+    }
+
     @Test fun genericAndroidDoesNotAssumeVendorTpu() {
         assertEquals(listOf(RuntimeHardware.Attempt.GPU, RuntimeHardware.Attempt.CPU),
             RuntimeHardware.candidates("Samsung", "Galaxy S26", "Exynos"))
