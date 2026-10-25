@@ -1970,6 +1970,10 @@ class MainActivity : AppCompatActivity() {
                     trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PLAN,
                         if (hadRealCall) PocketDiagnostics.State.OK
                         else PocketDiagnostics.State.INFO)
+                    if (!hadRealCall && McpRequestRouting.expectsToolEvidence(request))
+                        trace(PocketDiagnostics.Domain.GGUF,
+                            PocketDiagnostics.Step.MODEL_TOOL_MISSING,
+                            PocketDiagnostics.State.INFO)
                     // Native discovery may already have searched or loaded details.
                     // If a real call did not follow, continue the SAME
                     // authorized plan through the approved host fallback.
@@ -2049,14 +2053,20 @@ class MainActivity : AppCompatActivity() {
                     } else if (meta == McpProgressiveBridge.DETAILS) {
                         val detailsStart = SystemClock.elapsedRealtime()
                         outcome = try {
-                            runtime.details(args.getString("tool_id"))
+                            runtime.details(args.getString("tool_id")).also { result ->
+                                trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
+                                    if (result.optBoolean("isError", false))
+                                        PocketDiagnostics.State.FAIL
+                                    else PocketDiagnostics.State.OK,
+                                    durationMs = SystemClock.elapsedRealtime() - detailsStart)
+                            }
                         } catch (issue: Exception) {
+                            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
+                                PocketDiagnostics.State.FAIL,
+                                durationMs = SystemClock.elapsedRealtime() - detailsStart,
+                                code = PocketDiagnostics.classify(issue))
                             McpProgressiveBridge.localFailure(issue.message.orEmpty())
                         }
-                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
-                            if (outcome.optBoolean("isError", false))
-                                PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK,
-                            durationMs = SystemClock.elapsedRealtime() - detailsStart)
                         showEvidence(
                             "📋 MCP-Tooldetails aus dem geprüften Katalog " +
                             "(nicht ausgeführt):\n" +
@@ -2511,8 +2521,53 @@ class MainActivity : AppCompatActivity() {
         answer: ChatMessage,
         answerIndex: Int
     ): Boolean {
-        val plan = runCatching { McpOnDemandDiscovery.propose(request, run) }.getOrNull()
-            ?: return false
+        var blocked: McpOnDemandDiscovery.Rejection? = null
+        val plan = try {
+            McpOnDemandDiscovery.propose(request, run) { blocked = it }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (problem: Exception) {
+            val id = failure(PocketDiagnostics.Domain.MCP,
+                PocketDiagnostics.Step.HOST_FALLBACK, problem)
+            answer.content = "⚠️ AUTO-MCP-Planung fehlgeschlagen: " +
+                getString(R.string.diagnostics_error,
+                    PocketDiagnostics.publicError(problem), id) +
+                "\nKeine Serveraktion ausgeführt."
+            chatAdapter.notifyItemChanged(answerIndex)
+            return true
+        }
+        if (plan == null) {
+            val reason = blocked ?: McpOnDemandDiscovery.Rejection.NO_CATALOG_MATCH
+            val code = when (reason) {
+                McpOnDemandDiscovery.Rejection.AMBIGUOUS_TOOL ->
+                    PocketDiagnostics.ErrorCode.AMBIGUOUS_TOOL
+                McpOnDemandDiscovery.Rejection.UNVERIFIED_READONLY ->
+                    PocketDiagnostics.ErrorCode.UNVERIFIED_READONLY
+                McpOnDemandDiscovery.Rejection.ARGUMENTS_UNAVAILABLE ->
+                    PocketDiagnostics.ErrorCode.ARGUMENTS_UNAVAILABLE
+                else -> PocketDiagnostics.ErrorCode.NO_SAFE_MATCH
+            }
+            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.HOST_FALLBACK,
+                PocketDiagnostics.State.REJECTED, code = code)
+            answer.content = when (reason) {
+                McpOnDemandDiscovery.Rejection.AMBIGUOUS_TOOL ->
+                    "⚠️ AUTO-MCP: mehrere mögliche Werkzeuge oder Server. " +
+                        "Bitte Server und Werkzeug eindeutig nennen."
+                McpOnDemandDiscovery.Rejection.UNVERIFIED_READONLY ->
+                    "⚠️ AUTO-MCP: keine verifizierte lesende Werkzeugfreigabe " +
+                        "für den sicheren App-Fallback vorhanden."
+                McpOnDemandDiscovery.Rejection.ARGUMENTS_UNAVAILABLE ->
+                    "⚠️ AUTO-MCP: erforderliche Werkzeugparameter fehlen oder " +
+                        "können nicht sicher abgeleitet werden."
+                McpOnDemandDiscovery.Rejection.TOOL_DETAILS_UNAVAILABLE ->
+                    "⚠️ AUTO-MCP: Werkzeugdetails konnten nicht vollständig " +
+                        "und sicher geladen werden."
+                else -> "⚠️ AUTO-MCP: kein eindeutig passendes, geprüftes " +
+                    "Werkzeug für diesen Auftrag gefunden."
+            } + "\nKein tools/call ausgeführt. Diagnose: HOST_FALLBACK / " + code.name
+            chatAdapter.notifyItemChanged(answerIndex)
+            return true
+        }
         if (mcpAgent.current() != active) return false
         trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
             PocketDiagnostics.State.OK, tool = plan.tool.name)
@@ -2534,6 +2589,58 @@ class MainActivity : AppCompatActivity() {
             }
             answer.content = "🔧 ECHTE MCP-SERVERANTWORT (App-gestützt):\n" +
                 McpAgentBridge.receipt(plan.tool, result) +
+                "\nKeine native Modell-Toolfortsetzung behauptet."
+        } catch (error: Exception) {
+            val eventId = failure(PocketDiagnostics.Domain.MCP,
+                PocketDiagnostics.Step.REMOTE_ERROR, error,
+                uncertain = dispatchState.unconfirmed(error))
+            answer.content = (if (dispatchState.unconfirmed(error))
+                "⚠️ MCP-Ausführung unklar: " else
+                "⚠️ MCP-Aufruf vor dem Senden abgebrochen: ") +
+                getString(R.string.diagnostics_error,
+                    PocketDiagnostics.publicError(error), eventId) +
+                "\nKein automatischer Wiederholungsversuch."
+        } finally {
+            mcpDispatchInFlight = false
+            chatAdapter.notifyItemChanged(answerIndex)
+        }
+        return true
+    }
+
+    /**
+     * Host-only fallback for selected LiteRT tools when a small model emits
+     * prose instead of a native function call. One explicit proposal, fresh
+     * one-shot consent, live authorization and schema/risk revalidation.
+     * Never claim a native LiteRT tool response or call twice.
+     */
+    private suspend fun trySelectedHostFallback(
+        active: McpAgentSession,
+        request: String,
+        answer: ChatMessage,
+        answerIndex: Int
+    ): Boolean {
+        val proposal = McpOnDemandDiscovery.proposeSelected(request, active) ?: return false
+        if (mcpAgent.current() != active) return false
+        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
+            PocketDiagnostics.State.INFO, tool = proposal.tool.name)
+        answer.content = "🔎 App-gestützter Werkzeugvorschlag (kein nativer " +
+            "LiteRT-ToolCall): " + active.serverName + " / " + proposal.tool.name +
+            "\nParameter: " + proposal.args.toString() + "\nNoch nichts ausgeführt."
+        chatAdapter.notifyItemChanged(answerIndex)
+        if (!mcpAgent.requestApproval(active, proposal)) {
+            answer.content = "⛔ App-Werkzeugvorschlag abgelehnt. Keine Serveraktion."
+            chatAdapter.notifyItemChanged(answerIndex)
+            return true
+        }
+        mcpDispatchInFlight = true
+        val dispatchState = McpDispatchState()
+        try {
+            val result = withContext(Dispatchers.IO) {
+                mcpAgent.execute(active, proposal, dispatchState, hostFallback = true)
+            }
+            answer.content = "🔧 ECHTE MCP-SERVERANTWORT (App-gestützt; " +
+                "LiteRT erzeugte keinen nativen ToolCall):\n" +
+                McpAgentBridge.receipt(proposal.tool, result) +
                 "\nKeine native Modell-Toolfortsetzung behauptet."
         } catch (error: Exception) {
             val eventId = failure(PocketDiagnostics.Domain.MCP,
@@ -2588,6 +2695,10 @@ class MainActivity : AppCompatActivity() {
                 trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.PLAN,
                     if (hadRealCall) PocketDiagnostics.State.OK
                     else PocketDiagnostics.State.INFO)
+                if (!hadRealCall && McpRequestRouting.expectsToolEvidence(request))
+                    trace(PocketDiagnostics.Domain.LITERT,
+                        PocketDiagnostics.Step.MODEL_TOOL_MISSING,
+                        PocketDiagnostics.State.INFO)
                 val summary = turn.text.ifBlank { "Keine Modellantwort erzeugt." }
                 val invalidClaim = McpLogCheck.modelOnlyAuditClaim(request, summary) ||
                     McpHealthCheck.modelOnlyClaim(summary) ||
@@ -2601,6 +2712,11 @@ class MainActivity : AppCompatActivity() {
                     McpRequestRouting.expectsToolEvidence(request)) {
                     if (tryHostDiscovery(active, request, checkNotNull(catalog),
                             answer, answerIndex)) return
+                }
+                if (!hadRealCall && !progressive &&
+                    McpRequestRouting.expectsToolEvidence(request) &&
+                    trySelectedHostFallback(active, request, answer, answerIndex)) {
+                    return
                 }
                 if (!hadRealCall && McpRequestRouting.expectsToolEvidence(request)) {
                     val searched = (catalog?.searchCount ?: 0) > 0
@@ -2655,13 +2771,22 @@ class MainActivity : AppCompatActivity() {
                         result
                     }
                     McpProgressiveBridge.DETAILS -> {
-                        val result = try { run.details(args.getString("tool_id")) }
-                        catch (e: Exception) {
+                        val detailsStart = SystemClock.elapsedRealtime()
+                        val result = try {
+                            run.details(args.getString("tool_id")).also { found ->
+                                trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
+                                    if (found.optBoolean("isError", false))
+                                        PocketDiagnostics.State.FAIL
+                                    else PocketDiagnostics.State.OK,
+                                    durationMs = SystemClock.elapsedRealtime() - detailsStart)
+                            }
+                        } catch (e: Exception) {
+                            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
+                                PocketDiagnostics.State.FAIL,
+                                durationMs = SystemClock.elapsedRealtime() - detailsStart,
+                                code = PocketDiagnostics.classify(e))
                             McpProgressiveBridge.localFailure(e.message.orEmpty())
                         }
-                        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
-                            if (result.optBoolean("isError",false))
-                                PocketDiagnostics.State.FAIL else PocketDiagnostics.State.OK)
                         evidence("📋 Werkzeugdefinition (nicht ausgeführt):\n" +
                             result.toString().take(1500))
                         result
@@ -3269,7 +3394,27 @@ class MainActivity : AppCompatActivity() {
     private fun showProcessExitInfo() {
         val button = findViewById<MaterialButton>(R.id.crashDiagnosticsButton)
         val uiDelayReport = uiResponsiveness.report()
-        val bindReport = lastMcpBindingReport
+        // GGUF native prefill progress is independent of a live LiteRT MCP
+        // function session. Show both instead of a misleading "no binding".
+        val activeMcp = mcpAgent.current()
+        val liteRtBinding = when {
+            liteRtRuntime == null || activeModel?.name?.endsWith(".litertlm", true) != true ->
+                "LiteRT-MCP: kein geladenes LiteRT-Modell in diesem Prozess."
+            activeMcp == null ->
+                "LiteRT-MCP: Modell geladen, Agent ausgeschaltet."
+            activeMcp.progressiveSources.isNotEmpty() ->
+                "LiteRT-MCP: aktiver Progressive-Katalog, " +
+                    activeMcp.progressiveSources.size + " verbundene Quellen, " +
+                    activeMcp.progressiveSources.sumOf { it.tools.size } +
+                    " echte Tooldefinitionen (lokale Meta-Tools: " +
+                    activeMcp.tools.size + ")."
+            else ->
+                "LiteRT-MCP: aktiver, direkt ausgewählter Toolkontext mit " +
+                    activeMcp.tools.size + " Werkzeugen."
+        }
+        val bindReport = "GGUF-MCP (nativer Prefill): " +
+            lastMcpBindingReport.removePrefix("MCP-BINDUNG: ") +
+            "\n" + liteRtBinding
         button.isEnabled = false
         button.text = "Analysiere Android-Tombstones …"
         lifecycleScope.launch {
@@ -3337,7 +3482,7 @@ class MainActivity : AppCompatActivity() {
                         uiDelayReport + "\n\n" + bindReport +
                         "\n\n---\n\n" + historical +
                         "\n\n--- MCP/MODELL-EVENTS ---\n\n" +
-                        PocketDiagnostics.report(applicationContext).takeLast(12_000)
+                        PocketDiagnostics.report(applicationContext).take(12_000)
                 }
                 if (!isFinishing && !isDestroyed) {
                     showError("Android-Prozessdiagnose", IllegalStateException(report))
@@ -3357,7 +3502,7 @@ class MainActivity : AppCompatActivity() {
             if (inChat) {
                 // Host-side record, NOT model-generated diagnostic evidence.
                 displayMcpToolResult("⌁ LOKALE MCP/MODELL-DIAGNOSE\n" +
-                    report.takeLast(12_000))
+                    report.take(12_000))
                 return@launch
             }
             if (isFinishing || isDestroyed) return@launch

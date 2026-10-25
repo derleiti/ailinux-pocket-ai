@@ -52,6 +52,29 @@ class PocketDiagnosticsTest {
             PocketDiagnostics.classify(Exception("HTTP 401 unauthorized")))
     }
 
+    @Test fun localDiscoveryFailuresAreTypedWithoutLoggingToolIds() {
+        val expired = IllegalArgumentException("MCP-Katalog ist abgelaufen. Auto-Bridge neu verbinden.")
+        val missing = IllegalArgumentException(
+            "tool_id wurde noch nicht durch MCP-Suche angezeigt")
+        val oversized = IllegalArgumentException(
+            "Schema zu groß für lokales 4B-Modell; Tool manuell verwenden")
+        assertEquals(PocketDiagnostics.ErrorCode.CATALOG_EXPIRED,
+            PocketDiagnostics.classify(expired))
+        assertEquals(PocketDiagnostics.ErrorCode.NOT_FOUND,
+            PocketDiagnostics.classify(missing))
+        assertEquals(PocketDiagnostics.ErrorCode.SCHEMA_TOO_LARGE,
+            PocketDiagnostics.classify(oversized))
+        assertEquals(PocketDiagnostics.ErrorCode.SCHEMA,
+            PocketDiagnostics.classify(org.json.JSONException("invalid JSON key")))
+        val event = PocketDiagnostics.Event(
+            1780000000L, "aabbccdd", "11223344",
+            PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAILS,
+            PocketDiagnostics.State.FAIL, code = PocketDiagnostics.classify(missing))
+        assertEquals(PocketDiagnostics.ErrorCode.NOT_FOUND, event.code)
+        assertFalse(event.json().toString().contains("tool_id"))
+        assertFalse(event.line().contains("durch MCP-Suche"))
+    }
+
     @Test fun toolErrorsInputRequiredAndSuccessAreDifferentStates() {
         val complete = JSONObject().put("resultType","complete").put("isError",false)
         val denied = JSONObject().put("resultType","complete").put("isError",true)
@@ -75,6 +98,20 @@ class PocketDiagnosticsTest {
         val three = PocketDiagnostics.nextTimestamp()
         assertTrue(two > one)
         assertTrue(three > two)
+    }
+
+    @Test fun latestEventsAppearFirstAndRemainVisibleInShortAccessibilityPreview() {
+        val older = PocketDiagnostics.Event(1780000000L, "aabbccdd", "11111111",
+            PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SEARCH,
+            PocketDiagnostics.State.OK)
+        val newer = PocketDiagnostics.Event(1780000030L, "ddeeff00", "22222222",
+            PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SERVER_RESULT,
+            PocketDiagnostics.State.OK)
+        val text = PocketDiagnostics.recentLines(listOf(older, newer))
+        assertTrue(text.indexOf("SERVER_RESULT") < text.indexOf("SEARCH"))
+        assertTrue(PocketDiagnostics.recentLines(listOf(older,newer),130)
+            .contains("SERVER_RESULT"))
+        assertFalse(PocketDiagnostics.recentLines(listOf(older,newer),0).isNotEmpty())
     }
 
     @Test fun discoveryIsNotAConfirmedMcpServerReceipt() {

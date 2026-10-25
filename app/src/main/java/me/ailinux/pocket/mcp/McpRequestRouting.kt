@@ -26,6 +26,24 @@ object McpRequestRouting {
             "wie\\s+funktioniert|what\\s+(?:is|does)|explain\\b|describe\\b)",
         RegexOption.IGNORE_CASE
     )
+    private val explanationVerb = Regex(
+        "\\b(?:erklär\\p{L}*|erklaer\\p{L}*|explain\\p{L}*|" +
+            "beschreib\\p{L}*|bedeutet|meaning)\\b", RegexOption.IGNORE_CASE
+    )
+    private val explicitExecution = Regex(
+        "\\b(?:rufe|ruf|hole|hol|abrufen|abfragen|prüfe|pruefe|checke|" +
+            "nutze|benutze|verwende|führe|ausführen|sende|starte|crawl|" +
+            "crawle|crawlen)\\b", RegexOption.IGNORE_CASE
+    )
+
+    /** Explanation-only questions must not generate host tool proposals. */
+    fun isExplanationOnly(message: String): Boolean {
+        val text = message.trim().replace(Regex("\\s+"), " ")
+        return explanation.containsMatchIn(text) ||
+            (explanationVerb.containsMatchIn(text) &&
+                !explicitExecution.containsMatchIn(text))
+    }
+
     private val inventoryOnly = Regex(
         "^(?:(?:mcp|discord)\\s+)?(?:tools?|werkzeuge?|funktionen?)" +
             "(?:\\s+(?:mcp|discord))?$", RegexOption.IGNORE_CASE
@@ -66,7 +84,7 @@ object McpRequestRouting {
     fun expectsToolEvidence(message: String): Boolean {
         val normalized = message.lowercase(Locale.ROOT)
         // Explaining a concept is not evidence that an external action ran.
-        if (explanation.containsMatchIn(normalized)) return false
+        if (isExplanationOnly(normalized)) return false
         return McpHealthCheck.requestedTarget(message) != null ||
             McpLogCheck.requested(message) ||
             McpQuickActions.requestedAction(message) is McpQuickActions.Selection.Request ||

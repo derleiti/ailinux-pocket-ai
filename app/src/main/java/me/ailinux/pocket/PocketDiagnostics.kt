@@ -27,16 +27,20 @@ internal object PocketDiagnostics {
     enum class Domain { MCP, GGUF, LITERT, SYSTEM }
     enum class Step {
         REQUEST, MODEL_START, MODEL_DONE, MODEL_ERROR, MODEL_RESET, MODEL_LOAD,
-        DISCOVERY_START, DISCOVERY_DONE, SEARCH, DETAILS, PLAN, PROPOSAL,
+        DISCOVERY_START, DISCOVERY_DONE, SEARCH, DETAILS, PLAN, HOST_FALLBACK, PROPOSAL,
         APPROVAL_REQUEST, APPROVAL_ACCEPT, APPROVAL_DENY,
         AUTH_CHECK, SCHEMA_CHECK, DISPATCH, SERVER_RESULT, REMOTE_ERROR,
-        MODEL_FOLLOWUP, INPUT_REQUIRED, CANCELLED, ENGINE_ERROR, DIAGNOSTIC
+        MODEL_FOLLOWUP, MODEL_TOOL_MISSING, INPUT_REQUIRED, CANCELLED,
+        ENGINE_ERROR, DIAGNOSTIC
     }
     enum class State { START, OK, INFO, REJECTED, FAIL, UNCONFIRMED }
     enum class ErrorCode {
         NONE, TIMEOUT, HTTP_AUTH, HTTP_DENIED, HTTP_FAILURE, NETWORK,
         MODEL_KV, TENSOR_BACKEND, MEMORY, CANCELLED, SCHEMA, MCP_PROTOCOL,
-        NOT_FOUND, NATIVE_CRASH, MODEL_RUNTIME, UNKNOWN
+        NOT_FOUND, CATALOG_EXPIRED, SCHEMA_TOO_LARGE,
+        AMBIGUOUS_TOOL, NO_SAFE_MATCH, UNVERIFIED_READONLY,
+        ARGUMENTS_UNAVAILABLE, NATIVE_CRASH,
+        MODEL_RUNTIME, UNKNOWN
     }
     data class Event(
         val time: Long, val id: String, val trace: String,
@@ -87,6 +91,12 @@ internal object PocketDiagnostics {
         val klass = error.javaClass.simpleName.lowercase(Locale.ROOT)
         val message = error.message.orEmpty().lowercase(Locale.ROOT)
         return when {
+            "katalog ist abgelaufen" in message -> ErrorCode.CATALOG_EXPIRED
+            "schema zu groß" in message || "schema too large" in message ->
+                ErrorCode.SCHEMA_TOO_LARGE
+            "tool_id wurde noch nicht" in message || "unbekannte tool_id" in message ->
+                ErrorCode.NOT_FOUND
+            error is org.json.JSONException -> ErrorCode.SCHEMA
             "no kv cache inputs found" in message -> ErrorCode.MODEL_KV
             ("google_tensor" in message || "tensor" in message) &&
                 ("not_found" in message || "create engine" in message) -> ErrorCode.TENSOR_BACKEND
@@ -250,6 +260,16 @@ internal object PocketDiagnostics {
         log(context, trace, domain, step,
             if (uncertain) State.UNCONFIRMED else State.FAIL, code = classify(error))
 
+    /**
+     * Newest evidence comes first. Android accessibility often returns only
+     * the first part of long TextViews, so chronological rendering hid the
+     * most important DISPATCH / SERVER_RESULT evidence during live Pixel QA.
+     * Limiting the prefix (not the suffix) preserves the newest events.
+     */
+    internal fun recentLines(events: List<Event>, maxChars: Int = 25_000): String =
+        events.asReversed().joinToString("\n") { it.line() }
+            .take(maxChars.coerceIn(0, 25_000))
+
     suspend fun report(context: Context): String = withContext(io) {
         synchronized(lock) {
             val events = readLocked(context).takeLast(MAX_EVENTS)
@@ -258,10 +278,10 @@ internal object PocketDiagnostics {
                 "DISPATCH zeigt eine empfangene tools/call-Antwort. " +
                 "UNCONFIRMED ist kein bestätigter Erfolg.\n" +
                 "Keine Prompts, Tokens, Endpunkte, Parameter, Toolresultat-Texte oder " +
-                "Stacktraces gespeichert.\nEreignisse: " + events.size +
-                "/" + MAX_EVENTS + "\n\n"
+                "Stacktraces gespeichert.\nNeueste Ereignisse zuerst. Ereignisse: " +
+                events.size + "/" + MAX_EVENTS + "\n\n"
             header + if (events.isEmpty()) "Keine Ereignisse erfasst."
-                else events.joinToString("\n") { it.line() }.takeLast(25_000)
+                else recentLines(events)
         }
     }
 

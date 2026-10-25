@@ -41,6 +41,14 @@ class McpRequestRoutingTest {
         assertFalse(McpRequestRouting.useModelAgent("Bitte einen MCP-Health-Check machen", true))
     }
 
+    @Test fun explanationVerbLaterInQuestionIsNotAnExternalTask() {
+        val plain = "Kannst du mir den TriForce-Systemstatus erklären?"
+        assertTrue(McpRequestRouting.isExplanationOnly(plain))
+        assertFalse(McpRequestRouting.expectsToolEvidence(plain))
+        assertTrue(McpRequestRouting.expectsToolEvidence(
+            "Rufe den TriForce-Status ab und erkläre das Ergebnis"))
+    }
+
     @Test fun explanatoryMcpQuestionsDoNotNeedExternalAction() {
         for (text in listOf(
             "Erkläre mir, was Status im Discord-Server bedeutet",

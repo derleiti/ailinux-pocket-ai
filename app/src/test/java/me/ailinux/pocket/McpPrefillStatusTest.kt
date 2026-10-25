@@ -145,7 +145,10 @@ class McpPrefillStatusTest {
     @Test fun bindingDiagnosticsReportRealTokenCountAndDurationWithoutSecrets() {
         val main = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
         assertTrue(main.contains("lastMcpBindingReport"))
-        assertTrue(main.contains("val bindReport = lastMcpBindingReport"))
+        assertTrue(main.contains("GGUF-MCP (nativer Prefill)"))
+        assertTrue(main.contains("lastMcpBindingReport.removePrefix"))
+        assertTrue(main.contains("LiteRT-MCP: aktiver Progressive-Katalog"))
+        assertTrue(main.contains("LiteRT-MCP: aktiver, direkt ausgewählter Toolkontext"))
         assertTrue(main.contains("engine.systemPromptPrefillCounts()"))
         val format = File("src/main/java/me/ailinux/pocket/McpPrefillStatus.kt").readText()
         assertFalse(format.contains("oauthToken"))
