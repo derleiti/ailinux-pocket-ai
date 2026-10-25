@@ -77,6 +77,22 @@ class McpSelectedHostFallbackTest {
             session(tool("status"), tool("status"))))
     }
 
+    @Test fun selectedExecutorNeverElevatesCrawlThroughReadOnlyAnnotation() {
+        assertTrue(McpOnDemandDiscovery.isAuditedReadOnlyTool(tool("status")))
+        assertFalse(McpOnDemandDiscovery.isAuditedReadOnlyTool(tool("crawl")))
+        assertFalse(McpOnDemandDiscovery.isAuditedReadOnlyTool(tool("delete_files")))
+        assertFalse(McpOnDemandDiscovery.isAuditedReadOnlyTool(tool("status",
+            annotations = JSONObject().put("readOnlyHint", false))))
+        assertFalse(McpOnDemandDiscovery.isAuditedReadOnlyTool(tool("status",
+            annotations = JSONObject())))
+
+        val agent = File("src/main/java/me/ailinux/pocket/mcp/McpAgentUi.kt").readText()
+        val execute = agent.substringAfter("    suspend fun execute(")
+            .substringBefore("    private fun error(")
+        assertTrue(execute.contains("McpOnDemandDiscovery.isAuditedReadOnlyTool(current)"))
+        assertFalse(execute.contains("\"crawl\""))
+    }
+
     @Test fun unsafeMandatoryArgumentsCannotBeGuessed() {
         val required = JSONObject().put("type", "object")
             .put("properties", JSONObject().put("target", JSONObject().put("type","string")))
@@ -108,7 +124,7 @@ class McpSelectedHostFallbackTest {
         assertTrue(activity.contains("!progressive &&"))
         assertTrue(activity.contains("trySelectedHostFallback(active, request, answer, answerIndex)"))
         val agent = File("src/main/java/me/ailinux/pocket/mcp/McpAgentUi.kt").readText()
-        assertTrue(agent.contains("current.declaresReadOnly"))
+        assertTrue(agent.contains("McpOnDemandDiscovery.isAuditedReadOnlyTool(current)"))
         assertTrue(agent.contains("McpToolSchema.equivalent(current.annotations, proposal.tool.annotations)"))
     }
 }
