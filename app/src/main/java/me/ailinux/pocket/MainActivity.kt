@@ -3715,6 +3715,8 @@ class MainActivity : AppCompatActivity() {
                             ApplicationExitInfo.REASON_ANR -> "App reagiert nicht (ANR)"
                             ApplicationExitInfo.REASON_SIGNALED -> "Signalbedingter Abbruch"
                             ApplicationExitInfo.REASON_PACKAGE_UPDATED -> "App-Update (kein Crash)"
+                            ApplicationExitInfo.REASON_EXIT_SELF ->
+                                "App-Prozess selbst beendet (System.exit; kein Crash-Beweis)"
                             ApplicationExitInfo.REASON_USER_REQUESTED ->
                                 "Vom Nutzer beendet / Aufgabe entfernt (kein Crash)"
                             else -> "Android-Code " + exit.reason
