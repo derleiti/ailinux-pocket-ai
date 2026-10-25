@@ -14,6 +14,7 @@ internal class GgufLoadFailure(
     enum class Phase {
         METADATA,
         PREVIOUS_ENGINE_RELEASE,
+        MEMORY_PREFLIGHT,
         NATIVE_MODEL_LOAD,
         THINKING_SETUP,
         CHAT_TEMPLATE,
@@ -21,8 +22,11 @@ internal class GgufLoadFailure(
     }
 
     val diagnosticCode: PocketDiagnostics.ErrorCode get() = when (phase) {
-        Phase.METADATA -> PocketDiagnostics.ErrorCode.GGUF_METADATA
+        Phase.METADATA -> if (cause is GgufProjectorException)
+            PocketDiagnostics.ErrorCode.GGUF_PROJECTOR
+        else PocketDiagnostics.ErrorCode.GGUF_METADATA
         Phase.PREVIOUS_ENGINE_RELEASE -> PocketDiagnostics.ErrorCode.GGUF_PREVIOUS_ENGINE
+        Phase.MEMORY_PREFLIGHT -> PocketDiagnostics.ErrorCode.GGUF_MEMORY_PREFLIGHT
         Phase.NATIVE_MODEL_LOAD -> PocketDiagnostics.ErrorCode.GGUF_NATIVE_LOAD
         Phase.THINKING_SETUP -> PocketDiagnostics.ErrorCode.GGUF_THINKING
         Phase.CHAT_TEMPLATE -> PocketDiagnostics.ErrorCode.GGUF_TEMPLATE
