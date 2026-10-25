@@ -147,6 +147,30 @@ class McpOnDemandDiscoveryTest {
         assertEquals("{}", candidate.arguments.toString())
     }
 
+    @Test fun shortWorkspaceStatusTypoPlansOnlyRealReadOnlyWorkspaceTool() {
+        val run = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1", "workspace-id",
+                "https://example.test/ws", "AILinux TriForce Workspace",
+                listOf(tool("status"))),
+            McpProgressiveBridge.Source("s2", "dev-id",
+                "https://example.test/dev", "AILinux TriForce DEV MCP",
+                listOf(tool("status")))
+        ))
+        for (userRequest in listOf("workspace status", "worspace status",
+                "Brumo, worspace status")) {
+            val proposed = McpOnDemandDiscovery.propose(userRequest, run)
+            assertNotNull("Cannot omit a safe app proposal: " + userRequest, proposed)
+            assertEquals(userRequest, "s1/status", proposed!!.toolId)
+            assertEquals("workspace-id", proposed.source.profileId)
+            assertEquals("{}", proposed.arguments.toString())
+            assertTrue(proposed.hostFallback)
+        }
+        assertNull(McpOnDemandDiscovery.propose("status", run))
+        assertNull(McpOnDemandDiscovery.propose(
+            "Erkläre mir den Workspace-Status", run))
+        assertEquals(0, run.remoteCalls)
+    }
+
     @Test fun ambiguousProviderForIdenticalToolNamesAbstainsWithoutDispatch() {
         val sameName = tool("status")
         val providers = McpProgressiveBridge.Run(listOf(
@@ -160,6 +184,27 @@ class McpOnDemandDiscoveryTest {
         assertNull(McpOnDemandDiscovery.propose(
             "Prüfe mit MCP den TriForce-Systemstatus", providers))
         assertEquals(0, providers.remoteCalls)
+    }
+
+    @Test fun malformedCrawlUrlsAreParameterErrorsWithoutAnyCall() {
+        val state = run(listOf(tool("crawl", JSONObject()
+            .put("type", "object")
+            .put("properties", JSONObject().put("url",
+                JSONObject().put("type", "string")))
+            .put("required", org.json.JSONArray().put("url")))))
+        for (request in listOf(
+            "crawl über triforce dev mcp httpsailinux.me",
+            "crawle die Website http://ailinux.me über MCP",
+            "crawl httpsailinux.me"
+        )) {
+            var rejection: McpOnDemandDiscovery.Rejection? = null
+            assertNull(request, McpOnDemandDiscovery.propose(request, state) {
+                rejection = it
+            })
+            assertEquals(request, McpOnDemandDiscovery.Rejection.ARGUMENTS_UNAVAILABLE,
+                rejection)
+        }
+        assertEquals(0, state.remoteCalls)
     }
 
     @Test fun genericToolCallWordIsNotAnExplicitMcpToolName() {
