@@ -123,29 +123,25 @@ class ModelStore(private val context: Context) {
             // A resume Range starting at EOF legitimately returns HTTP 416.
             // This happens when Android stopped us *after* the final byte but
             // *before* verification/publish. Never discard those bytes.
-            if (code == 416 && offset > 32 && (validator != null ||
-                    sha256?.matches(Regex("[a-fA-F0-9]{64}")) == true)) {
-                val remoteLength = completedRangeLength(
-                    connection.getHeaderField("Content-Range"))
-                if (remoteLength == offset) {
-                    val returnedTag = connection.getHeaderField("ETag")
-                        ?: connection.getHeaderField("Last-Modified")
-                    // A 416 result is NOT proof that the bytes belong to
-                    // today's object. Demand a verified SHA-256, or an exact
-                    // validator echoed by the server. A missing validator
-                    // is not grounds to trust an old partial.
-                    require(sha256?.matches(Regex("[a-fA-F0-9]{64}")) == true ||
-                        (validator != null && returnedTag == validator)) {
-                        "HTTP 416 ohne überprüfbare SHA-256 oder aktuellen " +
-                            "Range-Validator; Teildatei bleibt erhalten."
-                    }
-                    progress(TransferProgress(offset, offset))
-                    return verifyAndPublish(temp, target, name, validatorFile,
-                        sha256, cancelled, onVerifying, progress)
-                }
-                throw java.io.IOException("HTTP 416: Teilstand " + offset +
-                    " stimmt nicht mit Remote-Länge " + remoteLength +
-                    " überein; Teil-Datei bleibt erhalten.")
+            if (code == 416 && offset > 32) {
+                // HF/Xet can return 416 at EOF with NO Content-Range or ETag.
+                // Never trust the status or a rounded 100% progress indicator.
+                // If the request pinned a SHA, hash the on-disk bytes.
+                // Otherwise use a bounded HTTPS HEAD for exact remote
+                // identity; HF's trusted X-Linked-ETag is a content SHA-256.
+                val range = connection.getHeaderField("Content-Range")
+                val currentTag = connection.getHeaderField("ETag")
+                val needsHead = sha256 == null &&
+                    (range == null || completedRangeLength(range) == null ||
+                        validator == null || currentTag != validator)
+                val fresh = if (needsHead)
+                    fetchCompletedRangeEvidence(url)
+                else null
+                val verifiedHash = completedRangeProof(
+                    offset, range, currentTag, validator, sha256, fresh)
+                progress(TransferProgress(offset, offset))
+                return verifyAndPublish(temp, target, name, validatorFile,
+                    verifiedHash, cancelled, onVerifying, progress)
             }
             if (code == 429 || code in 500..599)
                 throw java.io.IOException("HTTP " + code + " – Server vorübergehend nicht erreichbar")
@@ -311,7 +307,97 @@ class ModelStore(private val context: Context) {
         }
     }
 
+    /** Trusted length, current strong validator or expected content digest. */
+    internal data class CompletedRangeEvidence(
+        val length: Long? = null,
+        val strongEtag: String? = null,
+        val linkedSha256: String? = null
+    )
+
     companion object {
+        private val digestPattern = Regex("^[a-fA-F0-9]{64}$")
+        private val strongTagPattern = Regex("^\\\"[^\\\"]{1,198}\\\"$")
+
+        /** Returns SHA to be hashed before publish, or null for strong validator proof. */
+        internal fun completedRangeProof(
+            downloaded: Long,
+            rangeHeader: String?,
+            responseTag: String?,
+            savedTag: String?,
+            expectedSha256: String?,
+            fresh: CompletedRangeEvidence?
+        ): String? {
+            require(downloaded > 32) { "HTTP 416: keine vollständige Modelldatei." }
+            if (rangeHeader != null) {
+                require(completedRangeLength(rangeHeader) == downloaded) {
+                    "HTTP 416: widersprüchliche Remote-Länge; Teildatei bleibt."
+                }
+            }
+            if (expectedSha256 != null) {
+                require(digestPattern.matches(expectedSha256)) {
+                    "HTTP 416: ungültige gespeicherte SHA-256."
+                }
+                // Full-file SHA-256 is verified in verifyAndPublish().
+                return expectedSha256
+            }
+            val linked = fresh?.linkedSha256
+            if (linked != null && digestPattern.matches(linked) &&
+                fresh.length == downloaded) {
+                // Link metadata came directly from trusted huggingface.co HTTPS
+                // and is checked against actual local bytes before publishing.
+                return linked
+            }
+            val length = completedRangeLength(rangeHeader) ?: fresh?.length
+            val tag = responseTag ?: fresh?.strongEtag
+            require(length == downloaded &&
+                savedTag != null &&
+                strongTagPattern.matches(savedTag) &&
+                tag == savedTag) {
+                "HTTP 416: kein bestätigter SHA-256 oder aktueller starker " +
+                    "ETag mit exakter Dateigröße; Teildatei bleibt erhalten."
+            }
+            return null
+        }
+
+        private fun fetchCompletedRangeEvidence(original: URL): CompletedRangeEvidence? {
+            val hfResolve = original.host.equals("huggingface.co", true) &&
+                Regex("^/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/resolve/").containsMatchIn(
+                    original.path)
+            val head = (original.openConnection() as HttpURLConnection).apply {
+                requestMethod = "HEAD"
+                connectTimeout = 10_000
+                readTimeout = 15_000
+                instanceFollowRedirects = !hfResolve
+                setRequestProperty("User-Agent", "AILinux-Pocket-AI/2.1")
+                setRequestProperty("Accept-Encoding", "identity")
+            }
+            try {
+                val response = head.responseCode
+                require(head.url.protocol.equals("https", true)) {
+                    "HTTP 416: unsicheres HEAD-Redirect verweigert."
+                }
+                if (hfResolve && response in 200..399) {
+                    // Only HEAD headers served directly by the actual
+                    // huggingface.co origin may authenticate Xet content.
+                    val linkedSize = head.getHeaderField("X-Linked-Size")
+                        ?.trim()?.toLongOrNull()?.takeIf { it > 32 }
+                    val linkedHash = head.getHeaderField("X-Linked-ETag")
+                        ?.trim()?.removeSurrounding("\"")
+                        ?.takeIf { digestPattern.matches(it) }
+                    if (linkedHash != null && linkedSize != null)
+                        return CompletedRangeEvidence(
+                            length = linkedSize, linkedSha256 = linkedHash)
+                }
+                if (response != HttpURLConnection.HTTP_OK) return null
+                return CompletedRangeEvidence(
+                    length = head.contentLengthLong.takeIf { it > 32 },
+                    strongEtag = head.getHeaderField("ETag")
+                )
+            } finally {
+                head.disconnect()
+            }
+        }
+
         private val activeDownloads = ConcurrentHashMap.newKeySet<String>()
         internal fun claimTransfer(directory: File, name: String): AutoCloseable {
             val key = File(directory, sanitize(name)).canonicalPath
