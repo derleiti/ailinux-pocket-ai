@@ -271,6 +271,12 @@ internal object BackgroundModelDownloads {
                         if (wifiOnly) addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
                     }.build()
                 val extras = PersistableBundle().apply { putString("name", name) }
+                // A resumed 2-3 GB download may have all bytes in its .part
+                // already. Report remaining traffic to JobScheduler, not
+                // the full historical size. Still budget HTTPS 416/HEAD
+                // validators and keep the normal network requirement.
+                val networkHint = ModelTransferNetworkEstimate.forResume(
+                    entry.total, initialBytes)
                 val info = JobInfo.Builder(id,
                     ComponentName(context, ModelTransferJobService::class.java))
                     .setExtras(extras)
@@ -278,8 +284,9 @@ internal object BackgroundModelDownloads {
                     .setRequiredNetwork(network)
                     .setBackoffCriteria(30_000L, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
                     .apply {
-                        if (model.bytes > 0)
-                            setEstimatedNetworkBytes(model.bytes, 0L)
+                        setMinimumNetworkChunkBytes(networkHint.minChunkBytes)
+                        if (networkHint.known)
+                            setEstimatedNetworkBytes(networkHint.expectedDownloadBytes, 0L)
                     }
                     .build()
                 val scheduler = context.getSystemService(JobScheduler::class.java)
