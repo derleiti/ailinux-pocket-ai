@@ -1097,10 +1097,12 @@ class MainActivity : AppCompatActivity() {
             try {
                 val loaded = withContext(Dispatchers.IO) {
                     ModelStore.validate(file)
+                    // Validate version before releasing the previous engine.
+                    LiteRtModelCompatibility.requireSupported(
+                        file.name, BuildConfig.LITERT_LM_VERSION)
                     check(prefs.edit().putString(PREF_LOADING_MODEL, file.name)
                         .putLong(PREF_LOADING_MODEL_STARTED_MS, System.currentTimeMillis())
-                        .commit()) {
-                        "Prozessdiagnose-Marker konnte nicht gespeichert werden."
+                        .commit()) {                        "Prozessdiagnose-Marker konnte nicht gespeichert werden."
                     }
                     // Only now alter runtime ownership. Invalid import files
                     // must not make the already loaded model disappear.

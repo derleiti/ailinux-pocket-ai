@@ -17,6 +17,9 @@ if (releaseSigningPresent in 1..3) {
     throw GradleException("Incomplete protected release signing configuration")
 }
 
+// Single source for dependency resolution and runtime/model compatibility.
+val liteRtLmVersion = "0.18.0"
+
 android {
     namespace = "me.ailinux.pocket"
     compileSdk = 36
@@ -26,6 +29,7 @@ android {
         targetSdk = 35
         versionCode = 41
         versionName = "2.1.0-RC16"
+        buildConfigField("String", "LITERT_LM_VERSION", "\"$liteRtLmVersion\"")
         ndk { abiFilters += "arm64-v8a" }
     }
     signingConfigs {
@@ -53,6 +57,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlin { jvmToolchain(17) }
+    buildFeatures { buildConfig = true }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
         // GGML_BACKEND_DL scans nativeLibraryDir for actual .so files.
@@ -82,7 +87,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.4")
     implementation(project(":inference"))
     // Tested against the official Google Tensor G5 TPU sample dependency set.
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.0")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:$liteRtLmVersion")
     implementation("com.google.ai.edge.litert:litert:2.3.0")
     testImplementation(libs.junit)
     // Real org.json is necessary in local JVM protocol integration tests;

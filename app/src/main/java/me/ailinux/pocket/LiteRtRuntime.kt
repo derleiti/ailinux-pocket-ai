@@ -190,6 +190,8 @@ internal class LiteRtRuntime private constructor(
             require(file.isFile && file.name.endsWith(".litertlm", true)) {
                 "Nur lokal importierte LiteRT-LM-Modelle"
             }
+            LiteRtModelCompatibility.requireSupported(
+                file.name, BuildConfig.LITERT_LM_VERSION)
             // The native session/engine belong to this executor for their
             // entire lifetime, never to a multithreaded Dispatchers.IO pool.
             val dispatcher = Executors.newSingleThreadExecutor { runnable ->
