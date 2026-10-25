@@ -45,6 +45,35 @@ class McpRequestRoutingTest {
             McpRequestRouting.expectsToolEvidence(question))
     }
 
+    @Test fun explicitNoToolExecutionInventoryRoutesToRealReadOnlyToolsList() {
+        for (request in listOf(
+            "Welche MCP-Werkzeuge stehen dir zur Verfügung? Zeige nur eine kurze Übersicht, keine Werkzeuge ausführen.",
+            "Zeige mir die MCP-Tools, ohne Werkzeuge zu benutzen.",
+            "Welche MCP Tools sind vorhanden? Bitte keine Tools aufrufen.",
+            "Welche Discord MCP Tools gibt es? Keine Werkzeuge ausführen.",
+            "Show available MCP tools without executing tools."
+        )) {
+            assertNotNull("Existing authenticated tools/list route: " + request,
+                McpToolCatalog.requestedFilter(request))
+            assertFalse("Inventory must bypass the tool-executing model: " + request,
+                McpRequestRouting.useModelAgent(request, true))
+            assertFalse("Inventory listing is not a remote tools/call: " + request,
+                McpRequestRouting.expectsToolEvidence(request))
+        }
+    }
+
+    @Test fun positiveStatusTaskCannotHideBehindNegatedInventoryClause() {
+        for (request in listOf(
+            "Welche MCP-Werkzeuge gibt es? Prüfe danach den TriForce-Systemstatus, aber keine Werkzeuge ausführen.",
+            "Zeige verfügbare MCP Tools und nutze den Discord-Status, ohne andere Werkzeuge zu benutzen."
+        )) {
+            assertNotNull(McpToolCatalog.requestedFilter(request))
+            assertTrue("A distinct positive action must still need gated execution: " + request,
+                McpRequestRouting.useModelAgent(request, true))
+            assertTrue(McpRequestRouting.expectsToolEvidence(request))
+        }
+    }
+
     @Test fun shortWorkspaceStatusAndCommonTypoStillRequireRealEvidence() {
         for (request in listOf("workspace status", "worspace status",
                 "Brumo, workspace status", "Arbeitsbereich Status")) {
