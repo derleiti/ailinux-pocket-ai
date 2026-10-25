@@ -147,6 +147,30 @@ class McpOnDemandDiscoveryTest {
         assertEquals("{}", candidate.arguments.toString())
     }
 
+    @Test fun shortWorkspaceStatusTypoPlansOnlyRealReadOnlyWorkspaceTool() {
+        val run = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1", "workspace-id",
+                "https://example.test/ws", "AILinux TriForce Workspace",
+                listOf(tool("status"))),
+            McpProgressiveBridge.Source("s2", "dev-id",
+                "https://example.test/dev", "AILinux TriForce DEV MCP",
+                listOf(tool("status")))
+        ))
+        for (userRequest in listOf("workspace status", "worspace status",
+                "Brumo, worspace status")) {
+            val proposed = McpOnDemandDiscovery.propose(userRequest, run)
+            assertNotNull("Cannot omit a safe app proposal: " + userRequest, proposed)
+            assertEquals(userRequest, "s1/status", proposed!!.toolId)
+            assertEquals("workspace-id", proposed.source.profileId)
+            assertEquals("{}", proposed.arguments.toString())
+            assertTrue(proposed.hostFallback)
+        }
+        assertNull(McpOnDemandDiscovery.propose("status", run))
+        assertNull(McpOnDemandDiscovery.propose(
+            "Erkläre mir den Workspace-Status", run))
+        assertEquals(0, run.remoteCalls)
+    }
+
     @Test fun ambiguousProviderForIdenticalToolNamesAbstainsWithoutDispatch() {
         val sameName = tool("status")
         val providers = McpProgressiveBridge.Run(listOf(
