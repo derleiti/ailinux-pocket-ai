@@ -680,7 +680,8 @@ class McpAgentUi(
     suspend fun execute(
         active: McpAgentSession,
         proposal: McpAgentBridge.Decision.Proposed,
-        dispatchState: McpDispatchState = McpDispatchState()
+        dispatchState: McpDispatchState = McpDispatchState(),
+        hostFallback: Boolean = false
     ): JSONObject = withContext(Dispatchers.IO) {
         diag(PocketDiagnostics.Step.AUTH_CHECK,
             PocketDiagnostics.State.START, tool = proposal.tool.name)
@@ -702,8 +703,17 @@ class McpAgentUi(
             ?: throw IllegalStateException(
                 "MCP-Tool wurde seit der Auswahl entfernt: " + proposal.tool.name)
         check(current.description == proposal.tool.description &&
-            McpToolSchema.equivalent(current.schema, proposal.tool.schema)) {
-            "MCP-Tooldefinition hat sich geändert. Bitte neu verbinden und bestätigen."
+            McpToolSchema.equivalent(current.schema, proposal.tool.schema) &&
+            McpToolSchema.equivalent(current.annotations, proposal.tool.annotations)) {
+            "MCP-Tooldefinition oder Risikohinweis geändert. Bitte neu verbinden."
+        }
+        // Host inference is strictly narrower than a native tool call.
+        if (hostFallback) {
+            check(current.declaresReadOnly &&
+                current.name in setOf("status", "discord_connection_status",
+                    "current_time", "device_info", "models", "crawl")) {
+                "Host-Fallback darf kein schreibendes oder unbekanntes Werkzeug aufrufen."
+            }
         }
         // Revalidate the exact approved arguments against the CURRENT schema.
         val proposedAgain = McpAgentBridge.parse(JSONObject()

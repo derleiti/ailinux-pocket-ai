@@ -2552,6 +2552,58 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    /**
+     * Host-only fallback for selected LiteRT tools when a small model emits
+     * prose instead of a native function call. One explicit proposal, fresh
+     * one-shot consent, live authorization and schema/risk revalidation.
+     * Never claim a native LiteRT tool response or call twice.
+     */
+    private suspend fun trySelectedHostFallback(
+        active: McpAgentSession,
+        request: String,
+        answer: ChatMessage,
+        answerIndex: Int
+    ): Boolean {
+        val proposal = McpOnDemandDiscovery.proposeSelected(request, active) ?: return false
+        if (mcpAgent.current() != active) return false
+        trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
+            PocketDiagnostics.State.INFO, tool = proposal.tool.name)
+        answer.content = "🔎 App-gestützter Werkzeugvorschlag (kein nativer " +
+            "LiteRT-ToolCall): " + active.serverName + " / " + proposal.tool.name +
+            "\nParameter: " + proposal.args.toString() + "\nNoch nichts ausgeführt."
+        chatAdapter.notifyItemChanged(answerIndex)
+        if (!mcpAgent.requestApproval(active, proposal)) {
+            answer.content = "⛔ App-Werkzeugvorschlag abgelehnt. Keine Serveraktion."
+            chatAdapter.notifyItemChanged(answerIndex)
+            return true
+        }
+        mcpDispatchInFlight = true
+        val dispatchState = McpDispatchState()
+        try {
+            val result = withContext(Dispatchers.IO) {
+                mcpAgent.execute(active, proposal, dispatchState, hostFallback = true)
+            }
+            answer.content = "🔧 ECHTE MCP-SERVERANTWORT (App-gestützt; " +
+                "LiteRT erzeugte keinen nativen ToolCall):\n" +
+                McpAgentBridge.receipt(proposal.tool, result) +
+                "\nKeine native Modell-Toolfortsetzung behauptet."
+        } catch (error: Exception) {
+            val eventId = failure(PocketDiagnostics.Domain.MCP,
+                PocketDiagnostics.Step.REMOTE_ERROR, error,
+                uncertain = dispatchState.unconfirmed(error))
+            answer.content = (if (dispatchState.unconfirmed(error))
+                "⚠️ MCP-Ausführung unklar: " else
+                "⚠️ MCP-Aufruf vor dem Senden abgebrochen: ") +
+                getString(R.string.diagnostics_error,
+                    PocketDiagnostics.publicError(error), eventId) +
+                "\nKein automatischer Wiederholungsversuch."
+        } finally {
+            mcpDispatchInFlight = false
+            chatAdapter.notifyItemChanged(answerIndex)
+        }
+        return true
+    }
+
     private suspend fun runLiteRtToolbridge(
         active: McpAgentSession,
         runtime: LiteRtRuntime,
@@ -2601,6 +2653,11 @@ class MainActivity : AppCompatActivity() {
                     McpRequestRouting.expectsToolEvidence(request)) {
                     if (tryHostDiscovery(active, request, checkNotNull(catalog),
                             answer, answerIndex)) return
+                }
+                if (!hadRealCall && !progressive &&
+                    McpRequestRouting.expectsToolEvidence(request) &&
+                    trySelectedHostFallback(active, request, answer, answerIndex)) {
+                    return
                 }
                 if (!hadRealCall && McpRequestRouting.expectsToolEvidence(request)) {
                     val searched = (catalog?.searchCount ?: 0) > 0

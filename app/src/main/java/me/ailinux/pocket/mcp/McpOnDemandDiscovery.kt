@@ -36,6 +36,34 @@ object McpOnDemandDiscovery {
         }
     }
 
+    /**
+     * Tiny LiteRT models can produce prose instead of native function calls
+     * after a previous tool turn. The host may prepare a proposal from the
+     * actual manually selected tools, but MUST NOT dispatch it automatically.
+     *
+     * Synthetic s1 is a local index, not a server-issued tool identifier.
+     * All risk/schema checks reuse the conservative progressive planner.
+     */
+    fun proposeSelected(
+        request: String,
+        active: McpAgentSession
+    ): McpAgentBridge.Decision.Proposed? {
+        if (active.progressiveSources.isNotEmpty() || active.tools.isEmpty()) return null
+        if (active.tools.map { it.name }.distinct().size != active.tools.size) return null
+        val source = McpProgressiveBridge.Source(
+            id = "s1", profileId = active.profileId,
+            endpoint = active.endpoint, title = active.serverName,
+            tools = active.tools
+        )
+        val proposal = runCatching {
+            propose(request, McpProgressiveBridge.Run(listOf(source)))
+        }.getOrNull() ?: return null
+        if (!proposal.hostFallback) return null
+        return McpAgentBridge.Decision.Proposed(
+            proposal.tool, JSONObject(proposal.arguments.toString())
+        )
+    }
+
     fun propose(request: String, run: McpProgressiveBridge.Run): McpProgressiveBridge.RemoteCall? {
         // Pure explanation is never an instruction to query a server.
         if (Regex("(?i)^\\s*(?:brumo[,!]?\\s+)?(?:erklär\\w*|erklaer\\w*|was\\s+(?:ist|bedeutet)|wie\\s+funktioniert|explain\\b)")
