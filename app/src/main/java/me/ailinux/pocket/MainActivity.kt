@@ -3587,7 +3587,10 @@ class MainActivity : AppCompatActivity() {
                     ", Versuche: " + entry.attempts +
                     ", Stop-Reason-Code: " + entry.lastStopReason +
                     ", wiederaufnehmbar: " + view.canResume +
-                    ", Bestätigung notwendig: " + view.requiresConfirmation
+                    ", Bestätigung notwendig: " + view.requiresConfirmation +
+                    "\nNetzwerktransport: " +
+                    (BackgroundModelDownloads.networkInfo(this)?.diagnostic()
+                        ?: "nicht verfügbar")
             }.ifBlank { "Keine gespeicherten Modell-Downloads." }
         button.isEnabled = false
         button.text = "Analysiere Android-Tombstones …"

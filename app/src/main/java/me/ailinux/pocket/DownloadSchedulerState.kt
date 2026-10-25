@@ -11,6 +11,19 @@ internal object DownloadSchedulerState {
         STORAGE, OPTIMIZATION, USER, EXECUTING, UNKNOWN
     }
 
+    /** Only booleans: no SSID, IP, domain, interface name or network ID. */
+    data class NetworkInfo(
+        val validated: Boolean,
+        val hasInternet: Boolean,
+        val wifi: Boolean,
+        val vpn: Boolean,
+        val metered: Boolean
+    ) {
+        fun diagnostic(): String =
+            "validiert=" + validated + ", Internet-Fähigkeit=" + hasInternet +
+            ", WLAN=" + wifi + ", VPN=" + vpn + ", getaktet=" + metered
+    }
+
     data class View(
         val label: String,
         val canResume: Boolean = false,
@@ -28,7 +41,8 @@ internal object DownloadSchedulerState {
         elapsedSinceUpdateMs: Long,
         done: Long,
         total: Long,
-        error: String
+        error: String,
+        network: NetworkInfo? = null
     ): View {
         val suffix = if (done > 0)
             " · " + ModelStore.displaySize(done) +
@@ -52,6 +66,9 @@ internal object DownloadSchedulerState {
                     canResume = true)
                 Reason.NETWORK in reasons && wifiOnly -> View(
                     "Wartet auf WLAN: " + name + suffix, waitingForNetwork = true, active = true)
+                Reason.NETWORK in reasons && network?.validated == true ->
+                    View("Wartet auf Netzwerk-Anforderung trotz aktiver Internetverbindung: " +
+                        name + suffix, waitingForNetwork = true, active = true)
                 Reason.NETWORK in reasons -> View(
                     "Wartet auf Netzwerk: " + name + suffix, waitingForNetwork = true, active = true)
                 Reason.EXECUTING in reasons -> View(
