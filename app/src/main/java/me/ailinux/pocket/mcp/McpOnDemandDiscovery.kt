@@ -56,7 +56,7 @@ object McpOnDemandDiscovery {
     /** Safe, credential-free reason why host planning cannot suggest a tool. */
     enum class Rejection {
         EXPLANATION_ONLY, NO_EXTERNAL_TASK, NO_CATALOG_MATCH,
-        AMBIGUOUS_TOOL, UNVERIFIED_READONLY, ARGUMENTS_UNAVAILABLE,
+        AMBIGUOUS_TOOL, UNVERIFIED_READONLY, NO_SAFE_MATCH, ARGUMENTS_UNAVAILABLE,
         TOOL_DETAILS_UNAVAILABLE
     }
 
@@ -105,6 +105,87 @@ object McpOnDemandDiscovery {
         return McpAgentBridge.Decision.Proposed(
             proposal.tool, JSONObject(proposal.arguments.toString())
         )
+    }
+
+    /**
+     * Use only an already detailed local ID after a malformed native call.
+     * Never accept guessed arguments, model prose, a stale catalog, or a
+     * source chosen by the model instead of the user's original instruction.
+     */
+    fun proposeAfterDetails(
+        request: String,
+        run: McpProgressiveBridge.Run,
+        onRejected: (Rejection) -> Unit = {}
+    ): McpProgressiveBridge.RemoteCall? {
+        if (McpRequestRouting.isExplanationOnly(request)) {
+            onRejected(Rejection.EXPLANATION_ONLY)
+            return null
+        }
+        if (!mentionsExternal.containsMatchIn(request)) {
+            onRejected(Rejection.NO_EXTERNAL_TASK)
+            return null
+        }
+        val intent = intendedSafeTool(request)
+        if (intent == null) {
+            onRejected(Rejection.NO_SAFE_MATCH)
+            return null
+        }
+        val selected = try {
+            run.uniqueDetailedForRequest(intent, request)
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+        if (selected == null) {
+            onRejected(Rejection.AMBIGUOUS_TOOL)
+            return null
+        }
+        return safeProposal(request, run, selected.toolId, onRejected)
+    }
+
+    private fun safeProposal(
+        request: String,
+        run: McpProgressiveBridge.Run,
+        id: String,
+        onRejected: (Rejection) -> Unit
+    ): McpProgressiveBridge.RemoteCall? {
+        fun reject(why: Rejection): McpProgressiveBridge.RemoteCall? {
+            onRejected(why)
+            return null
+        }
+        val chosen = run.tool(id) ?: return reject(Rejection.NO_CATALOG_MATCH)
+        if (!run.uniquelyRequestedSource(id, request))
+            return reject(Rejection.AMBIGUOUS_TOOL)
+        val tool = chosen.tool
+        // The host is not authorized to infer write operations. Even
+        // read-only candidates need a live recheck and per-call approval.
+        if (tool.name !in setOf("crawl", "status", "discord_connection_status",
+                "current_time", "models", "device_info") ||
+            !tool.declaresReadOnly)
+            return reject(Rejection.UNVERIFIED_READONLY)
+        val schema = tool.schema
+        val mandatory = schema.optJSONArray("required")
+        val args = JSONObject()
+        if (mandatory != null && mandatory.length() > 0) {
+            if (mandatory.length() != 1)
+                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+            val field = mandatory.optString(0)
+            if (field !in setOf("url", "uri", "target_url"))
+                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+            val prop = schema.optJSONObject("properties")?.optJSONObject(field)
+                ?: return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+            if (prop.optString("type") != "string")
+                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+            val url = webUrl.find(request)?.value?.trimEnd('.', ',', ';', ')', ']', '}')
+                ?: return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+            args.put(field, url)
+        }
+        // Enforces the previous search/details gate, original source
+        // selection, exact full schema and per-turn single-dispatch state.
+        return try {
+            run.prepareCall(id, args.toString(), request).copy(hostFallback = true)
+        } catch (_: Exception) {
+            reject(Rejection.ARGUMENTS_UNAVAILABLE)
+        }
     }
 
     fun propose(
@@ -179,38 +260,11 @@ object McpOnDemandDiscovery {
             }.singleOrNull()
         } ?: return reject(Rejection.AMBIGUOUS_TOOL)
         val id = chosen.optString("tool_id")
-        val tool = run.tool(id)?.tool ?: return reject(Rejection.NO_CATALOG_MATCH)
-        // Host fallback never guesses a side-effecting tool, even when the
-        // caller might later approve it. Native model calls stay available.
-        // An unknown tool cannot be classified read-only by its name.
-        // The fallback is deliberately limited to exact audited contracts;
-        // native tool calls still support all permitted MCP tools.
-        if (tool.name !in setOf("crawl", "status", "discord_connection_status",
-                "current_time", "models", "device_info") ||
-            !tool.declaresReadOnly)
-            return reject(Rejection.UNVERIFIED_READONLY)
-        // Never guess mandatory parameters; allow a single HTTPS URL only for
-        // a schema requiring exactly one URL-like string property.
-        val schema = tool.schema
-        val mandatory = schema.optJSONArray("required")
-        val args = JSONObject()
-        if (mandatory != null && mandatory.length() > 0) {
-            if (mandatory.length() != 1)
-                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
-            val field = mandatory.optString(0)
-            if (field !in setOf("url","uri","target_url"))
-                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
-            val prop = schema.optJSONObject("properties")?.optJSONObject(field)
-                ?: return reject(Rejection.ARGUMENTS_UNAVAILABLE)
-            if (prop.optString("type") != "string")
-                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
-            val url = webUrl.find(request)?.value?.trimEnd('.', ',', ';', ')', ']', '}')
-                ?: return reject(Rejection.ARGUMENTS_UNAVAILABLE)
-            args.put(field,url)
-        }
+        if (!run.uniquelyRequestedSource(id, request))
+            return reject(Rejection.AMBIGUOUS_TOOL)
         val detail = run.details(id, request)
         if (detail.optBoolean("isError"))
             return reject(Rejection.TOOL_DETAILS_UNAVAILABLE)
-        return run.prepareCall(id, args.toString(), request).copy(hostFallback = true)
+        return safeProposal(request, run, id, onRejected)
     }
 }

@@ -192,6 +192,40 @@ object McpProgressiveBridge {
 
         fun tool(id: String): RemoteCall? = toolIndex[id]
 
+        /** Local per-turn planning context, never a permission or an execution receipt. */
+        val detailedCount: Int get() = detailed.size
+
+        /**
+         * A model already fetched full details for this exact local tool ID.
+         * Preserve that fact after a malformed native ToolCall rather than
+         * blindly running another top-6 search. Still insist that the
+         * ORIGINAL user request uniquely selects the source whenever two
+         * servers advertise the same name.
+         */
+        fun uniqueDetailedForRequest(name: String, originalRequest: String): RemoteCall? {
+            enforceFresh()
+            if (remoteCalls != 0) return null
+            val matching = toolIndex.values.filter { it.tool.name == name }
+            val selected = requestedSourceIds(originalRequest)
+            val eligible = matching.filter { candidate ->
+                candidate.toolId in detailed &&
+                    (selected == null || candidate.source.id in selected)
+            }
+            if (matching.size > 1 && selected == null) return null
+            return eligible.singleOrNull()
+        }
+
+        /** The tool name alone cannot justify picking one of several sources. */
+        fun uniquelyRequestedSource(id: String, originalRequest: String): Boolean {
+            enforceFresh()
+            val item = toolIndex[id] ?: return false
+            val sameName = toolIndex.values.filter { it.tool.name == item.tool.name }
+            if (sameName.size == 1) return true
+            val selected = requestedSourceIds(originalRequest) ?: return false
+            return item.source.id in selected &&
+                sameName.count { it.source.id in selected } == 1
+        }
+
         /**
          * Server selection comes from the ORIGINAL user message, never the
          * model's search query or invented local tool id. Specific labels

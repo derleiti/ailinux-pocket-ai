@@ -2556,7 +2556,9 @@ class MainActivity : AppCompatActivity() {
     ): Boolean {
         var blocked: McpOnDemandDiscovery.Rejection? = null
         val plan = try {
-            McpOnDemandDiscovery.propose(request, run) { blocked = it }
+            if (run.detailedCount > 0)
+                McpOnDemandDiscovery.proposeAfterDetails(request, run) { blocked = it }
+            else McpOnDemandDiscovery.propose(request, run) { blocked = it }
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (problem: Exception) {
@@ -2602,6 +2604,9 @@ class MainActivity : AppCompatActivity() {
             return true
         }
         if (mcpAgent.current() != active) return false
+        if (run.detailedCount > 0)
+            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAIL_REUSE,
+                PocketDiagnostics.State.OK, tool = plan.tool.name)
         trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
             PocketDiagnostics.State.OK, tool = plan.tool.name)
         answer.content = "🔎 App-gestützter Werkzeugvorschlag (kein Modell-ToolCall): " +
