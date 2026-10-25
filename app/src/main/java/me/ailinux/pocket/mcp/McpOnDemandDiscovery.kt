@@ -137,7 +137,7 @@ object McpOnDemandDiscovery {
             ?: intendedSafeTool(request)
         val query = requestedName ?: terms.joinToString(" ").take(120)
         if (query.isBlank()) return reject(Rejection.NO_CATALOG_MATCH)
-        val response = run.search(query)
+        val response = run.search(query, originalRequest = request)
         if (response.optBoolean("isError"))
             return reject(Rejection.NO_CATALOG_MATCH)
         val payload = response.optJSONArray("content")?.optJSONObject(0)?.optString("text")
@@ -208,9 +208,9 @@ object McpOnDemandDiscovery {
                 ?: return reject(Rejection.ARGUMENTS_UNAVAILABLE)
             args.put(field,url)
         }
-        val detail = run.details(id)
+        val detail = run.details(id, request)
         if (detail.optBoolean("isError"))
             return reject(Rejection.TOOL_DETAILS_UNAVAILABLE)
-        return run.prepareCall(id,args.toString()).copy(hostFallback = true)
+        return run.prepareCall(id, args.toString(), request).copy(hostFallback = true)
     }
 }
