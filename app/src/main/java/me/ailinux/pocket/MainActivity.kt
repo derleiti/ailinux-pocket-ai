@@ -18,6 +18,7 @@ import me.ailinux.pocket.mcp.McpAgentBridge
 import me.ailinux.pocket.mcp.McpAgentUi
 import me.ailinux.pocket.mcp.McpAgentSession
 import me.ailinux.pocket.mcp.McpToolCatalog
+import me.ailinux.pocket.mcp.McpArchitectureGuide
 import me.ailinux.pocket.mcp.McpRequestRouting
 import me.ailinux.pocket.mcp.McpHealthCheck
 import me.ailinux.pocket.mcp.McpLogCheck
@@ -1696,6 +1697,7 @@ class MainActivity : AppCompatActivity() {
         messages.add(ChatMessage(true, question))
         messages.add(ChatMessage(false, answer))
         chatAdapter.notifyItemRangeInserted(messages.size - 2, 2)
+        requestChatPersist()
         findViewById<View>(R.id.emptyState).visibility = View.GONE
         showPage(0)
         messagesView.scrollToPosition(messages.lastIndex)
@@ -2230,8 +2232,21 @@ class MainActivity : AppCompatActivity() {
             showDiagnosticTimeline(inChat = true)
             return
         }
-        // When an MCP agent is active, plain-language work belongs to the
-        // model's native ToolCall planner. Only explicit app diagnostics,
+        // A narrowly scoped question about *how Pocket AI integrates MCP*
+        // is app-local documentation, not a request to train models or to
+        // execute one of the remote tools. Ground this in the connected
+        // snapshot instead of asking an 0.8B native planner to invent it.
+        if (McpArchitectureGuide.applies(text)) {
+            val active = mcpAgent.current()
+            val counts = active?.progressiveSources?.map { it.tools.size }.orEmpty()
+            messageInput.setText("")
+            appendReadOnlyChat(text, McpArchitectureGuide.explain(
+                counts, if (counts.isEmpty()) active?.tools?.size ?: 0 else 0
+            ))
+            return
+        }
+        // When an MCP agent is active, requests for real work belong to the
+        // model's native ToolCall planner. Explicit app help, diagnostics,
         // slash commands and unambiguous inventory requests bypass it.
         val modelToolRequest = McpRequestRouting.useModelAgent(
             text, mcpAgent.current() != null && activeModel != null
