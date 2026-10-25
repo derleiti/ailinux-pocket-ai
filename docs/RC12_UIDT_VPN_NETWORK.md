@@ -20,8 +20,12 @@ A NetworkRequest.Builder contains NET_CAPABILITY_NOT_VPN by default.
 Pocket AI RC11 requested NET_CAPABILITY_INTERNET without clearing NOT_VPN.
 On Android devices where the active eligible network is VPN, UIDT can remain
 queued with PENDING_JOB_REASON_CONSTRAINT_CONNECTIVITY while HTTPS works.
-The Pixel's actual VPN transport was NOT reported by RC11, so this is
-a plausible incompatibility and not an asserted root cause.
+RC11 itself did not report VPN transport in this diagnostic. During
+follow-up Android system UI observation on the paired Pixel, the system
+explicitly displayed: "Dieses Gerät ist über WireGuard mit dem Internet
+verbunden". This confirms an active WireGuard path on this device; the
+prior missing NOT_VPN match is a strong explanation for the pending
+connectivity reason, not proof of completed post-fix network transfer.
 
 Official Android references:
 - https://developer.android.com/develop/connectivity/network-ops/reading-network-state

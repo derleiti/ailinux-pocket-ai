@@ -2,9 +2,11 @@
 
 Native Android GGUF model manager and local AI chat. Designed for ARM64 phones.
 
-**Next QA candidate: 2.1.0-RC11 (versionCode 36).**
-RC10 is publicly available; RC11 adds a consent-based host fallback for
-selected LiteRT tools if the model omits a native FunctionCall on later turns. Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
+**QA candidate: 2.1.0-RC12 (versionCode 37).**
+RC11 was publicly released as QA and is not a final stable version.
+RC12 adds Android UIDT VPN-compatible download constraints and explicit
+network diagnostics, plus the already merged LiteRT/MCP corrections.
+Existing app data and model files must survive the in-place update. Android ARM64 pre-release. The developer confirmed that Spark-X2.6 chat works on the Pixel after Alpha 8 Jinja fixes; throughput and other GGUF architectures still need testing.
 
 ## Features
 
