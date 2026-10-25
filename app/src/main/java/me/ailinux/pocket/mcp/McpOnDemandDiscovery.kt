@@ -78,7 +78,15 @@ object McpOnDemandDiscovery {
     private val genericActionWords = setOf(
         "call", "calling", "aufruf", "ausführen", "ausfuehren",
         "ausführung", "ausfuehrung", "request", "invoke", "toolcall",
-        "aktion", "action", "method"
+        "aktion", "action", "method",
+        // Grammar immediately following "status-Werkzeug und frage ..." is
+        // NOT an explicitly named tool. A real exact function identifier
+        // (including underscores, such as discord_connection_status) stays.
+        "und", "and", "oder", "or", "dann", "danach", "frage",
+        "nach", "bitte", "wieder", "erneut", "jetzt", "vor",
+        "mit", "per", "über", "ueber", "auf", "an", "bei",
+        "für", "fuer", "von", "dem", "den", "die", "das",
+        "ein", "einem", "einen", "einer", "eines"
     )
     private val titleTokens = Regex("[\\p{L}\\p{N}]{3,}")
     private val genericServerWords = setOf("ailinux", "mcp", "server",
