@@ -76,6 +76,28 @@ class LiteRtMcpProtocolTest {
                 "mcp_search_tools", """{"query":"status"}""", List(6) { oneTool }))
     }
 
+    @Test fun nativeParserFailureBeforeToolCallIsHandledForInitialAndFollowup() {
+        val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+            .substringAfter("private suspend fun runLiteRtToolbridge(")
+            .substringBefore("private fun sendLiteRtMessage(")
+        assertTrue(source.indexOf("val catalog =") < source.indexOf("runtime.askMcp(request)"))
+        val initial = source.substringAfter("var turn = try {")
+            .substringBefore("for (step in 0 until")
+        assertTrue(initial.contains("recoverNativeFailure()"))
+        assertTrue(initial.contains("catch (_: IllegalArgumentException)"))
+        assertTrue(initial.contains("catch (_: IllegalStateException)"))
+        val followup = source.substringAfter("val boundedFeedback =")
+        assertTrue(followup.contains("runtime.toolFeedback(tool.name, boundedFeedback)"))
+        assertTrue(followup.contains("recoverNativeFailure()"))
+        assertTrue(source.contains("if (hadRealCall) {"))
+        val recovery = source.substringAfter("suspend fun recoverNativeFailure() {")
+            .substringBefore("var turn = try {")
+        assertTrue(recovery.contains("if (hadRealCall) {"))
+        assertTrue(recovery.contains("runtime.clearConversation()"))
+        assertTrue(recovery.contains("tryHostDiscovery("))
+        assertTrue(recovery.contains("kein weiterer Aufruf"))
+    }
+
     @Test fun rejectWrongNativeArgumentsJsonTypeBeforeExternalDispatch() {
         val call = McpTool("mcp_call_tool", "Local bridge",
             JSONObject("""{"type":"object","properties":{
