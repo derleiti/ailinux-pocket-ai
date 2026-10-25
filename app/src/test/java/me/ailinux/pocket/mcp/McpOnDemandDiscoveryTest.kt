@@ -271,13 +271,14 @@ class McpOnDemandDiscoveryTest {
         assertEquals(0, state.remoteCalls)
     }
 
-    @Test fun exactCrawlRequestCreatesOnlyApprovedCandidateNotExecution() {
+    @Test fun explicitCrawlRequestCreatesWriteRiskPlanNotExecution() {
         val schema = JSONObject("""{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}""")
         val run = run(listOf(tool("crawl", schema)))
         val plan = McpOnDemandDiscovery.propose("check mit mcp crawl tool https://ailinux.me", run)
         assertNotNull(plan)
         assertEquals("crawl", plan!!.tool.name)
         assertTrue(plan.hostFallback)
+        assertTrue("Crawl creates a server job and is not read-only", plan.hostWriteIntent)
         assertEquals("https://ailinux.me", plan.arguments.getString("url"))
         assertEquals(0, run.remoteCalls)
     }
@@ -310,6 +311,7 @@ class McpOnDemandDiscoveryTest {
             run(listOf(tool("crawl", schema))))
         assertEquals("https://ailinux.me/search?q=gemma&lang=de",
             plan!!.arguments.getString("url"))
+        assertTrue(plan.hostWriteIntent)
         assertNull(McpOnDemandDiscovery.propose("mcp tool read_and_clear_notifications",
             run(listOf(tool("read_and_clear_notifications")))))
     }

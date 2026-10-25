@@ -2607,10 +2607,17 @@ class MainActivity : AppCompatActivity() {
         if (run.detailedCount > 0)
             trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DETAIL_REUSE,
                 PocketDiagnostics.State.OK, tool = plan.tool.name)
+        if (plan.hostWriteIntent)
+            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.HOST_WRITE_INTENT,
+                PocketDiagnostics.State.START, tool = plan.tool.name)
         trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.PROPOSAL,
             PocketDiagnostics.State.OK, tool = plan.tool.name)
         answer.content = "🔎 App-gestützter Werkzeugvorschlag (kein Modell-ToolCall): " +
-            plan.source.title + " / " + plan.tool.name + "\nNoch nicht ausgeführt."
+            plan.source.title + " / " + plan.tool.name +
+            (if (plan.hostWriteIntent)
+                "\n⚠️ Dieser Auftrag erzeugt einen Crawler-Job; " +
+                    "ausdrückliche Einzelfreigabe erforderlich."
+             else "") + "\nNoch nicht ausgeführt."
         chatAdapter.notifyItemChanged(answerIndex)
         if (!mcpAgent.requestAutoApproval(active, plan)) {
             answer.content = "⛔ MCP-Aufruf abgelehnt. Keine Serveraktion."
@@ -2712,9 +2719,13 @@ class MainActivity : AppCompatActivity() {
         val catalog = if (progressive) withContext(Dispatchers.Default) {
             McpProgressiveBridge.Run(active.progressiveSources, System.currentTimeMillis())
         } else null
-        if (catalog != null)
+        if (catalog != null) {
             trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.DISCOVERY_DONE,
                 PocketDiagnostics.State.OK, count = catalog.totalTools)
+            if (catalog.filteredTools > 0)
+                trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.CATALOG_FILTERED,
+                    PocketDiagnostics.State.INFO, count = catalog.filteredTools)
+        }
         fun evidence(text: String) {
             messages.add(ChatMessage(false, text))
             chatAdapter.notifyItemInserted(messages.lastIndex)
@@ -2729,9 +2740,13 @@ class MainActivity : AppCompatActivity() {
         // BEFORE ToolCall is returned. The post-return validator cannot see
         // those failures. Handle them without exposing model text or tool args.
         suspend fun recoverNativeFailure() {
-            trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SCHEMA_CHECK,
+            // The upstream runtime rejected the message BEFORE the host
+            // received a ToolCall. This is distinct from our own JSON Schema
+            // validator. Do not misattribute it to a remote MCP server.
+            trace(PocketDiagnostics.Domain.LITERT,
+                PocketDiagnostics.Step.NATIVE_RESPONSE_REJECTED,
                 PocketDiagnostics.State.FAIL,
-                code = PocketDiagnostics.ErrorCode.INVALID_NATIVE_ARGUMENTS_SCHEMA)
+                code = PocketDiagnostics.ErrorCode.NATIVE_RESPONSE_REJECTED)
             val recovered = withContext(NonCancellable) {
                 runCatching { runtime.clearConversation() }.isSuccess
             }
@@ -2757,7 +2772,8 @@ class MainActivity : AppCompatActivity() {
                 return
             }
             setAnswer("⚠️ LiteRT hat eine ungültige native MCP-Antwort erzeugt " +
-                "(INVALID_NATIVE_ARGUMENTS_SCHEMA). Kein automatischer tools/call. " +
+                "(NATIVE_RESPONSE_REJECTED, vor lokaler Schema-Prüfung). " +
+                "Kein automatischer tools/call. " +
                 (if (recovered) "Konversation ohne alten KV-Kontext wiederhergestellt."
                  else "Modell bitte neu laden."))
         }
@@ -2853,7 +2869,8 @@ class MainActivity : AppCompatActivity() {
                         PocketDiagnostics.ErrorCode.INVALID_NATIVE_ARGUMENTS_SCHEMA
                 }
                 trace(PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SCHEMA_CHECK,
-                    PocketDiagnostics.State.FAIL, code = code)
+                    PocketDiagnostics.State.FAIL, tool = candidate?.name.orEmpty(),
+                    code = code)
                 // The native tool request is unresolved. Close only that
                 // conversation and restore a fresh one on the SAME engine.
                 // Never pretend to restore its KV cache or past messages.
@@ -3582,12 +3599,22 @@ class MainActivity : AppCompatActivity() {
                 "LiteRT-MCP: kein geladenes LiteRT-Modell in diesem Prozess."
             activeMcp == null ->
                 "LiteRT-MCP: Modell geladen, Agent ausgeschaltet."
-            activeMcp.progressiveSources.isNotEmpty() ->
+            activeMcp.progressiveSources.isNotEmpty() -> {
+                // The authenticated catalog may include unsupported JSON
+                // Schemas. Do not show all advertised tools as executable.
+                val snapshot = runCatching {
+                    McpProgressiveBridge.Run(activeMcp.progressiveSources)
+                }.getOrNull()
                 "LiteRT-MCP: aktiver Progressive-Katalog, " +
-                    activeMcp.progressiveSources.size + " verbundene Quellen, " +
+                    activeMcp.progressiveSources.size + " verbundene Quellen; " +
                     activeMcp.progressiveSources.sumOf { it.tools.size } +
-                    " echte Tooldefinitionen (lokale Meta-Tools: " +
+                    " vom Server angekündigt, " +
+                    (snapshot?.totalTools?.toString() ?: "unbekannt") +
+                    " mit lokalem Schema/Tooladapter kompatibel, " +
+                    (snapshot?.filteredTools?.toString() ?: "unbekannt") +
+                    " ausgefiltert (lokale Meta-Tools: " +
                     activeMcp.tools.size + ")."
+            }
             else ->
                 "LiteRT-MCP: aktiver, direkt ausgewählter Toolkontext mit " +
                     activeMcp.tools.size + " Werkzeugen."

@@ -1,0 +1,113 @@
+name: Pocket AI RC16 MCP QA gate
+
+# Manual additive gate: android.yml and android-fast.yml still handle PRs.
+# Never publishes a release, installs on a phone or changes production signing.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pocket-rc16-mcp-qa
+  cancel-in-progress: true
+
+jobs:
+  mcp_qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Ensure Android SDK native toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$ANDROID_HOME"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$sdkmanager" ]; then sdkmanager="$(command -v sdkmanager)"; fi
+          "$sdkmanager" --sdk_root="$ANDROID_HOME" --install             "platforms;android-36" "build-tools;35.0.0"             "ndk;29.0.13113456" "cmake;3.31.6" < <(yes)
+      - name: Candidate identity and rollback gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\1/p' app/build.gradle.kts)"
+          code="$(sed -nE 's/^[[:space:]]*versionCode = ([0-9]+).*/\1/p' app/build.gradle.kts)"
+          test "$version" = '2.1.0-RC16'
+          test "$code" -eq 41
+          grep -q 'applicationId = "me.ailinux.pocket"' app/build.gradle.kts
+      - name: All JVM unit tests including AUTO-MCP regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --build-cache :app:testDebugUnitTest
+          python3 - <<'PYTEST'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          roots = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.xml'))
+          assert roots, 'No test XML output'
+          tests = failures = errors = 0
+          for path in roots:
+              root = ET.parse(path).getroot()
+              tests += int(root.get('tests', 0))
+              failures += int(root.get('failures', 0))
+              errors += int(root.get('errors', 0))
+          assert tests >= 392, f'Expected complete RC16 suite, got {tests}'
+          assert failures == errors == 0, (failures, errors)
+          print(f'QA tests={tests}, failures={failures}, errors={errors}')
+          PYTEST
+      - name: Lint, assemble and verify QA APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -alias androiddebugkey -keyalg RSA -keysize 2048               -validity 10000 -dname "CN=Android Debug,O=Android,C=US"               -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android
+          fi
+          ./gradlew --no-daemon --build-cache :app:lintDebug :app:assembleDebug
+          python3 scripts/compact-debug-apk.py
+          ./scripts/verify-apk.sh dist/AILinux-Pocket-AI-2.1.0-RC16-arm64-debug.apk
+      - name: QA provenance and hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p qa-output
+          sha256sum dist/AILinux-Pocket-AI-2.1.0-RC16-arm64-debug.apk > qa-output/apk.sha256
+          {
+            echo 'versionName=2.1.0-RC16'
+            echo 'versionCode=41'
+            echo 'packageName=me.ailinux.pocket'
+            echo "sourceCommit=$GITHUB_SHA"
+            echo "gitRef=$GITHUB_REF"
+            echo 'signer=CI_ONLY_EPHEMERAL_DEBUG_KEY'
+            echo 'pixelDeviceTest=NOT_RUN'
+            echo 'inPlaceInstallOverRC15=NOT_VERIFIED'
+            echo 'githubRelease=NOT_PUBLISHED'
+          } > qa-output/provenance.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pocket-rc16-mcp-qa-report
+          path: qa-output/
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pocket-rc16-mcp-debug-apk
+          path: dist/AILinux-Pocket-AI-2.1.0-RC16-arm64-debug.apk
+          retention-days: 7
+          if-no-files-found: error
+      - name: QA limitations
+        if: always()
+        shell: bash
+        run: |
+          echo '### Pocket AI RC16 AUTO-MCP QA' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Source/CI QA only. A physical Pixel Android 17 test is still required.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Do not install a CI-only debug APK over differently signed RC15 or clear app data.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No release, tag, device operation or crawler job occurs in this workflow.' >> "$GITHUB_STEP_SUMMARY"
