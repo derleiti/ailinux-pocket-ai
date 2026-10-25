@@ -40,7 +40,11 @@ class BackgroundModelDownloadWiringTest {
         assertTrue(bg.contains("setBackoffCriteria(30_000L"))
         assertTrue(store.contains("if (cancelled.get()) throw TransferCancelled()"))
         assertTrue(store.contains("progress(TransferProgress(offset, total))"))
-        assertTrue(store.contains("if (error !is TransferCancelled) temp.delete()"))
+        assertFalse("Never silently delete existing multi-GB model on hash failure",
+            store.contains("if (error !is TransferCancelled) temp.delete()"))
+        assertTrue("Model must still be verified before atomic publication",
+            store.contains("validate(temp, name)"))
+        assertTrue(store.contains("AtomicModelInstall.publish(temp, target)"))
         assertTrue(main.contains("MODELL-DOWNLOAD / JOBSCHEDULER"))
     }
 }
