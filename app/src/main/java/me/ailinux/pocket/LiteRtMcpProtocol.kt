@@ -44,6 +44,23 @@ internal object LiteRtNativeResponseBoundary {
     }
 }
 
+/** Classify local LiteRT feedback without mistaking a pending tool call or
+ * empty model output for a completed natural-language answer.
+ * This never determines whether a remote MCP tool ran: only the host receipt can.
+ */
+internal object LiteRtMcpFollowupQuality {
+    enum class Answer { TEXT, TOOL_REQUEST, EMPTY }
+
+    fun assess(text: String, callCount: Int): Answer {
+        require(callCount >= 0)
+        return when {
+            callCount > 0 -> Answer.TOOL_REQUEST
+            text.isNotBlank() -> Answer.TEXT
+            else -> Answer.EMPTY
+        }
+    }
+}
+
 internal object LiteRtMcpPolicy {
     /** Privacy-safe classification; neither tool arguments nor prompts are logged. */
     enum class Fault {
