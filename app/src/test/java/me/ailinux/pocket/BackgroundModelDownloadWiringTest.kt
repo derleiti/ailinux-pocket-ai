@@ -40,7 +40,9 @@ class BackgroundModelDownloadWiringTest {
         assertTrue(bg.contains("setBackoffCriteria(30_000L"))
         assertTrue(store.contains("if (cancelled.get()) throw TransferCancelled()"))
         assertTrue(store.contains("progress(TransferProgress(offset, total))"))
-        assertTrue(store.contains("if (error !is TransferCancelled) temp.delete()"))
+        assertFalse(store.contains("if (error !is TransferCancelled) temp.delete()"))
+        assertTrue(store.contains("hashForVerification"))
+        assertTrue(store.contains("canCompleteRange("))
         assertTrue(main.contains("MODELL-DOWNLOAD / JOBSCHEDULER"))
     }
 }

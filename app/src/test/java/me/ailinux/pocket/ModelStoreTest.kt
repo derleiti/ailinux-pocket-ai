@@ -69,6 +69,46 @@ class ModelStoreTest {
         } finally { folder.deleteRecursively() }
     }
 
+    @Test fun http416WithoutContentRangeAcceptsOnlyVerifiableFullFile() {
+        val offset = 2_056_729_520L
+        assertTrue("Expected SHA independently authenticates local bytes",
+            ModelStore.canCompleteRange(offset, null, null, null, null, true))
+        assertTrue("HF X-Linked SHA plus exact X-Linked-Size",
+            ModelStore.canCompleteRange(offset, null, offset, null, null, true))
+        assertFalse("A bare 416 is never proof",
+            ModelStore.canCompleteRange(offset, null, null, null, null, false))
+        assertFalse("Wrong size must reject even with a known checksum",
+            ModelStore.canCompleteRange(offset, null, offset - 1, null, null, true))
+        assertFalse("Wrong Content-Range must reject",
+            ModelStore.canCompleteRange(offset, offset + 1, null, null, null, true))
+    }
+
+    @Test fun http416HeadRequiresSameStrongValidatorAndExactSize() {
+        val strong = "\"acbd40d66d55bf6693a52fb28d7755b95c7108334b7b414cb2002bd9c50010b6\""
+        assertTrue(ModelStore.canCompleteRange(
+            12_000, null, 12_000, strong, strong, false))
+        assertFalse(ModelStore.canCompleteRange(
+            12_000, null, 12_000, strong, "\"different\"", false))
+        assertFalse(ModelStore.canCompleteRange(
+            12_000, null, 12_000, "W/" + strong, "W/" + strong, false))
+        assertFalse(ModelStore.canCompleteRange(
+            12_000, null, 12_000, null, strong, false))
+        assertFalse(ModelStore.canCompleteRange(
+            12_000, null, 11_999, strong, strong, false))
+        assertFalse(ModelStore.canCompleteRange(
+            12_000, null, null, strong, strong, false))
+    }
+
+    @Test fun linkedEtagSha256MustBeStrictlyHexadecimal() {
+        val valid = "362ec1c906a49bbe1e68b118fdb789b70a713063b00ac914043cbda03bcf3d9a"
+        assertTrue(ModelStore.isSha256(valid))
+        assertFalse(ModelStore.isSha256("W/" + valid))
+        assertFalse(ModelStore.isSha256(valid.dropLast(1)))
+        assertFalse(ModelStore.isSha256("x".repeat(64)))
+        assertTrue(ModelStore.isStrongEtag("\"" + valid + "\""))
+        assertFalse(ModelStore.isStrongEtag("W/\"" + valid + "\""))
+    }
+
     @Test fun completedRangeIsOnlyAcceptedForExactRfc9110UnsatisfiedRangeTotal() {
         assertEquals(101L, ModelStore.completedRangeLength("bytes */101"))
         assertEquals(9876543210L, ModelStore.completedRangeLength("bytes */9876543210"))

@@ -123,29 +123,28 @@ class ModelStore(private val context: Context) {
             // A resume Range starting at EOF legitimately returns HTTP 416.
             // This happens when Android stopped us *after* the final byte but
             // *before* verification/publish. Never discard those bytes.
-            if (code == 416 && offset > 32 && (validator != null ||
-                    sha256?.matches(Regex("[a-fA-F0-9]{64}")) == true)) {
-                val remoteLength = completedRangeLength(
+            if (code == 416 && offset > 32) {
+                // Hugging Face Xet can omit Content-Range and ETag at EOF.
+                // A bare HTTP 416 never authorizes publishing a .part file.
+                val rangeSize = completedRangeLength(
                     connection.getHeaderField("Content-Range"))
-                if (remoteLength == offset) {
-                    val returnedTag = connection.getHeaderField("ETag")
-                        ?: connection.getHeaderField("Last-Modified")
-                    // A 416 result is NOT proof that the bytes belong to
-                    // today's object. Demand a verified SHA-256, or an exact
-                    // validator echoed by the server. A missing validator
-                    // is not grounds to trust an old partial.
-                    require(sha256?.matches(Regex("[a-fA-F0-9]{64}")) == true ||
-                        (validator != null && returnedTag == validator)) {
-                        "HTTP 416 ohne überprüfbare SHA-256 oder aktuellen " +
-                            "Range-Validator; Teildatei bleibt erhalten."
-                    }
-                    progress(TransferProgress(offset, offset))
-                    return verifyAndPublish(temp, target, name, validatorFile,
-                        sha256, cancelled, onVerifying, progress)
+                val knownHash = sha256?.takeIf { isSha256(it) }
+                val head = if (knownHash == null)
+                    completionHead(url, cancelled) else null
+                val linkedHash = head?.sha256
+                if (knownHash != null && linkedHash != null &&
+                    !knownHash.equals(linkedHash, true))
+                    throw IOException("HTTP 416: Quell-Hash wurde geändert; Teil-Datei bleibt erhalten.")
+                val hashForVerification = knownHash ?: linkedHash
+                require(canCompleteRange(offset, rangeSize, head?.size,
+                    validator, connection.getHeaderField("ETag")
+                        ?: head?.strongEtag, hashForVerification != null)) {
+                    "HTTP 416: Remote-Länge oder Validator nicht sicher nachgewiesen. " +
+                        "Teil-Datei bleibt erhalten."
                 }
-                throw java.io.IOException("HTTP 416: Teilstand " + offset +
-                    " stimmt nicht mit Remote-Länge " + remoteLength +
-                    " überein; Teil-Datei bleibt erhalten.")
+                progress(TransferProgress(offset, offset))
+                return verifyAndPublish(temp, target, name, validatorFile,
+                    hashForVerification, cancelled, onVerifying, progress)
             }
             if (code == 429 || code in 500..599)
                 throw java.io.IOException("HTTP " + code + " – Server vorübergehend nicht erreichbar")
@@ -242,9 +241,8 @@ class ModelStore(private val context: Context) {
                 }
             }
         } catch (error: Exception) {
-            // A cancelled validation is resumable; genuinely corrupt files
-            // cannot ever be offered as a valid completed model.
-            if (error !is TransferCancelled) temp.delete()
+            // Preserve a rejected partial until the user explicitly discards
+            // it. Never publish on header/hash mismatch or cancellation.
             throw error
         }
         if (cancelled.get()) throw TransferCancelled()
@@ -311,6 +309,56 @@ class ModelStore(private val context: Context) {
         }
     }
 
+    /**
+     * HEAD-only recovery for a complete .part at EOF. Trust Hugging Face's
+     * X-Linked-Etag as SHA-256 only with its exact X-Linked-Size from the
+     * official source host; otherwise compare a strong CDN HEAD ETag.
+     */
+    private fun completionHead(url: URL, cancelled: AtomicBoolean): CompletionEvidence? {
+        if (cancelled.get()) throw TransferCancelled()
+        fun fetch(followRedirects: Boolean): CompletionEvidence? {
+            val head = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "HEAD"
+                connectTimeout = 9_000
+                readTimeout = 12_000
+                instanceFollowRedirects = followRedirects
+                setRequestProperty("User-Agent", "AILinux-Pocket-AI/2.1")
+                setRequestProperty("Accept-Encoding", "identity")
+            }
+            try {
+                val status = head.responseCode
+                require(head.url.protocol.equals("https", ignoreCase = true)) {
+                    "Unsicheres Redirect auf HTTP verweigert"
+                }
+                if (cancelled.get()) throw TransferCancelled()
+                if (status != 200 && (followRedirects ||
+                    status !in setOf(301, 302, 303, 307, 308))) return null
+                val linkedSize = if (!followRedirects &&
+                    url.host.equals("huggingface.co", ignoreCase = true))
+                    head.getHeaderField("X-Linked-Size")?.toLongOrNull()
+                        ?.takeIf { it > 0 }
+                else null
+                val linkedHash = linkedSize?.let {
+                    head.getHeaderField("X-Linked-Etag")?.trim()?.trim('"')
+                        ?.takeIf { hash -> isSha256(hash) }
+                }
+                val size = linkedSize ?:
+                    head.contentLengthLong.takeIf { status == 200 && it > 0 }
+                val tag = head.getHeaderField("ETag")
+                    ?.takeIf { isStrongEtag(it) }
+                return CompletionEvidence(size, tag, linkedHash)
+            } finally { head.disconnect() }
+        }
+        val origin = fetch(false)
+        if (origin?.size != null && origin.sha256 != null) return origin
+        val resolved = fetch(true)
+        return when {
+            resolved == null -> origin
+            origin?.sha256 == null -> resolved
+            else -> resolved.copy(sha256 = origin.sha256)
+        }
+    }
+
     companion object {
         private val activeDownloads = ConcurrentHashMap.newKeySet<String>()
         internal fun claimTransfer(directory: File, name: String): AutoCloseable {
@@ -319,6 +367,36 @@ class ModelStore(private val context: Context) {
                 throw IOException("Dieser Modelltransfer beendet gerade einen früheren " +
                     "Downloadversuch. Android kann danach erneut starten.")
             return AutoCloseable { activeDownloads.remove(key) }
+        }
+
+        internal data class CompletionEvidence(
+            val size: Long?, val strongEtag: String?, val sha256: String?
+        )
+
+        internal fun isSha256(value: String): Boolean =
+            value.matches(Regex("[a-fA-F0-9]{64}"))
+
+        internal fun isStrongEtag(value: String): Boolean =
+            value.length in 3..220 && value.startsWith('"') &&
+                value.endsWith('"') && !value.contains('\n') &&
+                !value.contains('\r')
+
+        /**
+         * A bare HTTP 416 or rounded UI size cannot authorize publishing.
+         * A verified SHA-256 is enough unless server size contradicts it.
+         * Without a checksum require exact size plus current strong ETag.
+         */
+        internal fun canCompleteRange(
+            localBytes: Long, rangeBytes: Long?, headBytes: Long?,
+            savedTag: String?, currentTag: String?, hasExpectedSha: Boolean
+        ): Boolean {
+            if (localBytes <= 32) return false
+            if (rangeBytes != null && rangeBytes != localBytes) return false
+            if (headBytes != null && headBytes != localBytes) return false
+            if (hasExpectedSha) return true
+            return (rangeBytes == localBytes || headBytes == localBytes) &&
+                savedTag != null && isStrongEtag(savedTag) &&
+                currentTag == savedTag
         }
 
         /** RFC 9110 unsatisfied-range total, never parsed from model-supplied data. */
