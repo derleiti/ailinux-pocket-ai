@@ -18,6 +18,7 @@ import me.ailinux.pocket.mcp.McpAgentBridge
 import me.ailinux.pocket.mcp.McpAgentUi
 import me.ailinux.pocket.mcp.McpAgentSession
 import me.ailinux.pocket.mcp.McpToolCatalog
+import me.ailinux.pocket.mcp.McpArchitectureGuide
 import me.ailinux.pocket.mcp.McpRequestRouting
 import me.ailinux.pocket.mcp.McpHealthCheck
 import me.ailinux.pocket.mcp.McpLogCheck
@@ -122,9 +123,11 @@ class MainActivity : AppCompatActivity() {
     )
     private fun failure(
         domain: PocketDiagnostics.Domain, step: PocketDiagnostics.Step,
-        error: Throwable, uncertain: Boolean = false
+        error: Throwable, uncertain: Boolean = false,
+        durationMs: Long = -1L
     ): String = PocketDiagnostics.failure(
-        applicationContext, diagnosticTrace, domain, step, error, uncertain
+        applicationContext, diagnosticTrace, domain, step, error, uncertain,
+        durationMs = durationMs
     )
 
     private var generationJob: Job? = null
@@ -844,12 +847,23 @@ class MainActivity : AppCompatActivity() {
             }
             content.addView(title)
             val isActive = activeModel?.absolutePath == file.absolutePath
+            // A historical complete journal may refer to a deleted/replaced
+            // file. Do not offer it as a verified installed model just
+            // because the filename and extension still match.
+            val journal = ModelDownloadJournal.read(this, file.name)
+            val completedMismatch = journal?.state == "complete" &&
+                !CompletedModelEvidence.present(store.dir, file.name, journal.done)
             content.addView(simpleLabel(
                 ModelStore.displaySize(file.length()) + if (isActive) "  •  AKTIV" else ""
             ))
+            if (completedMismatch)
+                content.addView(simpleLabel(
+                    "⚠ Datei und Downloadjournal stimmen nicht überein. " +
+                    "Bitte vor dem Laden unabhängig prüfen."
+                ))
             val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             val load = smallButton(if (isActive) "✓ Aktiv" else "▶ Laden", isActive)
-            load.isEnabled = !busy && !transferBusy && !isActive
+            load.isEnabled = !busy && !transferBusy && !isActive && !completedMismatch
             load.setOnClickListener { loadModel(file) }
             buttons.addView(load)
             val export = smallButton("Export", false)
@@ -877,6 +891,38 @@ class MainActivity : AppCompatActivity() {
             content.addView(buttons)
             card.addView(content)
             modelsContainer.addView(card)
+        }
+        // An interrupted install or removed file can leave journal=complete
+        // but no valid final model. Expose it on the model page, never
+        // silently delete a .part or restart from an unverified URL.
+        ModelDownloadJournal.all(this).filter {
+            it.state == "complete" &&
+                !CompletedModelEvidence.present(store.dir, it.name, it.done)
+        }.forEach { entry ->
+            modelsContainer.addView(simpleLabel(
+                BackgroundModelDownloads.snapshot(this, entry).label
+            ))
+            val reselect = smallButton("Quelle erneut auswählen", false)
+            reselect.isEnabled = !busy && !transferBusy
+            reselect.setOnClickListener {
+                val partExists = File(store.dir, entry.name + ".part").isFile
+                AlertDialog.Builder(this)
+                    .setTitle("Download prüfen und neu auswählen")
+                    .setMessage(
+                        "Das Journal beweist keine vollständige Modelldatei. " +
+                        "Im Modellkatalog dieselbe Quelle und Version erneut auswählen. " +
+                        "Vorhandene Modelldateien bleiben unverändert." +
+                        (if (partExists)
+                            "\n\nDie .part-Datei bleibt erhalten. " +
+                            "Ohne nachweisbar identische Quelle wird sie nicht automatisch angehängt."
+                         else "")
+                    )
+                    .setNegativeButton("Abbrechen", null)
+                    .setPositiveButton("Modellkatalog öffnen") { _, _ ->
+                        browseRepository()
+                    }.show()
+            }
+            modelsContainer.addView(reselect)
         }
         val partNames = store.partials().map { it.name.removeSuffix(".part") }.toSet()
         ModelDownloadJournal.all(this).filter {
@@ -914,7 +960,7 @@ class MainActivity : AppCompatActivity() {
             if (runningNow) {
                 activePartialLabel = partialLabel
             } else {
-                if (source != null) {
+                if (source != null && journal?.state != "complete") {
                     val resume = smallButton("Fortsetzen", false)
                     resume.isEnabled = !transferBusy
                     resume.setOnClickListener {
@@ -975,12 +1021,15 @@ class MainActivity : AppCompatActivity() {
             PocketDiagnostics.State.START)
         lifecycleScope.launch {
             var previousModelUnloaded = false
+            var newGgufLoaded = false
+            var startupPhase = GgufLoadFailure.Phase.METADATA
             try {
                 val inspection = withContext(Dispatchers.IO) { ModelCompatibility.inspect(file) }
                 inspection.incompatibleReason?.let { throw IllegalArgumentException(it) }
                 setStatus("Lade " + (inspection.architecture ?: "GGUF") + " …")
                 // Persist before JNI starts, but commit() fsync can take
                 // hundreds of ms on a busy device: do it off the UI thread.
+                startupPhase = GgufLoadFailure.Phase.PREVIOUS_ENGINE_RELEASE
                 withContext(Dispatchers.IO) {
                     check(prefs.edit().putString(PREF_LOADING_MODEL, file.name)
                         .putLong(PREF_LOADING_MODEL_STARTED_MS, System.currentTimeMillis())
@@ -1004,6 +1053,7 @@ class MainActivity : AppCompatActivity() {
                         else -> Unit
                     }
                     previousModelUnloaded = true
+                    startupPhase = GgufLoadFailure.Phase.NATIVE_MODEL_LOAD
                     try {
                         engine.loadModel(file.absolutePath)
                     } catch (error: IOException) {
@@ -1017,6 +1067,8 @@ class MainActivity : AppCompatActivity() {
                             error
                         )
                     }
+                    newGgufLoaded = true
+                    startupPhase = GgufLoadFailure.Phase.THINKING_SETUP
                     // The mode must be set BEFORE the system prompt enters
                     // the KV cache; changing it within an active chat corrupts
                     // incremental Jinja template prefixes.
@@ -1028,7 +1080,9 @@ class MainActivity : AppCompatActivity() {
                     val nativeTools = activeMcp?.let {
                         McpAgentBridge.nativeToolsJson(it.tools)
                     } ?: "[]"
+                    startupPhase = GgufLoadFailure.Phase.CHAT_TEMPLATE
                     engine.setSystemPrompt(groundedSystemPrompt(activeMcp), nativeTools)
+                    startupPhase = GgufLoadFailure.Phase.SAMPLING_SETUP
                     applySampling()
                 }
                 activeModel = file
@@ -1046,12 +1100,31 @@ class MainActivity : AppCompatActivity() {
                 refreshLibrary()
                 showPage(0)
             } catch (error: Exception) {
+                val typed = GgufLoadFailure(startupPhase, error)
                 failure(PocketDiagnostics.Domain.GGUF,
-                    PocketDiagnostics.Step.MODEL_LOAD, error)
-                // Preserve the previously loaded model if the preflight is rejected.
+                    PocketDiagnostics.Step.MODEL_LOAD, typed,
+                    durationMs = SystemClock.elapsedRealtime() - modelLoadStarted)
+                // A load succeeded but a later template/sampling step failed:
+                // release the still-mapped GGUF weights, not only UI state.
+                // Never double-unload after the native load() catch already
+                // performed its own cleanup.
+                if (newGgufLoaded && ::engine.isInitialized) {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        try {
+                            if (engine.state.value is InferenceEngine.State.ModelReady ||
+                                engine.state.value is InferenceEngine.State.Error) {
+                                engine.cleanUp()
+                            }
+                        } catch (cleanupError: Exception) {
+                            failure(PocketDiagnostics.Domain.GGUF,
+                                PocketDiagnostics.Step.ENGINE_ERROR, cleanupError)
+                        }
+                    }
+                }
+                // Preserve the previously loaded model if preflight failed.
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT" else "Ladefehler")
-                showError("Modell/Chat-Template konnte nicht gestartet werden", error)
+                showError("GGUF-Modellstart fehlgeschlagen", typed)
             } finally {
                 prefs.edit().remove(PREF_LOADING_MODEL)
                     .remove(PREF_LOADING_MODEL_STARTED_MS).apply()
@@ -1073,13 +1146,46 @@ class MainActivity : AppCompatActivity() {
         val memory = ActivityManager.MemoryInfo().also {
             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
         }
+        // Do not tear down a usable native engine when Android already
+        // reports critical memory pressure. This first guard is deliberately
+        // before confirmation, busy state and previous-runtime shutdown.
+        // A second OS memory check still runs AFTER the old engine unloads:
+        // Android's memory condition can change during the transition.
+        if (memory.lowMemory) {
+            diagnosticTrace = PocketDiagnostics.newTrace()
+            val refusal = ModelMemoryGuardException(
+                availableBytes = memory.availMem,
+                requiredBytes = ModelLoadSafety.minimumAvailableAfterUnload(file.length()),
+                androidLowMemory = true
+            )
+            failure(PocketDiagnostics.Domain.LITERT,
+                PocketDiagnostics.Step.MODEL_LOAD, refusal)
+            showError("LiteRT: Android meldet Speicherdruck", refusal)
+            return
+        }
+        val initialCandidates = RuntimeHardware.forModelFile(
+            file.name, RuntimeHardware.candidatesOnDevice()
+        )
+        val tensorMayBeUsed = RuntimeHardware.Attempt.GOOGLE_TENSOR in initialCandidates
+        val tensorWarningFloor = ModelLoadSafety.minimumAvailableForLiteRtModel(
+            file.length(), tensorMayBeUsed, memory.threshold)
+        val tensorRiskWarning = tensorMayBeUsed && memory.availMem < tensorWarningFloor
         if (!acknowledgedLargeModel &&
-            ModelLoadSafety.requiresConfirmation(file.length(), memory.availMem)) {
+            (ModelLoadSafety.requiresConfirmation(file.length(), memory.availMem) ||
+                tensorRiskWarning)) {
+            val riskNote = if (tensorRiskWarning)
+                "\n\nGoogle Tensor benötigt möglicherweise weitere Speicherpuffer. " +
+                    "Die vorsichtige Warnschwelle beträgt " +
+                    ModelStore.displaySize(tensorWarningFloor) +
+                    ". Diese Grenze darf nicht per Bestätigung überschritten " +
+                    "werden. Pocket AI überspringt dann die Tensor-NPU und " +
+                    "verwendet nur kompatible GPU-/CPU-Backends."
+            else ""
             AlertDialog.Builder(this)
                 .setTitle("Hoher RAM-Bedarf")
-                .setMessage(ModelLoadSafety.explain(file.length(), memory.availMem))
+                .setMessage(ModelLoadSafety.explain(file.length(), memory.availMem) + riskNote)
                 .setNegativeButton("Abbrechen", null)
-                .setPositiveButton("Trotzdem laden") { _, _ ->
+                .setPositiveButton("Sicher versuchen") { _, _ ->
                     loadLiteRtModel(file, acknowledgedLargeModel = true)
                 }.show()
             return
@@ -1122,15 +1228,42 @@ class MainActivity : AppCompatActivity() {
                     val currentMemory = ActivityManager.MemoryInfo().also {
                         (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
                     }
-                    if (ModelLoadSafety.insufficientAfterUnload(file.length(), currentMemory.availMem)) {
+                    // A warning accepted before unloading another engine
+                    // does not override Android's actual low-memory status.
+                    // The Tensor-specific floor uses observed Pixel LMK evidence
+                    // instead of assuming a multi-GB model needs only 0.5x
+                    // its file size plus a small reserve.
+                    val deviceCandidates = RuntimeHardware.forModelFile(
+                        file.name, RuntimeHardware.candidatesOnDevice()
+                    )
+                    require(deviceCandidates.isNotEmpty()) {
+                        "Dieses Modell hat auf dem Gerät keinen unterstützten LiteRT-Backendpfad."
+                    }
+                    val safeCandidates = ModelLoadSafety.allowedLiteRtAttempts(
+                        file.length(), currentMemory.availMem, currentMemory.lowMemory,
+                        currentMemory.threshold, deviceCandidates
+                    )
+                    val tensorCandidate = RuntimeHardware.Attempt.GOOGLE_TENSOR in deviceCandidates
+                    if (safeCandidates.isEmpty()) {
                         throw ModelMemoryGuardException(
                             availableBytes = currentMemory.availMem,
-                            requiredBytes = ModelLoadSafety.minimumAvailableAfterUnload(file.length())
+                            requiredBytes = ModelLoadSafety.minimumAvailableForLiteRtModel(
+                                file.length(), tensorCandidate, currentMemory.threshold),
+                            androidLowMemory = currentMemory.lowMemory
                         )
+                    }
+                    if (tensorCandidate &&
+                        RuntimeHardware.Attempt.GOOGLE_TENSOR !in safeCandidates) {
+                        // Skip ONLY the unsafe NPU candidate; never silently
+                        // retry an NPU-only AOT graph through a fictitious GPU.
+                        trace(PocketDiagnostics.Domain.LITERT,
+                            PocketDiagnostics.Step.BACKEND_SKIPPED,
+                            PocketDiagnostics.State.INFO,
+                            code = PocketDiagnostics.ErrorCode.MEMORY)
                     }
                     val prompt = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
                     LiteRtRuntime.load(applicationContext, file, prompt,
-                        mcpAgent.current()) { phase ->
+                        mcpAgent.current(), allowedAttempts = safeCandidates) { phase ->
                         // Diagnostics are best effort; never break a valid model start.
                         runCatching {
                             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
@@ -1155,7 +1288,8 @@ class MainActivity : AppCompatActivity() {
                 refreshLibrary()
                 showPage(0)
             } catch (error: Exception) {
-                failure(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD, error)
+                failure(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD,
+                    error, durationMs = SystemClock.elapsedRealtime() - modelLoadStarted)
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT"
                     else "LiteRT-LM konnte nicht gestartet werden")
@@ -1165,7 +1299,8 @@ class MainActivity : AppCompatActivity() {
                     error
                 )
             } catch (error: LinkageError) {
-                failure(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD, error)
+                failure(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD,
+                    error, durationMs = SystemClock.elapsedRealtime() - modelLoadStarted)
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT"
                     else "LiteRT-LM Bibliothek nicht verfügbar")
@@ -1696,6 +1831,7 @@ class MainActivity : AppCompatActivity() {
         messages.add(ChatMessage(true, question))
         messages.add(ChatMessage(false, answer))
         chatAdapter.notifyItemRangeInserted(messages.size - 2, 2)
+        requestChatPersist()
         findViewById<View>(R.id.emptyState).visibility = View.GONE
         showPage(0)
         messagesView.scrollToPosition(messages.lastIndex)
@@ -2230,8 +2366,21 @@ class MainActivity : AppCompatActivity() {
             showDiagnosticTimeline(inChat = true)
             return
         }
-        // When an MCP agent is active, plain-language work belongs to the
-        // model's native ToolCall planner. Only explicit app diagnostics,
+        // A narrowly scoped question about *how Pocket AI integrates MCP*
+        // is app-local documentation, not a request to train models or to
+        // execute one of the remote tools. Ground this in the connected
+        // snapshot instead of asking an 0.8B native planner to invent it.
+        if (McpArchitectureGuide.applies(text)) {
+            val active = mcpAgent.current()
+            val counts = active?.progressiveSources?.map { it.tools.size }.orEmpty()
+            messageInput.setText("")
+            appendReadOnlyChat(text, McpArchitectureGuide.explain(
+                counts, if (counts.isEmpty()) active?.tools?.size ?: 0 else 0
+            ))
+            return
+        }
+        // When an MCP agent is active, requests for real work belong to the
+        // model's native ToolCall planner. Explicit app help, diagnostics,
         // slash commands and unambiguous inventory requests bypass it.
         val modelToolRequest = McpRequestRouting.useModelAgent(
             text, mcpAgent.current() != null && activeModel != null
@@ -3131,6 +3280,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         diagnosticTrace = PocketDiagnostics.newTrace()
+        val inferenceStarted = SystemClock.elapsedRealtime()
         trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_START,
             PocketDiagnostics.State.START)
         if (mcpAgent.current() != null)
@@ -3167,18 +3317,21 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_DONE,
-                    PocketDiagnostics.State.OK)
+                    PocketDiagnostics.State.OK,
+                    durationMs = SystemClock.elapsedRealtime() - inferenceStarted)
                 setStatus("● LITERT BEREIT · " + runtime.backendName)
             } catch (_: CancellationException) {
                 trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.CANCELLED,
-                    PocketDiagnostics.State.REJECTED)
+                    PocketDiagnostics.State.REJECTED,
+                    durationMs = SystemClock.elapsedRealtime() - inferenceStarted)
                 withContext(NonCancellable) {
                     try { runtime.cancelResponse() } catch (_: Exception) {}
                 }
                 if (!isDestroyed) setStatus("● LITERT GESTOPPT")
             } catch (error: Exception) {
                 val eventId = failure(PocketDiagnostics.Domain.LITERT,
-                    PocketDiagnostics.Step.MODEL_ERROR, error)
+                    PocketDiagnostics.Step.MODEL_ERROR, error,
+                    durationMs = SystemClock.elapsedRealtime() - inferenceStarted)
                 answer.content += "\n⚠ " + getString(R.string.diagnostics_error,
                     PocketDiagnostics.publicError(error), eventId)
                 chatAdapter.notifyItemChanged(index)
@@ -3351,7 +3504,11 @@ class MainActivity : AppCompatActivity() {
         activeTransferName = null
         transferBusy = false
         setDownloadUi(snapshot.label, false)
-        if (entry.state == "complete") {
+        if (entry.state == "complete" &&
+            CompletedModelEvidence.present(store.dir, name, entry.done)) {
+            // Only forget source metadata after the CURRENT on-disk file
+            // matches completed bytes; stale journal must retain recovery
+            // evidence. This still does not assert a fresh SHA-256 test.
             prefs.edit().remove("pending_url_" + name).remove("pending_sha_" + name).apply()
         }
         refreshLibrary()

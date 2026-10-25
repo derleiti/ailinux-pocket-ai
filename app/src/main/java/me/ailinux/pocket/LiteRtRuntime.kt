@@ -50,6 +50,7 @@ internal class LiteRtRuntime private constructor(
     private var activeBridgeKey = ""
     private var currentInstruction = systemPrompt
     private var currentToolProviders: List<com.google.ai.edge.litertlm.ToolProvider> = emptyList()
+    private var currentMaxOutputTokens = LiteRtOutputBudget.MAX_CHAT_TOKENS
     data class ToolTurn(val text: String, val calls: List<ToolCall>)
 
     /** No provider executes a tool. The host intercepts ToolCalls and must
@@ -84,14 +85,17 @@ internal class LiteRtRuntime private constructor(
             val previous = conversation
             conversation = null
             previous?.close()
+            val nextOutputLimit = LiteRtOutputBudget.forSession(session != null)
             val fresh = engine.createConversation(ConversationConfig(
                 systemInstruction = Contents.of(instructions),
                 tools = definitions,
-                automaticToolCalling = false
+                automaticToolCalling = false,
+                maxOutputToken = nextOutputLimit
             ))
             conversation = fresh
             currentInstruction = instructions
             currentToolProviders = definitions
+            currentMaxOutputTokens = nextOutputLimit
             activeBridgeKey = currentKey
         }
         Unit
@@ -137,7 +141,8 @@ internal class LiteRtRuntime private constructor(
             ConversationConfig(
                 systemInstruction = Contents.of(currentInstruction),
                 tools = currentToolProviders,
-                automaticToolCalling = false
+                automaticToolCalling = false,
+                maxOutputToken = currentMaxOutputTokens
             )
         )
         Unit
@@ -188,6 +193,7 @@ internal class LiteRtRuntime private constructor(
     companion object {
         suspend fun load(context: Context, file: File, prompt: String,
                          session: McpAgentSession? = null,
+                         allowedAttempts: List<RuntimeHardware.Attempt>? = null,
                          onStage: (String) -> Unit = {}): LiteRtRuntime {
             require(file.isFile && file.name.endsWith(".litertlm", true)) {
                 "Nur lokal importierte LiteRT-LM-Modelle"
@@ -204,8 +210,13 @@ internal class LiteRtRuntime private constructor(
             try {
                 return withContext(dispatcher) {
                     val errors = mutableListOf<String>()
+                    // A memory preflight may explicitly exclude unsafe NPU,
+                    // while retaining a genuine GPU/CPU candidate. Do not
+                    // silently add excluded backends inside the native loader.
+                    val safeSet = allowedAttempts?.toSet()
                     val choices = RuntimeHardware.forModelFile(
                         file.name, RuntimeHardware.candidatesOnDevice())
+                        .filter { safeSet == null || it in safeSet }
                     require(choices.isNotEmpty()) { "Kein kompatibler Backend-Kandidat für " + file.name }
                     for (attempt in choices) {
                         currentCoroutineContext().ensureActive()
@@ -246,15 +257,18 @@ internal class LiteRtRuntime private constructor(
                                 prompt + "\n" + LiteRtMcpProtocol.shortInstructions(
                                     session.progressiveSources.isNotEmpty()) +
                                     me.ailinux.pocket.mcp.McpServerGuidance.optionalPromptBlock(session)
+                            val outputLimit = LiteRtOutputBudget.forSession(session != null)
                             val convo = candidate.createConversation(ConversationConfig(
                                 systemInstruction = Contents.of(instruction),
-                                tools = definitions, automaticToolCalling = false))
+                                tools = definitions, automaticToolCalling = false,
+                                maxOutputToken = outputLimit))
                             onStage("ready_" + attempt.name.lowercase())
                             return@withContext LiteRtRuntime(
                                 candidate, convo, prompt, attempt.name, dispatcher
                             ).apply {
                                 currentInstruction = instruction
                                 currentToolProviders = definitions
+                                currentMaxOutputTokens = outputLimit
                                 activeBridgeKey = session?.let {
                                     McpAgentBridge.nativeToolsJson(it.tools) + "|" + it.profileId +
                                     "|" + it.progressiveSources.joinToString { src -> src.id + src.endpoint } +

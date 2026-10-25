@@ -45,7 +45,8 @@ internal object DownloadSchedulerState {
         total: Long,
         error: String,
         network: NetworkInfo? = null,
-        completedFilePresent: Boolean? = null
+        completedFilePresent: Boolean? = null,
+        completedWithVerifiedSha256: Boolean = false
     ): View {
         val suffix = if (done > 0)
             " · " + ModelStore.displaySize(done) +
@@ -57,8 +58,11 @@ internal object DownloadSchedulerState {
                     error.ifBlank { "Ursache nicht protokolliert" }.take(125),
                 canResume = true)
             "complete" -> when (completedFilePresent) {
-                true -> View("✓ Download abgeschlossen · Modelldatei vorhanden " +
-                    "(Größe geprüft, kein erneuter SHA-256-Test): " + name)
+                true -> if (completedWithVerifiedSha256)
+                    View("✓ Download abgeschlossen · Modelldatei vorhanden " +
+                        "(SHA-256 beim Transfer geprüft, kein erneuter Hash-Test): " + name)
+                else View("ⓘ Downloadjournal abgeschlossen · Modelldatei vorhanden " +
+                    "(Größe geprüft, SHA-256 nicht bestätigt): " + name)
                 false -> View("⚠ Downloadjournal abgeschlossen, aber Modelldatei fehlt " +
                     "oder Größe weicht ab: " + name)
                 null -> View("ⓘ Downloadjournal abgeschlossen; Dateibestand ungeprüft: " + name)

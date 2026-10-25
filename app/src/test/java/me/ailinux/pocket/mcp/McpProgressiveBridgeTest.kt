@@ -63,6 +63,26 @@ class McpProgressiveBridgeTest {
         assertTrue(raw.contains("arguments_json"))
     }
 
+    @Test fun partialDiscoveryPreservesOriginalSourceIdentityAndApprovalSafety() {
+        // When source #2 returned HTTP_FAILURE, source #3 must keep s3 IDs
+        // rather than pretending to be the approved but unavailable source #2.
+        val alive = listOf(triForce(), McpProgressiveBridge.Source(
+            "s3", "workspace", "https://example.test/mcp", "AILinux Workspace",
+            listOf(McpTool("workspace_status", "Workspace status and devices",
+                JSONObject().put("type", "object")))))
+        val run = McpProgressiveBridge.Run(alive)
+        assertEquals(4, run.totalTools)
+        val result = report(run.search("workspace status", 6))
+        val hits = result.getJSONArray("matches")
+        assertTrue((0 until hits.length()).any {
+            hits.getJSONObject(it).getString("tool_id") == "s3/workspace_status"
+        })
+        assertFalse(result.toString().contains("s2/"))
+        assertEquals("s3/workspace_status",
+            report(run.details("s3/workspace_status")).getString("tool_id"))
+        assertEquals(0, run.remoteCalls)
+    }
+
     @Test fun mistypedWorkspaceNameLimitsSearchDetailsAndCallToWorkspaceSource() {
         val sources = listOf(
             McpProgressiveBridge.Source("s1","ws","https://example.test/ws",

@@ -21,7 +21,7 @@ grep -qx 'lib/arm64-v8a/libllama.so' "$ZIPLIST"
 # A Tensor G5 backend requires the real vendor dispatch native library.
 grep -qx 'lib/arm64-v8a/libLiteRtDispatch_GoogleTensor.so' "$ZIPLIST"
 DISPATCH_SHA="$(unzip -p "$APK" lib/arm64-v8a/libLiteRtDispatch_GoogleTensor.so | sha256sum | cut -d' ' -f1)"
-EXPECTED_DISPATCH_SHA="75d637c4de3cf60b464daf7ba85176f856779f3d2d6cc091c0392bb3776064ed"
+EXPECTED_DISPATCH_SHA="86df1958b1b2abd3b73ac2c52b7cc4ea06744526d220a9c620df856c2b3a0690"
 if [ "$DISPATCH_SHA" != "$EXPECTED_DISPATCH_SHA" ]; then
     echo "Google Tensor dispatcher digest mismatch; refusing APK" >&2
     exit 1
