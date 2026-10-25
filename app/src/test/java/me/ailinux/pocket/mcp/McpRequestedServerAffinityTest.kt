@@ -90,6 +90,30 @@ class McpRequestedServerAffinityTest {
         assertEquals("s3/status",run.prepareCall("s3/status","{}",request).toolId)
     }
 
+    @Test fun singleAuthorizedGenericServerCanExposeDiscordConnectionTool() {
+        val run = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1","one","https://example.test/mcp",
+                "TriForce", listOf(McpTool("discord_connection_status",
+                    "Discord connection", JSONObject().put("type", "object"),
+                    JSONObject().put("readOnlyHint", true))))
+        ))
+        assertEquals("s1/discord_connection_status",
+            McpOnDemandDiscovery.propose("Prüfe, ob Discord verbunden ist", run)?.toolId)
+        assertEquals(0, run.remoteCalls)
+    }
+
+    @Test fun noDiscordServerAmongSeveralMustFailClosed() {
+        val run = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1","one","https://example.test/mcp",
+                "TriForce Workspace", listOf(status())),
+            McpProgressiveBridge.Source("s2","two","https://example.test/dev",
+                "TriForce DEV MCP", listOf(status()))
+        ))
+        assertThrows(IllegalArgumentException::class.java) {
+            run.search("discord_connection_status", originalRequest = "Discord-Verbindung prüfen")
+        }
+    }
+
     @Test fun hostFallbackMayPlanWorkspaceReadOnlyButCannotAutoDispatch() {
         val state = run()
         val request = "Brumo, prüfe per AUTO-MCP den TriForce Workspace Systemstatus"

@@ -230,6 +230,13 @@ object McpProgressiveBridge {
                     else -> source.title.contains("discord", ignoreCase = true)
                 }
             }.map { it.id }.toSet()
+            if (selected.isEmpty() && sources.size == 1) {
+                // With exactly one already authorized server there is no
+                // cross-server ambiguity. "Discord connection" may name a
+                // TOOL on a generic single-server TriForce profile, not a
+                // second Discord server. Never reroute a multi-server run.
+                return setOf(sources.single().id)
+            }
             require(selected.isNotEmpty()) {
                 "Explizit angeforderter MCP-Server $marker ist nicht verbunden."
             }
