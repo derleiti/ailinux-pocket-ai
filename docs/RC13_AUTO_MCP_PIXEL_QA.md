@@ -46,3 +46,22 @@ shared diagnostic report.
 The paired Helper was connected but the Android device was on its secure
 lock screen at the time of the initial review. These steps are not marked
 complete until the device is unlocked and actual UI tests run.
+
+## Native meta-call JSON object compatibility (RC13 candidate)
+
+The only permitted compatibility conversion is local
+`mcp_call_tool(arguments_json=<JSON object>)` to the schema-required
+`mcp_call_tool(arguments_json="<JSON object string>")`.
+No field, tool ID or permission is guessed. Unknown fields, array values,
+missing required parameters and oversized JSON must continue to fail
+closed. The original target tool's live schema is separately validated
+before approval and dispatch.
+
+When this adapter actually runs, diagnostics should show
+`MCP/META_ARGS_NORMALIZED INFO`. It must be followed by authentic
+approval, revalidated schema, `DISPATCH`, and `SERVER_RESULT` for
+a completed external call. An INFO event without that chain does not
+prove execution. SDK failures *before* a ToolCall object is returned are
+not fixed by this representation adapter; check
+`INVALID_NATIVE_ARGUMENTS_SCHEMA` / `MODEL_RESET` separately.
+This is a release-candidate hypothesis until verified on Google Tensor G5.

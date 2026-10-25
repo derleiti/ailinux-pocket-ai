@@ -17,7 +17,9 @@ internal object LiteRtMcpProtocol {
             "Use only selected tools. Never claim a tool ran without host receipt."
 
     fun validate(call: ToolCall, allowed: List<McpTool>): Pair<McpTool, JSONObject> {
-        return LiteRtMcpPolicy.validateRaw(call.name, JSONObject(call.arguments), allowed)
+        val normalized = LiteRtMcpPolicy.normalizeRaw(call.name, call.arguments)
+            ?: throw IllegalArgumentException("Native Toolparameter sind kein JSON-Objekt")
+        return LiteRtMcpPolicy.validateRaw(call.name, normalized, allowed)
     }
 }
 
@@ -28,20 +30,50 @@ internal object LiteRtMcpPolicy {
         ARGUMENTS_NOT_JSON, ARGUMENTS_TOO_LARGE, ARGUMENTS_SCHEMA
     }
 
-    fun diagnoseRaw(name: String, raw: Any?, allowed: List<McpTool>): Fault? {
-        if (allowed.size > 5) return Fault.TOO_MANY_TOOLS
-        val tool = allowed.singleOrNull { it.name == name }
-            ?: return Fault.UNKNOWN_TOOL_NAME
-        // LiteRT returns ToolCall.arguments as Map<String, Any?>, not as
-        // serialized JSON. Unit tests also cover string-based adapters.
+    /**
+     * LiteRT's small models sometimes supply arguments_json as an object
+     * instead of the bridge's requested JSON string. This adapter changes
+     * ONLY that one representation and ONLY for the local mcp_call_tool.
+     * It never invents tool IDs, required parameters or permissions; the
+     * real remote schema is validated independently before tools/call.
+     */
+    fun normalizeRaw(name: String, raw: Any?): JSONObject? {
         val args = runCatching {
             when (raw) {
-                is JSONObject -> raw
+                is JSONObject -> JSONObject(raw.toString())
                 is Map<*, *> -> JSONObject(raw)
                 is String -> JSONObject(raw)
                 else -> null
             }
-        }.getOrNull() ?: return Fault.ARGUMENTS_NOT_JSON
+        }.getOrNull() ?: return null
+        if (name == "mcp_call_tool") {
+            val nested = args.opt("arguments_json")
+            when (nested) {
+                is JSONObject -> args.put("arguments_json", nested.toString())
+                is Map<*, *> -> args.put("arguments_json", JSONObject(nested).toString())
+            }
+        }
+        return args
+    }
+
+    fun hasObjectStyleMetaArguments(name: String, raw: Any?): Boolean {
+        if (name != "mcp_call_tool") return false
+        val args = runCatching {
+            when (raw) {
+                is Map<*, *> -> raw["arguments_json"]
+                is JSONObject -> raw.opt("arguments_json")
+                is String -> JSONObject(raw).opt("arguments_json")
+                else -> null
+            }
+        }.getOrNull()
+        return args is Map<*, *> || args is JSONObject
+    }
+
+    fun diagnoseRaw(name: String, raw: Any?, allowed: List<McpTool>): Fault? {
+        if (allowed.size > 5) return Fault.TOO_MANY_TOOLS
+        val tool = allowed.singleOrNull { it.name == name }
+            ?: return Fault.UNKNOWN_TOOL_NAME
+        val args = normalizeRaw(name, raw) ?: return Fault.ARGUMENTS_NOT_JSON
         if (args.toString().length > 3500) return Fault.ARGUMENTS_TOO_LARGE
         if (McpToolSchema.validate(tool.schema, args) != null)
             return Fault.ARGUMENTS_SCHEMA
