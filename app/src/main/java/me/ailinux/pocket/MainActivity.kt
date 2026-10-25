@@ -2801,6 +2801,15 @@ class MainActivity : AppCompatActivity() {
                     trace(PocketDiagnostics.Domain.LITERT,
                         PocketDiagnostics.Step.MODEL_TOOL_MISSING,
                         PocketDiagnostics.State.INFO)
+                if (hadRealCall && turn.text.isBlank()) {
+                    // The remote receipt above is real; an empty local
+                    // continuation cannot be presented as a model summary.
+                    // A second dispatch is forbidden even if the model stalled.
+                    setAnswer("🔧 Echte MCP-Serverquittung oben. LiteRT hat nach dem " +
+                        "Toolresultat keinen Antworttext erzeugt " +
+                        "(MODEL_FOLLOWUP_EMPTY). Keine zweite Serveraktion.")
+                    return
+                }
                 val summary = turn.text.ifBlank { "Keine Modellantwort erzeugt." }
                 val invalidClaim = McpLogCheck.modelOnlyAuditClaim(request, summary) ||
                     McpHealthCheck.modelOnlyClaim(summary) ||
@@ -3076,8 +3085,16 @@ class MainActivity : AppCompatActivity() {
                 recoverNativeFailure()
                 return
             }
+            val quality = LiteRtMcpFollowupQuality.assess(turn.text, turn.calls.size)
             trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_FOLLOWUP,
-                PocketDiagnostics.State.OK, tool = tool.name)
+                when (quality) {
+                    LiteRtMcpFollowupQuality.Answer.TEXT -> PocketDiagnostics.State.OK
+                    LiteRtMcpFollowupQuality.Answer.TOOL_REQUEST -> PocketDiagnostics.State.INFO
+                    LiteRtMcpFollowupQuality.Answer.EMPTY -> PocketDiagnostics.State.FAIL
+                }, tool = tool.name,
+                code = if (quality == LiteRtMcpFollowupQuality.Answer.EMPTY)
+                    PocketDiagnostics.ErrorCode.MODEL_FOLLOWUP_EMPTY
+                else PocketDiagnostics.ErrorCode.NONE)
         }
     }
 

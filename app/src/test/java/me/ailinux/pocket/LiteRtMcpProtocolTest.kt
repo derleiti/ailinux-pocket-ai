@@ -190,6 +190,28 @@ class LiteRtMcpProtocolTest {
         assertTrue(source.contains("outcome.toString().take(12_000)"))
     }
 
+    @Test fun emptyOrToolFollowupMustNotBeReportedAsSuccessfulModelSummary() {
+        val quality = LiteRtMcpFollowupQuality
+        assertEquals(LiteRtMcpFollowupQuality.Answer.TEXT,
+            quality.assess("Server antwortet", 0))
+        assertEquals(LiteRtMcpFollowupQuality.Answer.EMPTY,
+            quality.assess("  \n\t", 0))
+        assertEquals(LiteRtMcpFollowupQuality.Answer.TOOL_REQUEST,
+            quality.assess("Some text accompanying a tool request", 1))
+        assertEquals(LiteRtMcpFollowupQuality.Answer.TOOL_REQUEST,
+            quality.assess("", 2))
+        assertThrows(IllegalArgumentException::class.java) {
+            quality.assess("", -1)
+        }
+        val bridge = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+            .substringAfter("private suspend fun runLiteRtToolbridge(")
+            .substringBefore("private fun sendLiteRtMessage(")
+        assertTrue(bridge.contains("LiteRtMcpFollowupQuality.assess(turn.text, turn.calls.size)"))
+        assertTrue(bridge.contains("PocketDiagnostics.ErrorCode.MODEL_FOLLOWUP_EMPTY"))
+        assertTrue(bridge.contains("if (hadRealCall && turn.text.isBlank())"))
+        assertTrue(bridge.contains("Keine zweite Serveraktion."))
+    }
+
     @Test fun remoteDispatchRequiresApprovalAndOneRunGate() {
         val source = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
             .substringAfter("private suspend fun runLiteRtToolbridge(")

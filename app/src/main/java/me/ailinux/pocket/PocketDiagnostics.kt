@@ -44,7 +44,7 @@ internal object PocketDiagnostics {
         INVALID_NATIVE_TOOL_NAME, INVALID_NATIVE_ARGUMENTS_JSON,
         INVALID_NATIVE_ARGUMENTS_SCHEMA, INVALID_NATIVE_ARGUMENTS_SIZE,
         INVALID_NATIVE_TOOL_COUNT, NATIVE_RESPONSE_REJECTED,
-        MODEL_RUNTIME, UNKNOWN
+        MODEL_FOLLOWUP_EMPTY, MODEL_RUNTIME, UNKNOWN
     }
     data class Event(
         val time: Long, val id: String, val trace: String,
