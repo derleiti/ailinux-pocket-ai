@@ -59,6 +59,26 @@ object McpRequestRouting {
             "crawl|crawle|crawlen|abrufen|abfragen|rufe|ruf|fetch)\\b",
         RegexOption.IGNORE_CASE
     )
+    /** A catalogue question plus "keine Werkzeuge ausführen" requests
+     * discovery-only, not a server action. Strip ONLY narrowly scoped,
+     * expressly negated tool-execution clauses. A separate positive action
+     * (e.g. "prüfe den Status") must still reach the gated model agent.
+     */
+    private val negatedInventoryExecution = Regex(
+        """\b(?:kein(?:e|en|er|es)?|ohne)\s+(?:extern(?:e|en|er|es)?\s+)?(?:mcp[-\s]+)?(?:tools?|werkzeuge?|funktionen?)\s+(?:zu\s+)?(?:ausführen|aufrufen|benutzen|verwenden|starten)\b""" +
+            """|\b(?:tools?|werkzeuge?|funktionen?)\s+(?:bitte\s+)?nicht\s+(?:ausführen|aufrufen|benutzen|verwenden|starten)\b""" +
+            """|\b(?:without|do\s+not|don't)\s+(?:executing|calling|running|using)\s+(?:any\s+)?(?:mcp\s+)?(?:tools?|functions?)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private fun hasPositiveExternalTask(message: String): Boolean =
+        externalTask.containsMatchIn(negatedInventoryExecution.replace(message, " "))
+
+    private fun isReadOnlyInventory(message: String): Boolean =
+        McpToolCatalog.requestedFilter(message) != null &&
+            (inventoryOnly.matches(message) ||
+                (inventoryQuestion.containsMatchIn(message) &&
+                    !hasPositiveExternalTask(message)))
+
     private val externalSubject = Regex(
         "\\b(?:mcp|triforce|tri[ -]?force|discord|workspace|worspace|" +
             "arbeitsbereich|server|werkzeuge?|tools?)\\b",
@@ -73,11 +93,7 @@ object McpRequestRouting {
         // An explicit MCP health check is still a direct app protocol probe.
         if (directHealth.containsMatchIn(normalized) &&
             !negatedHealthOnly.containsMatchIn(normalized)) return false
-        val catalogue = McpToolCatalog.requestedFilter(normalized)
-        if (catalogue != null &&
-            (inventoryOnly.matches(normalized) ||
-                (inventoryQuestion.containsMatchIn(normalized) &&
-                    !externalTask.containsMatchIn(normalized)))) return false
+        if (isReadOnlyInventory(normalized)) return false
         return true
     }
 
@@ -85,7 +101,7 @@ object McpRequestRouting {
     fun expectsToolEvidence(message: String): Boolean {
         val normalized = message.lowercase(Locale.ROOT)
         // Explaining a concept is not evidence that an external action ran.
-        if (isExplanationOnly(normalized)) return false
+        if (isExplanationOnly(normalized) || isReadOnlyInventory(normalized)) return false
         return McpHealthCheck.requestedTarget(message) != null ||
             McpLogCheck.requested(message) ||
             McpQuickActions.requestedAction(message) is McpQuickActions.Selection.Request ||
