@@ -34,6 +34,9 @@ was only enabled for progressive MCP catalog sessions.
   summarization. LiteRT native tool calling remains the preferred path.
 - Progressive MCP discovery and existing direct quick command routes
   remain unchanged.
+- Local privacy-safe MCP/model diagnostics now display the newest event first,
+  including on accessibility clients that truncate long TextView content.
+  Reports never log credentials, raw prompts or tool result bodies.
 
 ## Automated validation
 

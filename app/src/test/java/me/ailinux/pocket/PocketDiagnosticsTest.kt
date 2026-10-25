@@ -77,6 +77,20 @@ class PocketDiagnosticsTest {
         assertTrue(three > two)
     }
 
+    @Test fun latestEventsAppearFirstAndRemainVisibleInShortAccessibilityPreview() {
+        val older = PocketDiagnostics.Event(1780000000L, "aabbccdd", "11111111",
+            PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SEARCH,
+            PocketDiagnostics.State.OK)
+        val newer = PocketDiagnostics.Event(1780000030L, "ddeeff00", "22222222",
+            PocketDiagnostics.Domain.MCP, PocketDiagnostics.Step.SERVER_RESULT,
+            PocketDiagnostics.State.OK)
+        val text = PocketDiagnostics.recentLines(listOf(older, newer))
+        assertTrue(text.indexOf("SERVER_RESULT") < text.indexOf("SEARCH"))
+        assertTrue(PocketDiagnostics.recentLines(listOf(older,newer),130)
+            .contains("SERVER_RESULT"))
+        assertFalse(PocketDiagnostics.recentLines(listOf(older,newer),0).isNotEmpty())
+    }
+
     @Test fun discoveryIsNotAConfirmedMcpServerReceipt() {
         val search = PocketDiagnostics.Event(1780000000L,"aabbccdd","ddccbbaa",
             PocketDiagnostics.Domain.MCP,PocketDiagnostics.Step.SEARCH,PocketDiagnostics.State.OK)

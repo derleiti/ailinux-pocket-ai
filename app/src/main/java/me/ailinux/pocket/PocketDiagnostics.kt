@@ -250,6 +250,16 @@ internal object PocketDiagnostics {
         log(context, trace, domain, step,
             if (uncertain) State.UNCONFIRMED else State.FAIL, code = classify(error))
 
+    /**
+     * Newest evidence comes first. Android accessibility often returns only
+     * the first part of long TextViews, so chronological rendering hid the
+     * most important DISPATCH / SERVER_RESULT evidence during live Pixel QA.
+     * Limiting the prefix (not the suffix) preserves the newest events.
+     */
+    internal fun recentLines(events: List<Event>, maxChars: Int = 25_000): String =
+        events.asReversed().joinToString("\n") { it.line() }
+            .take(maxChars.coerceIn(0, 25_000))
+
     suspend fun report(context: Context): String = withContext(io) {
         synchronized(lock) {
             val events = readLocked(context).takeLast(MAX_EVENTS)
@@ -258,10 +268,10 @@ internal object PocketDiagnostics {
                 "DISPATCH zeigt eine empfangene tools/call-Antwort. " +
                 "UNCONFIRMED ist kein bestätigter Erfolg.\n" +
                 "Keine Prompts, Tokens, Endpunkte, Parameter, Toolresultat-Texte oder " +
-                "Stacktraces gespeichert.\nEreignisse: " + events.size +
-                "/" + MAX_EVENTS + "\n\n"
+                "Stacktraces gespeichert.\nNeueste Ereignisse zuerst. Ereignisse: " +
+                events.size + "/" + MAX_EVENTS + "\n\n"
             header + if (events.isEmpty()) "Keine Ereignisse erfasst."
-                else events.joinToString("\n") { it.line() }.takeLast(25_000)
+                else recentLines(events)
         }
     }
 
