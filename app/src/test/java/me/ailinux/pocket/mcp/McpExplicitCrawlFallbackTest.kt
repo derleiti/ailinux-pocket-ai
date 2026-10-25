@@ -58,7 +58,11 @@ class McpExplicitCrawlFallbackTest {
             "crawl https://ailinux.me und https://example.com",
             "crawl https://root:secret@ailinux.me",
             "crawl https://localhost",
-            "crawl https://127.0.0.1"
+            "crawl https://127.0.0.1",
+            "crawl https://[::1]/",
+            "crawl https://[fd00::1]/",
+            "crawl https://[::ffff:7f00:1]/",
+            "crawl https://[2606:4700:4700::1111]/"
         )) {
             assertNull("Must reject: " + prompt, McpOnDemandDiscovery.propose(prompt, run))
         }

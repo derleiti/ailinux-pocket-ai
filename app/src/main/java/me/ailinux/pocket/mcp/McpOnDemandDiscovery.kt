@@ -35,7 +35,11 @@ object McpOnDemandDiscovery {
         if (parsed.scheme != "https" || parsed.userInfo != null ||
             parsed.host.isNullOrBlank() || parsed.port !in setOf(-1,443)) return null
         val host = parsed.host.lowercase(Locale.ROOT)
-        if (host in setOf("localhost", "127.0.0.1", "::1", "[::1]") ||
+        // Java URI accepts bracketed IPv6 literals (including IPv4-mapped
+        // loopback/private destinations). The host planner cannot safely
+        // resolve their target, so reject ALL literal IPv6 here.
+        if (host.startsWith("[") || host.contains(':') ||
+            host in setOf("localhost", "127.0.0.1") ||
             host.endsWith(".local") || host.endsWith(".localhost")) return null
         if (host.matches(Regex("[0-9.]+"))) {
             // Do not propose requests to numeric private/loopback hosts.

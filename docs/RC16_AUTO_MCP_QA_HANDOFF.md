@@ -58,3 +58,47 @@ Definition of done: implemented, tested, integrated and verified on device. Any 
 - Local RC16 signer SHA-256 matches independently downloaded, SHA-checked public RC15 certificate: 125766c26dd400e39804c7b97c36682d8a2c16caa134c58745a02aca0bd51187.
 - Local KSP Room build needs a native SQLite JDBC library path on this workstation; this is a build-host environment issue, not an Android runtime error.
 - Physical RC16 on-device QA and public release remain not done. Avoid misreporting the RC15 status receipt as an RC16 pass.
+
+## Additional RC15 evidence and actionable RC16 gates (07:42 device report)
+
+The RC15 local export (Android 17, Tensor G5, arm64-v8a) reports
+four installed LiteRT-LM files, download journals complete, validated
+Wi-Fi/VPN transport and no UI >650ms sample in that running process. These
+journal states prove install bookkeeping, NOT compatibility for each model.
+The paired device currently identifies as Pixel 10; do not assume Pro.
+
+- At 07:31:07 "MCP/DETAILS OK" and "DETAIL_REUSE OK" preceded a
+  one-time approval, "AUTH_CHECK OK", "SCHEMA_CHECK OK", "DISPATCH START"
+  and "SERVER_RESULT OK" at 07:31:17 (136 ms). This confirms one genuine
+  approved app-hosted MCP call after AUTO search/details. It does NOT
+  prove repeated native LiteRT FunctionCall reliability.
+- At 07:06:30 and 07:07:55 "INVALID_NATIVE_ARGUMENTS_SCHEMA" preceded a
+  host fallback. The latter was blocked by "UNVERIFIED_READONLY".
+  Differentiate model/SDK parser failure from true remote MCP schema
+  validation. Fail closed with missing risk hints; no permissions bypass.
+- At 07:32:11 a second search ended in "HOST_FALLBACK REJECTED /
+  AMBIGUOUS_TOOL". Maintain user-chosen server affinity and offer a
+  disambiguation choice; never silently pick an arbitrary provider.
+- At 07:40:20 "LITERT/MODEL_LOAD FAIL" and "DIAGNOSTIC FAIL" were
+  classified as "UNKNOWN". Identify exact model/backend/stage/exception
+  class and native runtime code without recording prompts, tokens,
+  private paths or credentials.
+- Tensor G5 dispatcher presence is not a benchmark; successful
+  "ready_google_tensor" for Gemma E2B proves nothing about Qwen 4B or
+  Spark compatibility. Test physical load and generation per file.
+- The app reported 212 advertised definitions while the progressive Run
+  showed 172 locally compatible tools. RC16 separates advertised,
+  accepted and filtered counts. Verify against live catalog.
+- Keep "GGUF-MCP (native prefill)" separate from actual "LiteRT-MCP".
+  Distinguish native-model proposal, host fallback and real server
+  receipt with trace ID, user approval and no duplicate dispatch.
+- This RC16 PR also addresses three CodeRabbit findings: reject
+  IPv6 literal write-intent crawl targets; construct catalog diagnostics
+  outside the UI thread; check exact XML regression test case names.
+  Full CI/review/device gates remain.
+
+Remaining portfolio issues: #19 background inference/service lifecycle,
+#20 app locale resources and RTL, #21 model catalog/search/compatibility,
+#22 Pixel device acceptance, #25 repeat LiteRT function calling,
+#29 invalid native tool arguments. Refresh GitHub state before opening
+duplicate issues or PRs. All remain open until demonstrated on-device.

@@ -3594,53 +3594,61 @@ class MainActivity : AppCompatActivity() {
         // GGUF native prefill progress is independent of a live LiteRT MCP
         // function session. Show both instead of a misleading "no binding".
         val activeMcp = mcpAgent.current()
-        val liteRtBinding = when {
-            liteRtRuntime == null || activeModel?.name?.endsWith(".litertlm", true) != true ->
-                "LiteRT-MCP: kein geladenes LiteRT-Modell in diesem Prozess."
-            activeMcp == null ->
-                "LiteRT-MCP: Modell geladen, Agent ausgeschaltet."
-            activeMcp.progressiveSources.isNotEmpty() -> {
-                // The authenticated catalog may include unsupported JSON
-                // Schemas. Do not show all advertised tools as executable.
-                val snapshot = runCatching {
-                    McpProgressiveBridge.Run(activeMcp.progressiveSources)
-                }.getOrNull()
-                "LiteRT-MCP: aktiver Progressive-Katalog, " +
-                    activeMcp.progressiveSources.size + " verbundene Quellen; " +
-                    activeMcp.progressiveSources.sumOf { it.tools.size } +
-                    " vom Server angekündigt, " +
-                    (snapshot?.totalTools?.toString() ?: "unbekannt") +
-                    " mit lokalem Schema/Tooladapter kompatibel, " +
-                    (snapshot?.filteredTools?.toString() ?: "unbekannt") +
-                    " ausgefiltert (lokale Meta-Tools: " +
-                    activeMcp.tools.size + ")."
-            }
-            else ->
-                "LiteRT-MCP: aktiver, direkt ausgewählter Toolkontext mit " +
-                    activeMcp.tools.size + " Werkzeugen."
-        }
-        val bindReport = "GGUF-MCP (nativer Prefill): " +
-            lastMcpBindingReport.removePrefix("MCP-BINDUNG: ") +
-            "\n" + liteRtBinding
-        val downloadReport = ModelDownloadJournal.all(applicationContext)
-            .sortedByDescending { it.updatedAtMs }
-            .take(4).joinToString("\n") { entry ->
-                val view = BackgroundModelDownloads.snapshot(this, entry)
-                "Job-ID " + entry.id + " · " + view.label +
-                    "\nJournal: " + entry.state +
-                    ", Versuche: " + entry.attempts +
-                    ", Stop-Reason-Code: " + entry.lastStopReason +
-                    ", wiederaufnehmbar: " + view.canResume +
-                    ", Bestätigung notwendig: " + view.requiresConfirmation +
-                    "\nNetzwerktransport: " +
-                    (BackgroundModelDownloads.networkInfo(this)?.diagnostic()
-                        ?: "nicht verfügbar")
-            }.ifBlank { "Keine gespeicherten Modell-Downloads." }
+        val loadedLiteRtAtClick = liteRtRuntime != null &&
+            activeModel?.name?.endsWith(".litertlm", true) == true
+        val ggufPrefillAtClick =
+            lastMcpBindingReport.removePrefix("MCP-BINDUNG: ")
         button.isEnabled = false
         button.text = "Analysiere Android-Tombstones …"
         lifecycleScope.launch {
             try {
+                // Construction checks every catalog schema. Keep it strictly
+                // off the Android main thread, even for 200+ MCP tools.
+                val catalogSnapshot =
+                    if (loadedLiteRtAtClick && activeMcp != null &&
+                        activeMcp.progressiveSources.isNotEmpty()) {
+                        withContext(Dispatchers.Default) {
+                            runCatching {
+                                McpProgressiveBridge.Run(activeMcp.progressiveSources)
+                            }.getOrNull()
+                        }
+                    } else null
+                val liteRtBinding = when {
+                    !loadedLiteRtAtClick ->
+                        "LiteRT-MCP: kein geladenes LiteRT-Modell in diesem Prozess."
+                    activeMcp == null ->
+                        "LiteRT-MCP: Modell geladen, Agent ausgeschaltet."
+                    activeMcp.progressiveSources.isNotEmpty() ->
+                        "LiteRT-MCP: aktiver Progressive-Katalog, " +
+                            activeMcp.progressiveSources.size + " verbundene Quellen; " +
+                            activeMcp.progressiveSources.sumOf { it.tools.size } +
+                            " vom Server angekündigt, " +
+                            (catalogSnapshot?.totalTools?.toString() ?: "unbekannt") +
+                            " mit lokalem Schema/Tooladapter kompatibel, " +
+                            (catalogSnapshot?.filteredTools?.toString() ?: "unbekannt") +
+                            " ausgefiltert (lokale Meta-Tools: " +
+                            activeMcp.tools.size + ")."
+                    else ->
+                        "LiteRT-MCP: aktiver, direkt ausgewählter Toolkontext mit " +
+                            activeMcp.tools.size + " Werkzeugen."
+                }
+                val bindReport = "GGUF-MCP (nativer Prefill): " +
+                    ggufPrefillAtClick + "\n" + liteRtBinding
                 val report = withContext(Dispatchers.IO) {
+                    val downloadReport = ModelDownloadJournal.all(applicationContext)
+                        .sortedByDescending { it.updatedAtMs }
+                        .take(4).joinToString("\n") { entry ->
+                            val view = BackgroundModelDownloads.snapshot(this@MainActivity, entry)
+                            "Job-ID " + entry.id + " · " + view.label +
+                                "\nJournal: " + entry.state +
+                                ", Versuche: " + entry.attempts +
+                                ", Stop-Reason-Code: " + entry.lastStopReason +
+                                ", wiederaufnehmbar: " + view.canResume +
+                                ", Bestätigung notwendig: " + view.requiresConfirmation +
+                                "\nNetzwerktransport: " +
+                                (BackgroundModelDownloads.networkInfo(
+                                    this@MainActivity)?.diagnostic() ?: "nicht verfügbar")
+                        }.ifBlank { "Keine gespeicherten Modell-Downloads." }
                     val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
                     val history = manager.getHistoricalProcessExitReasons(packageName, 0, 10)
                     var tracesRead = 0

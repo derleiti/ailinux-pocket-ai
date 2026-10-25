@@ -54,12 +54,28 @@ jobs:
           roots = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.xml'))
           assert roots, 'No test XML output'
           tests = failures = errors = 0
+          required_cases = {
+              ('me.ailinux.pocket.mcp.McpOnDemandDiscoveryTest',
+               'realAndroidRepeatPromptDoesNotTreatGermanConjunctionAsToolName'),
+              ('me.ailinux.pocket.mcp.McpOnDemandDiscoveryTest',
+               'explicitUnknownFunctionMustNotFallBackToUnrequestedTool'),
+              ('me.ailinux.pocket.mcp.McpExplicitCrawlFallbackTest',
+               'missingUnsafeAndDuplicatedUrlsNeverCreateCrawlJob'),
+          }
+          seen_cases = set()
           for path in roots:
               root = ET.parse(path).getroot()
               tests += int(root.get('tests', 0))
               failures += int(root.get('failures', 0))
               errors += int(root.get('errors', 0))
+              for case in root.iter('testcase'):
+                  identity = (case.get('classname', ''), case.get('name', ''))
+                  if identity in required_cases:
+                      seen_cases.add(identity)
           assert tests >= 392, f'Expected complete RC16 suite, got {tests}'
+          assert seen_cases == required_cases, (
+              f'Missing RC16 regression tests: {sorted(required_cases - seen_cases)}'
+          )
           assert failures == errors == 0, (failures, errors)
           print(f'QA tests={tests}, failures={failures}, errors={errors}')
           PYTEST
