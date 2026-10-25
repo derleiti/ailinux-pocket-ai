@@ -22,6 +22,29 @@ class McpRequestRoutingTest {
         )) assertFalse(input, McpRequestRouting.useModelAgent(input, true))
     }
 
+    @Test fun internationalNaturalLanguageChecksRequireRealToolEvidence() {
+        for (request in listOf(
+            "Check my Discord connection",
+            "Verify the Discord connection using MCP",
+            "Prüfe, ob Discord verbunden ist",
+            "Kannst du bitte nachsehen, ob die Discord-Verbindung besteht?",
+            "Brumo, check the TriForce server status"
+        )) {
+            assertTrue("Must route to active agent: " + request,
+                McpRequestRouting.useModelAgent(request, true))
+            assertTrue("Must not silently accept model prose as a real check: " +
+                request, McpRequestRouting.expectsToolEvidence(request))
+        }
+        for (question in listOf(
+            "Erkläre mir, wie ich eine Discord-Verbindung prüfe",
+            "Explain how to check Discord connection",
+            "Welche Discord-Tools habe ich?",
+            "How do I check my Discord connection?",
+            "Wie kann ich prüfen, ob Discord verbunden ist?"
+        )) assertFalse("Explanation/inventory must not require tools: " + question,
+            McpRequestRouting.expectsToolEvidence(question))
+    }
+
     @Test fun naturalAccountAndVoiceStatusTasksReachModel() {
         for (input in listOf(
             "Prüfe bitte den TriForce Server Status",

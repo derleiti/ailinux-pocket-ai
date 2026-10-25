@@ -23,7 +23,7 @@ object McpRequestRouting {
     private val explanation = Regex(
         "^\\s*(?:brumo[,!]?[\\s]+)?(?:erklär\\w*|erklaer\\w*|" +
             "was\\s+bedeutet|was\\s+ist\\s+(?:ein|eine)\\b|" +
-            "wie\\s+funktioniert|what\\s+(?:is|does)|explain\\b|describe\\b)",
+            "wie\\s+(?:funktioniert|kann\\s+ich)|how\\s+(?:do|can)\\s+i|what\\s+(?:is|does)|explain\\b|describe\\b)",
         RegexOption.IGNORE_CASE
     )
     private val explanationVerb = Regex(
@@ -31,7 +31,7 @@ object McpRequestRouting {
             "beschreib\\p{L}*|bedeutet|meaning)\\b", RegexOption.IGNORE_CASE
     )
     private val explicitExecution = Regex(
-        "\\b(?:rufe|ruf|hole|hol|abrufen|abfragen|prüfe|pruefe|checke|" +
+        "\\b(?:rufe|ruf|hole|hol|abrufen|abfragen|prüfe|pruefe|checke|check|verify|verifiziere|nachsehen|" +
             "nutze|benutze|verwende|führe|ausführen|sende|starte|crawl|" +
             "crawle|crawlen)\\b", RegexOption.IGNORE_CASE
     )
@@ -54,7 +54,7 @@ object McpRequestRouting {
     )
     private val externalTask = Regex(
         "\\b(?:nutze|benutze|verwende|benutz|mit deinen|mit den|ausführen|führe|" +
-            "prüfe den|prüfe die|pruefe den|pruefe die|status|systemstatus|" +
+            "prüfe|pruefe|check|verify|verifiziere|nachsehen|kontrolliere|teste|prüfe den|prüfe die|pruefe den|pruefe die|status|systemstatus|" +
             "konto|serverzustand|nachrichten|logs|suche|sende|starte|lies|lese|" +
             "crawl|crawle|crawlen|abrufen|abfragen|rufe|ruf|fetch)\\b",
         RegexOption.IGNORE_CASE
