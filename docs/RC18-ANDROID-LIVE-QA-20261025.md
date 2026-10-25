@@ -21,7 +21,29 @@ Regression added for the exact Pixel input and the mixed explanation-plus-live-a
 
 ## Verification on combined RC18 source
 
-- 439 JVM unit tests: all passed, zero skipped, failures or errors.
+Reviewed head: `2dd2c504739fa564fd7bd7ca8bb203178fe53f09`. A clean local run on 2026-10-25 of `./gradlew --no-daemon :app:testDebugUnitTest` with JDK 17 and the declared Android SDK produced **448 tests in 64 JUnit XML suites, zero skipped, failures or errors**. Totals were summed from the `tests`, `skipped`, `failures` and `errors` attributes in `app/build/test-results/testDebugUnitTest/TEST-*.xml`. The earlier **439** total belongs to `4980ea9`, not this reviewed head.
+
+### Historical JVM count provenance
+
+| Earlier total | Source commit | Successful Android Fast Checks job |
+| --- | --- | --- |
+| 428/428 | [`ef569a0c1d57d605760b147879aa1412785d574d`](https://github.com/derleiti/ailinux-pocket-ai/commit/ef569a0c1d57d605760b147879aa1412785d574d) | [40212480562](https://github.com/derleiti/ailinux-pocket-ai/actions/runs/40212480562/job/121226562532) |
+| 438/438 | [`ae474a10348c1cce27480653052a11af6c275d2f`](https://github.com/derleiti/ailinux-pocket-ai/commit/ae474a10348c1cce27480653052a11af6c275d2f) | [40218638093](https://github.com/derleiti/ailinux-pocket-ai/actions/runs/40218638093/job/121245154342) |
+| 439 | [`4980ea9019d019892cb5ce474a20c7eed2a33468`](https://github.com/derleiti/ailinux-pocket-ai/commit/4980ea9019d019892cb5ce474a20c7eed2a33468) | [40220804114](https://github.com/derleiti/ailinux-pocket-ai/actions/runs/40220804114/job/121251755472) |
+| 448 (reviewed head) | [`2dd2c504739fa564fd7bd7ca8bb203178fe53f09`](https://github.com/derleiti/ailinux-pocket-ai/commit/2dd2c504739fa564fd7bd7ca8bb203178fe53f09) | [40222812071](https://github.com/derleiti/ailinux-pocket-ai/actions/runs/40222812071/job/121257851520) |
+
+These CI logs show successful, unfiltered `:app:testDebugUnitTest` execution on GitHub's PR merge commits incorporating the listed source heads. They do not print numeric test totals; the historical counts are corroborated by the checked-in JUnit test declarations, not retained historical XML. Reproduce the declaration inventory for each full source commit above:
+
+```sh
+git grep -h -E '^[[:space:]]*@Test([[:space:](]|$)' <source-commit> -- app/src/test | wc -l
+```
+
+The additional 439th test is `McpArchitectureGuideTest.deviceReproductionNoExternalMcpExplanationIsAppHelpNotAnEmptyLiteRtPlanner`, added in `4980ea9`. Subsequently `ed1f728` added seven tests and `2dd2c504` added two, giving 448 at the reviewed head. Declaration counts alone do not establish skipped-test totals; the zero-skipped result above comes from the clean local reviewed-head XML.
+
+### Historical local APK verification
+
+The following original local build observations predate the reviewed head; they do not identify an APK built from `2dd2c504`:
+
 - Android lintDebug and assembleDebug completed successfully.
 - APK verifier: arm64-v8a, manifest package me.ailinux.pocket, versionName 2.1.0-RC18, versionCode 43; native ABI and signing validation passed.
 - Local APK SHA-256: bdc4402c25c744b358306418ec261fc095b6839545cc7b71433a60cf25ac833a

@@ -13,7 +13,9 @@ class McpArchitectureGuideTest {
             "How would you teach a small Android model to use MCP tools across 3 servers?",
             "Erkläre die Architektur zum Einbinden von MCP-Tools in eine kleine Offline-KI.",
             "Erkläre mir MCP, ohne externe Werkzeuge zu benutzen.",
-            "Explain MCP without invoking external tools."
+            "Explain MCP without invoking external tools.",
+            "How do I get started with MCP integration?",
+            "How do I create an MCP integration?"
         )) {
             assertTrue("conceptual routing: $request", McpArchitectureGuide.applies(request))
             assertFalse("no native MCP agent for app architecture: $request",
@@ -32,6 +34,10 @@ class McpArchitectureGuideTest {
             "How do I integrate MCP and send a message to Discord?",
             "How do I integrate MCP and post to Discord?",
             "How do I integrate MCP and delete a message?",
+            "Wie integriere ich MCP? Poste danach eine Nachricht.",
+            "Erkläre MCP und schicke eine Nachricht.",
+            "Wie integriere ich MCP? Schreibe danach eine Nachricht.",
+            "How do I integrate MCP and read a message?",
             "How do I design a functions API?",
             "Erkläre MCP und nutze danach den TriForce-Systemstatus.",
             "Explain MCP and use the workspace status tool.",
