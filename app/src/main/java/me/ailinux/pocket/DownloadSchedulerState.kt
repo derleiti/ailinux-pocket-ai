@@ -45,7 +45,8 @@ internal object DownloadSchedulerState {
         total: Long,
         error: String,
         network: NetworkInfo? = null,
-        completedFilePresent: Boolean? = null
+        completedFilePresent: Boolean? = null,
+        completedFileMissing: Boolean = false
     ): View {
         val suffix = if (done > 0)
             " · " + ModelStore.displaySize(done) +
@@ -60,7 +61,9 @@ internal object DownloadSchedulerState {
                 true -> View("✓ Download abgeschlossen · Modelldatei vorhanden " +
                     "(Größe geprüft, kein erneuter SHA-256-Test): " + name)
                 false -> View("⚠ Downloadjournal abgeschlossen, aber Modelldatei fehlt " +
-                    "oder Größe weicht ab: " + name)
+                    "oder Größe weicht ab: " + name,
+                    canResume = completedFileMissing,
+                    requiresConfirmation = completedFileMissing)
                 null -> View("ⓘ Downloadjournal abgeschlossen; Dateibestand ungeprüft: " + name)
             }
             "verifying", "running" -> if (hasJob == false &&
@@ -106,10 +109,22 @@ internal object DownloadSchedulerState {
  * present installation. Never removes models, journals, or partial downloads.
  */
 internal object CompletedModelEvidence {
-    fun present(directory: File, name: String, completedBytes: Long): Boolean {
-        if (name != ModelStore.sanitize(name) || !ModelStore.isModelName(name)) return false
+    enum class State { PRESENT, MISSING, WRONG_SIZE, INVALID }
+
+    /** A missing final file may be safely re-queued by explicit user action.
+     * An existing but incomplete file must NEVER be overwritten automatically.
+     */
+    fun inspect(directory: File, name: String, completedBytes: Long): State {
+        if (name != ModelStore.sanitize(name) || !ModelStore.isModelName(name))
+            return State.INVALID
         val file = File(directory, name)
-        return file.isFile && file.length() > 32 &&
-            (completedBytes <= 0 || file.length() == completedBytes)
+        if (!file.exists()) return State.MISSING
+        if (!file.isFile || file.length() <= 32L ||
+            (completedBytes > 0 && file.length() != completedBytes))
+            return State.WRONG_SIZE
+        return State.PRESENT
     }
+
+    fun present(directory: File, name: String, completedBytes: Long): Boolean =
+        inspect(directory, name, completedBytes) == State.PRESENT
 }

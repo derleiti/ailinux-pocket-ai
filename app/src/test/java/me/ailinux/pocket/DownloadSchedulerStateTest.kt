@@ -11,11 +11,13 @@ class DownloadSchedulerStateTest {
         wifiOnly: Boolean = false,
         age: Long = 30_000L,
         done: Long = 0L,
-        completedFilePresent: Boolean? = null
+        completedFilePresent: Boolean? = null,
+        completedFileMissing: Boolean = false
     ) = DownloadSchedulerState.describe(
         "Qwen3_1.7B.litertlm", state, wifiOnly,
         hasJob, reasons, age, done, 2_400_000_000L, "",
-        completedFilePresent = completedFilePresent
+        completedFilePresent = completedFilePresent,
+        completedFileMissing = completedFileMissing
     )
 
     @Test fun missingAndroidJobMustOfferExplicitResumeEvenBeforePartFileExists() {
@@ -121,6 +123,45 @@ class DownloadSchedulerStateTest {
             assertFalse(CompletedModelEvidence.present(dir, "../Qwen3_1.7B.litertlm", 64))
             assertFalse(CompletedModelEvidence.present(dir, "not-a-model.txt", 64))
             assertTrue(file.exists())
+        } finally {
+            dir.listFiles()?.forEach { it.delete() }
+            dir.delete()
+        }
+    }
+
+    @Test fun historicalCompleteWithMissingFileCanOnlyResumeByUserConfirmation() {
+        val stale = status(state = "complete", completedFilePresent = false,
+            completedFileMissing = true)
+        assertTrue(stale.label.contains("fehlt"))
+        assertTrue(stale.canResume)
+        assertTrue(stale.requiresConfirmation)
+        assertFalse(stale.active)
+        val present = status(state = "complete", completedFilePresent = true,
+            completedFileMissing = false)
+        assertFalse(present.canResume)
+        val wrongSize = status(state = "complete", completedFilePresent = false,
+            completedFileMissing = false)
+        assertFalse(wrongSize.canResume)
+    }
+
+    @Test fun completedEvidenceNeverReplacesWrongSizedFileOrPartials() {
+        val dir = java.nio.file.Files.createTempDirectory("pocket-recovery-").toFile()
+        try {
+            val name = "qwen3_4b_mixed_int4.litertlm"
+            val file = java.io.File(dir, name)
+            val part = java.io.File(dir, name + ".part")
+            part.writeBytes(ByteArray(96) { 0x1f.toByte() })
+            assertEquals(CompletedModelEvidence.State.MISSING,
+                CompletedModelEvidence.inspect(dir, name, 128))
+            file.writeBytes(ByteArray(64))
+            assertEquals(CompletedModelEvidence.State.WRONG_SIZE,
+                CompletedModelEvidence.inspect(dir, name, 128))
+            assertEquals(CompletedModelEvidence.State.PRESENT,
+                CompletedModelEvidence.inspect(dir, name, 64))
+            assertEquals(CompletedModelEvidence.State.INVALID,
+                CompletedModelEvidence.inspect(dir, "../escape.litertlm", 64))
+            assertEquals(96L, part.length())
+            assertEquals(64L, file.length())
         } finally {
             dir.listFiles()?.forEach { it.delete() }
             dir.delete()

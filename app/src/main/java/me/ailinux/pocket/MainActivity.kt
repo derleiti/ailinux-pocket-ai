@@ -845,12 +845,21 @@ class MainActivity : AppCompatActivity() {
             }
             content.addView(title)
             val isActive = activeModel?.absolutePath == file.absolutePath
+            val journal = ModelDownloadJournal.read(this, file.name)
+            val completedMismatch = journal?.state == "complete" &&
+                CompletedModelEvidence.inspect(store.dir, file.name, journal.done) ==
+                    CompletedModelEvidence.State.WRONG_SIZE
             content.addView(simpleLabel(
                 ModelStore.displaySize(file.length()) + if (isActive) "  •  AKTIV" else ""
             ))
+            if (completedMismatch)
+                content.addView(simpleLabel(
+                    "⚠ Die lokale Größe weicht vom abgeschlossenen Downloadjournal ab. " +
+                    "Datei erst unabhängig prüfen. Keine automatische Reparatur."
+                ))
             val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             val load = smallButton(if (isActive) "✓ Aktiv" else "▶ Laden", isActive)
-            load.isEnabled = !busy && !transferBusy && !isActive
+            load.isEnabled = !busy && !transferBusy && !isActive && !completedMismatch
             load.setOnClickListener { loadModel(file) }
             buttons.addView(load)
             val export = smallButton("Export", false)
@@ -880,6 +889,35 @@ class MainActivity : AppCompatActivity() {
             modelsContainer.addView(card)
         }
         val partNames = store.partials().map { it.name.removeSuffix(".part") }.toSet()
+        // A journal can say complete even when Android deleted or never
+        // installed the final file. Only a genuinely MISSING final file can
+        // be re-queued; a wrong-sized existing file must not be overwritten.
+        ModelDownloadJournal.all(this).filter { entry ->
+            entry.state == "complete" && entry.name !in partNames &&
+                CompletedModelEvidence.inspect(store.dir, entry.name, entry.done) ==
+                    CompletedModelEvidence.State.MISSING
+        }.forEach { entry ->
+            modelsContainer.addView(simpleLabel(
+                BackgroundModelDownloads.snapshot(this, entry).label
+            ))
+            if (entry.url.startsWith("https://")) {
+                val recover = smallButton("Fehlenden Download fortsetzen", false)
+                recover.isEnabled = !busy && !transferBusy
+                recover.setOnClickListener {
+                    AlertDialog.Builder(this)
+                        .setTitle("Fehlenden Download wiederherstellen?")
+                        .setMessage("Die ursprünglich als vollständig gemeldete Datei fehlt. " +
+                            "Der gespeicherte HTTPS-Download wird nur nach deiner Freigabe " +
+                            "neu gestartet. Vorhandene .part-Dateien bleiben erhalten. " +
+                            "Ein neuer Import wird erst nach Dateiprüfung veröffentlicht.")
+                        .setNegativeButton("Abbrechen", null)
+                        .setPositiveButton("Fortsetzen") { _, _ ->
+                            resumeBackgroundDownload(entry.name)
+                        }.show()
+                }
+                modelsContainer.addView(recover)
+            }
+        }
         ModelDownloadJournal.all(this).filter {
             it.state in setOf("paused", "failed") &&
                 it.name !in partNames && it.url.isNotBlank() &&
@@ -919,7 +957,19 @@ class MainActivity : AppCompatActivity() {
                     val resume = smallButton("Fortsetzen", false)
                     resume.isEnabled = !transferBusy
                     resume.setOnClickListener {
-                        if (journal != null) resumeBackgroundDownload(name)
+                        if (journal?.state == "complete") {
+                            // Stale completion + preserved .part: never
+                            // reschedule silently or discard existing bytes.
+                            AlertDialog.Builder(this)
+                                .setTitle("Teil-Download fortsetzen?")
+                                .setMessage("Die finale Modelldatei fehlt. " +
+                                    "Vorhandene .part-Daten bleiben erhalten; " +
+                                    "Quelle und Validatoren werden vor dem Anhängen geprüft.")
+                                .setNegativeButton("Abbrechen", null)
+                                .setPositiveButton("Fortsetzen") { _, _ ->
+                                    resumeBackgroundDownload(name)
+                                }.show()
+                        } else if (journal != null) resumeBackgroundDownload(name)
                         else startDownload(RemoteModel(
                             name, source, -1,
                             prefs.getString("pending_sha_" + name, null)
@@ -3194,10 +3244,34 @@ class MainActivity : AppCompatActivity() {
             } catch (error: Exception) {
                 val eventId = failure(PocketDiagnostics.Domain.LITERT,
                     PocketDiagnostics.Step.MODEL_ERROR, error)
-                answer.content += "\n⚠ " + getString(R.string.diagnostics_error,
-                    PocketDiagnostics.publicError(error), eventId)
+                if (PocketDiagnostics.classify(error) ==
+                    PocketDiagnostics.ErrorCode.TIMEOUT) {
+                    // A native timeout can arrive only after the blocking
+                    // JNI call returns. Reset local KV/conversation state;
+                    // never automatically replay a remote MCP action, whose
+                    // outcome may be unknown or already confirmed.
+                    val restored = withContext(NonCancellable) {
+                        runCatching { runtime.clearConversation() }.isSuccess
+                    }
+                    trace(PocketDiagnostics.Domain.LITERT,
+                        PocketDiagnostics.Step.MODEL_RESET,
+                        if (restored) PocketDiagnostics.State.OK
+                        else PocketDiagnostics.State.FAIL,
+                        code = if (restored) PocketDiagnostics.ErrorCode.NONE
+                        else PocketDiagnostics.ErrorCode.MODEL_RUNTIME)
+                    answer.content += "\n⚠ LiteRT-Planung/Generierung TIMEOUT · Diagnose #" +
+                        eventId + ". Kein automatischer MCP-Retry. " +
+                        "Bereits sichtbare Serverquittungen bleiben gültig. " +
+                        (if (restored) "Lokalen Modellkontext neu aufgebaut."
+                         else "Kontextreset fehlgeschlagen: Modell bitte neu laden.")
+                    setStatus(if (restored) "● LITERT BEREIT · KONTEXT RESET"
+                        else "● LITERT · MODELL NEU LADEN")
+                } else {
+                    answer.content += "\n⚠ " + getString(R.string.diagnostics_error,
+                        PocketDiagnostics.publicError(error), eventId)
+                    setStatus("● LITERT FEHLER")
+                }
                 chatAdapter.notifyItemChanged(index)
-                setStatus("● LITERT FEHLER")
             } finally {
                 requestChatPersist()
                 busy = false
@@ -3366,7 +3440,10 @@ class MainActivity : AppCompatActivity() {
         activeTransferName = null
         transferBusy = false
         setDownloadUi(snapshot.label, false)
-        if (entry.state == "complete") {
+        if (entry.state == "complete" &&
+            CompletedModelEvidence.present(store.dir, name, entry.done)) {
+            // A stale completion must preserve its source and checksum
+            // metadata so the user can explicitly recover the transfer.
             prefs.edit().remove("pending_url_" + name).remove("pending_sha_" + name).apply()
         }
         refreshLibrary()

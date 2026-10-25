@@ -179,15 +179,18 @@ internal object BackgroundModelDownloads {
         // Reconcile historical completion with the current private model
         // directory. A journal entry survives app updates and even deletion
         // of its final file; it cannot by itself prove installation.
-        val completedFilePresent = if (entry.state == "complete")
-            CompletedModelEvidence.present(
+        val completedEvidence = if (entry.state == "complete")
+            CompletedModelEvidence.inspect(
                 java.io.File(context.filesDir, "models"), entry.name, entry.done)
         else null
         return DownloadSchedulerState.describe(
             entry.name, entry.state, entry.wifiOnly, present,
             reasons, age, entry.done, entry.total, entry.error,
             network = networkInfo(context),
-            completedFilePresent = completedFilePresent
+            completedFilePresent = completedEvidence?.let {
+                it == CompletedModelEvidence.State.PRESENT
+            },
+            completedFileMissing = completedEvidence == CompletedModelEvidence.State.MISSING
         )
     }
 
@@ -205,9 +208,18 @@ internal object BackgroundModelDownloads {
         val noLongerScheduled = if (Build.VERSION.SDK_INT >= 34)
             context.getSystemService(JobScheduler::class.java).getPendingJob(entry.id) == null
         else false
+        // A historical "complete" with NO final file is recoverable by
+        // explicit user action. If a file exists but has the wrong length,
+        // refuse to overwrite it (including after an app update).
+        val missingCompletedFile = entry.state == "complete" &&
+            CompletedModelEvidence.inspect(
+                ModelStore(context).dir, entry.name, entry.done
+            ) == CompletedModelEvidence.State.MISSING
         require(entry.state in setOf("queued", "paused", "failed") ||
-            (entry.state in setOf("running", "verifying") && noLongerScheduled)) {
-            "Der Download ist aktiv, wird geprüft oder ist bereits installiert."
+            (entry.state in setOf("running", "verifying") && noLongerScheduled) ||
+            missingCompletedFile) {
+            "Der Download ist aktiv, wird geprüft oder die vorhandene Datei muss " +
+                "vor einem neuen Transfer separat gesichert werden."
         }
         if (entry.state == "queued" && Build.VERSION.SDK_INT >= 34) {
             val scheduler = context.getSystemService(JobScheduler::class.java)

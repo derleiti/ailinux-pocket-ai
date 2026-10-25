@@ -33,6 +33,24 @@ class BackgroundModelDownloadWiringTest {
         assertTrue(main.contains("Downloadjob neu einplanen?"))
     }
 
+    @Test fun staleCompletedJournalRecoveryIsExplicitAndNeverOverwrites() {
+        val resumeBody = bg.substringAfter("fun resume(context:")
+            .substringBefore("fun start(context:")
+        assertTrue(resumeBody.contains("missingCompletedFile"))
+        assertTrue(resumeBody.contains("CompletedModelEvidence.State.MISSING"))
+        assertTrue(resumeBody.contains("missingCompletedFile)"))
+        assertFalse(resumeBody.contains("delete()"))
+        assertTrue(main.contains("Fehlenden Download fortsetzen"))
+        assertTrue(main.contains("Fehlenden Download wiederherstellen?"))
+        assertTrue(main.contains("Teil-Download fortsetzen?"))
+        assertTrue(main.contains("completedMismatch"))
+        assertTrue(main.contains("!completedMismatch"))
+        val ui = main.substringAfter("private fun updateBackgroundTransferUi()")
+            .substringBefore("private fun browseRepository()")
+        assertTrue(ui.contains("CompletedModelEvidence.present(store.dir, name, entry.done)"))
+        assertTrue(ui.contains("remove(\"pending_url_\""))
+    }
+
     @Test fun workerAndUidtTrackVerificationAndFailures() {
         assertTrue(bg.contains("onVerifying = {"))
         assertTrue(bg.contains("it.copy(state = \"verifying\")"))
