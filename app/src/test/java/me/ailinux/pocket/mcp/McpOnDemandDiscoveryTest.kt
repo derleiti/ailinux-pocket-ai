@@ -147,6 +147,37 @@ class McpOnDemandDiscoveryTest {
         assertEquals("{}", candidate.arguments.toString())
     }
 
+    @Test fun realAndroidRepeatPromptDoesNotTreatGermanConjunctionAsToolName() {
+        val state = McpProgressiveBridge.Run(listOf(
+            McpProgressiveBridge.Source("s1", "workspace",
+                "https://api.ailinux.me/v1/mcp", "AILinux TriForce Workspace",
+                listOf(tool("status"), tool("vision_status"))),
+            McpProgressiveBridge.Source("s2", "dev",
+                "https://api.ailinux.me/v1/mcp/sse", "TriForce DEV MCP",
+                listOf(tool("status"))),
+            McpProgressiveBridge.Source("s3", "discord",
+                "https://discord.ailinux.me/mcp", "AILinux Discord MCP",
+                listOf(tool("discord_connection_status")))
+        ))
+        val request = "Brumo, prüfe den TriForce Workspace Systemstatus erneut " +
+            "über AUTO-MCP. Finde das echte status-Werkzeug und frage vor jedem " +
+            "tools/call erneut um Freigabe. Keine erfundenen Serverergebnisse."
+        var reason: McpOnDemandDiscovery.Rejection? = null
+        val proposed = McpOnDemandDiscovery.propose(request, state) { reason = it }
+        assertNotNull("An actual requested Workspace status tool is not ambiguous; " +
+            "reject reason=" + reason, proposed)
+        assertEquals("s1/status", proposed!!.toolId)
+        assertEquals("{}", proposed.arguments.toString())
+        assertEquals(0, state.remoteCalls)
+    }
+
+    @Test fun explicitUnknownFunctionMustNotFallBackToUnrequestedTool() {
+        val state = run(listOf(tool("status")))
+        assertNull(McpOnDemandDiscovery.propose(
+            "Brumo, nutze MCP tool delete_account und prüfe dann den Status", state))
+        assertEquals(0, state.remoteCalls)
+    }
+
     @Test fun shortWorkspaceStatusTypoPlansOnlyRealReadOnlyWorkspaceTool() {
         val run = McpProgressiveBridge.Run(listOf(
             McpProgressiveBridge.Source("s1", "workspace-id",
@@ -271,13 +302,14 @@ class McpOnDemandDiscoveryTest {
         assertEquals(0, state.remoteCalls)
     }
 
-    @Test fun exactCrawlRequestCreatesOnlyApprovedCandidateNotExecution() {
+    @Test fun explicitCrawlRequestCreatesWriteRiskPlanNotExecution() {
         val schema = JSONObject("""{"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}""")
         val run = run(listOf(tool("crawl", schema)))
         val plan = McpOnDemandDiscovery.propose("check mit mcp crawl tool https://ailinux.me", run)
         assertNotNull(plan)
         assertEquals("crawl", plan!!.tool.name)
         assertTrue(plan.hostFallback)
+        assertTrue("Crawl creates a server job and is not read-only", plan.hostWriteIntent)
         assertEquals("https://ailinux.me", plan.arguments.getString("url"))
         assertEquals(0, run.remoteCalls)
     }
@@ -310,6 +342,7 @@ class McpOnDemandDiscoveryTest {
             run(listOf(tool("crawl", schema))))
         assertEquals("https://ailinux.me/search?q=gemma&lang=de",
             plan!!.arguments.getString("url"))
+        assertTrue(plan.hostWriteIntent)
         assertNull(McpOnDemandDiscovery.propose("mcp tool read_and_clear_notifications",
             run(listOf(tool("read_and_clear_notifications")))))
     }

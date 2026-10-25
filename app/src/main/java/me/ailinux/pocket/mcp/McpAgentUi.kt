@@ -490,8 +490,13 @@ class McpAgentUi(
                     "\nEndpunkt: " + source.endpoint +
                     "\nWerkzeug: " + plan.tool.name +
                     "\nParameter: " + plan.arguments.toString(2).take(3200) +
-                    "\n\nDieses Werkzeug kann Serverdaten ändern. " +
-                    "Pocket AI führt höchstens einen externen Aufruf aus " +
+                    (if (plan.hostWriteIntent)
+                        "\n\nACHTUNG: Dies erzeugt einen neuen Crawler-Job " +
+                            "und kann Serverzustand verändern. Die Freigabe " +
+                            "gilt nur für diesen einen HTTPS-Zielauftrag."
+                    else "\n\nDieses Werkzeug kann Serverdaten ändern. " +
+                            "Auch Read-only-Hinweise des Servers sind keine Garantie.") +
+                    "\nPocket AI führt höchstens einen externen Aufruf aus " +
                     "und prüft vorher noch einmal das Live-Schema."
                 )
                 .setNegativeButton("Ablehnen") { _, _ ->
@@ -548,14 +553,21 @@ class McpAgentUi(
             McpToolSchema.equivalent(current.annotations, plan.tool.annotations)) {
             "MCP-Werkzeugdefinition oder Risikohinweis geändert. Auto-Bridge bitte neu verbinden."
         }
-        // App-inferred tool selection must stay strictly read-only even if
-        // server annotations change between user approval and actual dispatch.
-        // Annotations are untrusted hints, so explicit consent is still required.
+        // The host does not have authority from model prose alone. A
+        // server-side crawler job is never a read-only operation, regardless
+        // of the server's untrusted annotation. It is allowed ONLY when the
+        // original user explicitly requested the exact HTTPS target AND
+        // a separate human approval was obtained for this reviewed plan.
         if (plan.hostFallback) {
-            check(current.declaresReadOnly &&
-                current.name in setOf("crawl", "status", "discord_connection_status",
-                    "current_time", "models", "device_info")) {
-                "Host-Fallback darf kein schreibendes oder unbekanntes Werkzeug aufrufen."
+            if (plan.hostWriteIntent) {
+                check(McpOnDemandDiscovery.isVerifiedExplicitCrawlPlan(plan)) {
+                    "Nicht geprüfter schreibender Host-Fallback gesperrt."
+                }
+            } else {
+                check(McpOnDemandDiscovery.isVerifiedReadOnlyHostPlan(plan) &&
+                    current.declaresReadOnly) {
+                    "Host-Fallback darf kein unbekanntes Schreibwerkzeug aufrufen."
+                }
             }
         }
         McpToolSchema.validate(current.schema, plan.arguments)?.let {

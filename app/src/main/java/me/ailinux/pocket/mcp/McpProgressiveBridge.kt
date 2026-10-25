@@ -99,7 +99,13 @@ object McpProgressiveBridge {
         val tool: McpTool,
         val arguments: JSONObject,
         /** True only for a host-inferred fallback, not a native model tool call. */
-        val hostFallback: Boolean = false
+        val hostFallback: Boolean = false,
+        /**
+         * Host inferred a user-explicit, potentially state-changing operation.
+         * Requires human-visible write consent, even if an untrusted server
+         * claims readOnlyHint=true. Never use the read-only execution shortcut.
+         */
+        val hostWriteIntent: Boolean = false
     ) {
         val toolId: String get() = source.id + "/" + tool.name
     }
@@ -179,7 +185,10 @@ object McpProgressiveBridge {
             toolIndex = all
         }
 
+        /** Advertised count is NOT the same as the supported safe subset. */
+        val advertisedTools: Int get() = sources.sumOf { it.tools.size }
         val totalTools: Int get() = toolIndex.size
+        val filteredTools: Int get() = advertisedTools - totalTools
 
         fun expired(nowMs: Long = System.currentTimeMillis()): Boolean =
             nowMs < createdAtMs || nowMs - createdAtMs > CATALOG_LIFETIME_MS

@@ -1,6 +1,7 @@
 package me.ailinux.pocket.mcp
 
 import org.json.JSONObject
+import java.net.URI
 import java.util.Locale
 
 /**
@@ -15,6 +16,63 @@ object McpOnDemandDiscovery {
         "check","checke","prüfe","pruefe","über","ueber","with","using","the","und",
         "eine","einen","server","status","www","https")
     private val webUrl = Regex("https://[^\\s<>\"\']+", RegexOption.IGNORE_CASE)
+
+    /** Crawl is a server-side job creation, NOT a read-only page fetch.
+     * The host may offer a human-reviewed plan only for a verbatim explicit
+     * crawl request with exactly one safe HTTPS URL. The server still checks
+     * authorization, schema and network policy before creating a job.
+     */
+    private val crawlVerb = Regex(
+        "\\b(?:crawl|crawle|crawlen|crawlt|crawler)\\b", RegexOption.IGNORE_CASE)
+    private fun explicitCrawlUrl(request: String): String? {
+        if (!crawlVerb.containsMatchIn(request)) return null
+        val urls = webUrl.findAll(request).map {
+            it.value.trimEnd('.', ',', ';', ')', ']', '}')
+        }.toList()
+        if (urls.size != 1) return null
+        val url = urls.single()
+        val parsed = runCatching { URI(url) }.getOrNull() ?: return null
+        if (parsed.scheme != "https" || parsed.userInfo != null ||
+            parsed.host.isNullOrBlank() || parsed.port !in setOf(-1,443)) return null
+        val host = parsed.host.lowercase(Locale.ROOT)
+        // Java URI accepts bracketed IPv6 literals (including IPv4-mapped
+        // loopback/private destinations). The host planner cannot safely
+        // resolve their target, so reject ALL literal IPv6 here.
+        if (host.startsWith("[") || host.contains(':') ||
+            host in setOf("localhost", "127.0.0.1") ||
+            host.endsWith(".local") || host.endsWith(".localhost")) return null
+        if (host.matches(Regex("[0-9.]+"))) {
+            // Do not propose requests to numeric private/loopback hosts.
+            val octets = host.split('.').mapNotNull { it.toIntOrNull() }
+            if (octets.size != 4 || octets.any { it !in 0..255 }) return null
+            if (octets[0] in setOf(0,10,127) || octets[0] >= 224 ||
+                octets[0] == 192 && octets[1] == 168 ||
+                octets[0] == 172 && octets[1] in 16..31 ||
+                octets[0] == 169 && octets[1] == 254) return null
+        }
+        return url
+    }
+
+    /** Run immediately before dispatch as well as during planning. */
+    fun isVerifiedExplicitCrawlPlan(plan: McpProgressiveBridge.RemoteCall): Boolean {
+        if (!plan.hostFallback || !plan.hostWriteIntent ||
+            plan.tool.name != "crawl" || plan.arguments.length() != 1) return false
+        val required = plan.tool.schema.optJSONArray("required") ?: return false
+        if (required.length() != 1 || required.optString(0) != "url") return false
+        if (plan.tool.schema.optJSONObject("properties")?.
+                optJSONObject("url")?.optString("type") != "string") return false
+        val url = plan.arguments.optString("url")
+        return explicitCrawlUrl("crawl " + url) == url &&
+            McpToolSchema.validate(plan.tool.schema, plan.arguments) == null
+    }
+
+    /** Server hints do not turn the server-side crawler job into a read. */
+    fun isVerifiedReadOnlyHostPlan(plan: McpProgressiveBridge.RemoteCall): Boolean =
+        plan.hostFallback && !plan.hostWriteIntent &&
+            plan.tool.declaresReadOnly &&
+            plan.tool.name in setOf("status", "discord_connection_status",
+                "current_time", "models", "device_info")
+
     private val explicitTool = Regex("(?:tool|werkzeug|function)[\\s:='\"\\u0060]+([a-z][a-z0-9_.-]{2,})", RegexOption.IGNORE_CASE)
     private val mentionsExternal = Regex(
         "\\b(?:mcp|tool|werkzeug|triforce|discord|workspace|worspace|" +
@@ -24,7 +82,15 @@ object McpOnDemandDiscovery {
     private val genericActionWords = setOf(
         "call", "calling", "aufruf", "ausführen", "ausfuehren",
         "ausführung", "ausfuehrung", "request", "invoke", "toolcall",
-        "aktion", "action", "method"
+        "aktion", "action", "method",
+        // Grammar immediately following "status-Werkzeug und frage ..." is
+        // NOT an explicitly named tool. A real exact function identifier
+        // (including underscores, such as discord_connection_status) stays.
+        "und", "and", "oder", "or", "dann", "danach", "frage",
+        "nach", "bitte", "wieder", "erneut", "jetzt", "vor",
+        "mit", "per", "über", "ueber", "auf", "an", "bei",
+        "für", "fuer", "von", "dem", "den", "die", "das",
+        "ein", "einem", "einen", "einer", "eines"
     )
     private val titleTokens = Regex("[\\p{L}\\p{N}]{3,}")
     private val genericServerWords = setOf("ailinux", "mcp", "server",
@@ -107,7 +173,9 @@ object McpOnDemandDiscovery {
         val proposal = runCatching {
             propose(request, McpProgressiveBridge.Run(listOf(source)))
         }.getOrNull() ?: return null
-        if (!proposal.hostFallback) return null
+        // Selected-mode fallback has a separate read-only-only executor.
+        // A crawler job MUST go through the progressive one-shot write dialog.
+        if (!proposal.hostFallback || proposal.hostWriteIntent) return null
         return McpAgentBridge.Decision.Proposed(
             proposal.tool, JSONObject(proposal.arguments.toString())
         )
@@ -162,33 +230,50 @@ object McpOnDemandDiscovery {
         if (!run.uniquelyRequestedSource(id, request))
             return reject(Rejection.AMBIGUOUS_TOOL)
         val tool = chosen.tool
-        // The host is not authorized to infer write operations. Even
-        // read-only candidates need a live recheck and per-call approval.
-        if (tool.name !in setOf("crawl", "status", "discord_connection_status",
-                "current_time", "models", "device_info") ||
-            !tool.declaresReadOnly)
-            return reject(Rejection.UNVERIFIED_READONLY)
         val schema = tool.schema
-        val mandatory = schema.optJSONArray("required")
         val args = JSONObject()
-        if (mandatory != null && mandatory.length() > 0) {
-            if (mandatory.length() != 1)
-                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
-            val field = mandatory.optString(0)
-            if (field !in setOf("url", "uri", "target_url"))
-                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
-            val prop = schema.optJSONObject("properties")?.optJSONObject(field)
+        val writeCrawl = tool.name == "crawl"
+        if (writeCrawl) {
+            // A real TriForce crawl creates a persistent crawler job. Never
+            // reinterpret "readOnlyHint" as authorization for the job.
+            val exactUrl = explicitCrawlUrl(request)
                 ?: return reject(Rejection.ARGUMENTS_UNAVAILABLE)
-            if (prop.optString("type") != "string")
-                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
-            val url = webUrl.find(request)?.value?.trimEnd('.', ',', ';', ')', ']', '}')
+            val required = schema.optJSONArray("required")
                 ?: return reject(Rejection.ARGUMENTS_UNAVAILABLE)
-            args.put(field, url)
+            if (required.length() != 1 || required.optString(0) != "url" ||
+                schema.optJSONObject("properties")?.optJSONObject("url")?.
+                    optString("type") != "string")
+                return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+            args.put("url", exactUrl)
+        } else {
+            // The host is not permitted to infer arbitrary writes. Even
+            // read-only candidates require fresh user approval and a live
+            // schema/authorization check before the network call.
+            if (tool.name !in setOf("status", "discord_connection_status",
+                    "current_time", "models", "device_info") ||
+                !tool.declaresReadOnly)
+                return reject(Rejection.UNVERIFIED_READONLY)
+            val mandatory = schema.optJSONArray("required")
+            if (mandatory != null && mandatory.length() > 0) {
+                if (mandatory.length() != 1)
+                    return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+                val field = mandatory.optString(0)
+                if (field !in setOf("url", "uri", "target_url"))
+                    return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+                val prop = schema.optJSONObject("properties")?.optJSONObject(field)
+                    ?: return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+                if (prop.optString("type") != "string")
+                    return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+                val url = explicitCrawlUrl(request)
+                    ?: return reject(Rejection.ARGUMENTS_UNAVAILABLE)
+                args.put(field, url)
+            }
         }
         // Enforces the previous search/details gate, original source
         // selection, exact full schema and per-turn single-dispatch state.
         return try {
-            run.prepareCall(id, args.toString(), request).copy(hostFallback = true)
+            run.prepareCall(id, args.toString(), request).copy(
+                hostFallback = true, hostWriteIntent = writeCrawl)
         } catch (_: Exception) {
             reject(Rejection.ARGUMENTS_UNAVAILABLE)
         }
