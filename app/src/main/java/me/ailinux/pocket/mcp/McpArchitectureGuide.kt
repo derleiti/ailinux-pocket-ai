@@ -8,10 +8,9 @@ package me.ailinux.pocket.mcp
  * it never infers a remote capability or invokes tools/call.
  */
 internal object McpArchitectureGuide {
-    private val subject = Regex(
-        "\\b(?:mcp|tooling|werkzeuge?|tools?|functions?|funktionen?)\\b",
-        RegexOption.IGNORE_CASE
-    )
+    // Generic "tools" / "functions" questions are not necessarily about
+    // Pocket AI MCP. Do not hijack unrelated API-design requests.
+    private val subject = Regex("\\bmcp\\b", RegexOption.IGNORE_CASE)
     private val conceptual = Regex(
         "\\b(?:beibring\\p{L}*|lehr\\p{L}*|trainier\\p{L}*|teach|teaching|" +
             "integrier\\p{L}*|anbind\\p{L}*|einbind\\p{L}*|implement\\p{L}*|" +
@@ -27,7 +26,7 @@ internal object McpArchitectureGuide {
     )
     private val operation = Regex(
         "\\b(?:prüfe|pruefe|checke|check|verify|verifiziere|" +
-            "rufe|abrufen|hole|sende|lösche|loesche|ändere|aendere|" +
+            "rufe|abrufen|hole|sende|send|post|delete|write|lösche|loesche|ändere|aendere|" +
             "starte|execute|execute\\s+tool|fetch|deploy|restart)\\b",
         RegexOption.IGNORE_CASE
     )

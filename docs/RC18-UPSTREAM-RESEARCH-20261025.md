@@ -17,7 +17,7 @@ Findings:
 - Google Tensor NPU execution is AOT-based; Google Tensor SDK currently does NOT support on-device JIT compilation. Loading an arbitrary model or bundling a dispatcher cannot prove NPU compatibility.
 - The official Android Kotlin guide calls for Backend.NPU with context.applicationInfo.nativeLibraryDir when packaged, and optional libOpenCL.so and libvndksupport.so manifest declarations for GPU. These are already present in the RC18 integration.
 - The Google Tensor compiler FAQ recommends stable ai-edge-litert 2.3.0 with GOOGLE_TENSOR_BACKEND_ENABLED=1 when actually AOT-compiling Google-Tensor-targeted models. This is a BUILD environment setting, NOT an Android runtime configuration.
-- Upstream Tensor G5 issue 7787 showed dispatcher/runtime/toolchain mismatches and silent CPU fallbacks. It was resolved after correcting the AOT compiler/runtime pairing; its classical-ML example is NOT proof of a Gemma 4 E2B LLM fix.
+- Upstream Tensor G5 issue 7787 showed dispatcher/runtime/toolchain mismatches, required native library extraction and silent CPU fallbacks. It was resolved after correcting AOT compiler/runtime and packaging pairing; its classical-ML example is NOT proof of a Gemma 4 E2B LLM fix. Pocket AI already sets packaging.jniLibs.useLegacyPackaging = true. Verify the Google dispatcher physically in applicationInfo.nativeLibraryDir on the Pixel; finding the .so in the APK ZIP is not enough.
 
 RC18 action:
 - Preserve source-pinned libLiteRtDispatch_GoogleTensor.so from PR #55, its exact source commit, ELF ABI, export and SHA; do not mix with other runtime binary pins.
@@ -57,7 +57,7 @@ Findings:
 - A resumed HTTP Range request must use Content-Range validation, an appropriate strong ETag/If-Range or Last-Modified validator, and handle 206/200/416 explicitly. When a Range request returns 200 the server has sent a full representation, NOT an appendable partial fragment.
 
 RC18 action:
-- On app restart or journal reconciliation, compare final file existence and size, then SHA-256 when supplied. A journal marked complete with missing/wrong-sized qwen3_4b_mixed_int4.litertlm is NOT a completed import.
+- On app restart or journal reconciliation, compare final file existence and size, then SHA-256 when a trusted digest is supplied. A journal marked complete with missing/wrong-sized qwen3_4b_mixed_int4.litertlm is NOT a completed import. A file with only existence/size/header evidence must be labelled UNVERIFIED until a trusted digest or immutable upstream manifest is checked; do not infer a fresh digest from the journal. The RC18 UI distinguishes a SHA-256 checked at transfer time from an unverified completed journal without rehashing a multi-GB model on the UI thread.
 - Keep existing .part bytes unless an explicit safe restart/new generation was chosen. Use atomic final rename only after full validation, durable progress and user-visible pause/resume/cancel controls.
 - Pixel test: screen off, app switch, Wi-Fi/VPN changes, UIDT stop and update over installed APK. Never assume onStopJob ran after low-memory process death.
 

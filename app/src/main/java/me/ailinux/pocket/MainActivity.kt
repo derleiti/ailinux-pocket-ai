@@ -123,9 +123,11 @@ class MainActivity : AppCompatActivity() {
     )
     private fun failure(
         domain: PocketDiagnostics.Domain, step: PocketDiagnostics.Step,
-        error: Throwable, uncertain: Boolean = false
+        error: Throwable, uncertain: Boolean = false,
+        durationMs: Long = -1L
     ): String = PocketDiagnostics.failure(
-        applicationContext, diagnosticTrace, domain, step, error, uncertain
+        applicationContext, diagnosticTrace, domain, step, error, uncertain,
+        durationMs = durationMs
     )
 
     private var generationJob: Job? = null
@@ -845,12 +847,23 @@ class MainActivity : AppCompatActivity() {
             }
             content.addView(title)
             val isActive = activeModel?.absolutePath == file.absolutePath
+            // A historical complete journal may refer to a deleted/replaced
+            // file. Do not offer it as a verified installed model just
+            // because the filename and extension still match.
+            val journal = ModelDownloadJournal.read(this, file.name)
+            val completedMismatch = journal?.state == "complete" &&
+                !CompletedModelEvidence.present(store.dir, file.name, journal.done)
             content.addView(simpleLabel(
                 ModelStore.displaySize(file.length()) + if (isActive) "  •  AKTIV" else ""
             ))
+            if (completedMismatch)
+                content.addView(simpleLabel(
+                    "⚠ Datei und Downloadjournal stimmen nicht überein. " +
+                    "Bitte vor dem Laden unabhängig prüfen."
+                ))
             val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             val load = smallButton(if (isActive) "✓ Aktiv" else "▶ Laden", isActive)
-            load.isEnabled = !busy && !transferBusy && !isActive
+            load.isEnabled = !busy && !transferBusy && !isActive && !completedMismatch
             load.setOnClickListener { loadModel(file) }
             buttons.addView(load)
             val export = smallButton("Export", false)
@@ -878,6 +891,38 @@ class MainActivity : AppCompatActivity() {
             content.addView(buttons)
             card.addView(content)
             modelsContainer.addView(card)
+        }
+        // An interrupted install or removed file can leave journal=complete
+        // but no valid final model. Expose it on the model page, never
+        // silently delete a .part or restart from an unverified URL.
+        ModelDownloadJournal.all(this).filter {
+            it.state == "complete" &&
+                !CompletedModelEvidence.present(store.dir, it.name, it.done)
+        }.forEach { entry ->
+            modelsContainer.addView(simpleLabel(
+                BackgroundModelDownloads.snapshot(this, entry).label
+            ))
+            val reselect = smallButton("Quelle erneut auswählen", false)
+            reselect.isEnabled = !busy && !transferBusy
+            reselect.setOnClickListener {
+                val partExists = File(store.dir, entry.name + ".part").isFile
+                AlertDialog.Builder(this)
+                    .setTitle("Download prüfen und neu auswählen")
+                    .setMessage(
+                        "Das Journal beweist keine vollständige Modelldatei. " +
+                        "Im Modellkatalog dieselbe Quelle und Version erneut auswählen. " +
+                        "Vorhandene Modelldateien bleiben unverändert." +
+                        (if (partExists)
+                            "\n\nDie .part-Datei bleibt erhalten. " +
+                            "Ohne nachweisbar identische Quelle wird sie nicht automatisch angehängt."
+                         else "")
+                    )
+                    .setNegativeButton("Abbrechen", null)
+                    .setPositiveButton("Modellkatalog öffnen") { _, _ ->
+                        browseRepository()
+                    }.show()
+            }
+            modelsContainer.addView(reselect)
         }
         val partNames = store.partials().map { it.name.removeSuffix(".part") }.toSet()
         ModelDownloadJournal.all(this).filter {
@@ -915,7 +960,7 @@ class MainActivity : AppCompatActivity() {
             if (runningNow) {
                 activePartialLabel = partialLabel
             } else {
-                if (source != null) {
+                if (source != null && journal?.state != "complete") {
                     val resume = smallButton("Fortsetzen", false)
                     resume.isEnabled = !transferBusy
                     resume.setOnClickListener {
@@ -1123,10 +1168,23 @@ class MainActivity : AppCompatActivity() {
                     val currentMemory = ActivityManager.MemoryInfo().also {
                         (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
                     }
-                    if (ModelLoadSafety.insufficientAfterUnload(file.length(), currentMemory.availMem)) {
+                    // A warning accepted before unloading another engine
+                    // does not override Android's actual low-memory status.
+                    // The Tensor-specific floor uses observed Pixel LMK evidence
+                    // instead of assuming a multi-GB model needs only 0.5x
+                    // its file size plus a small reserve.
+                    val tensorCandidate = RuntimeHardware.forModelFile(
+                        file.name, RuntimeHardware.candidatesOnDevice()
+                    ).firstOrNull() == RuntimeHardware.Attempt.GOOGLE_TENSOR
+                    if (ModelLoadSafety.insufficientForLiteRtModel(
+                            file.length(), currentMemory.availMem,
+                            tensorCandidate, currentMemory.lowMemory,
+                            currentMemory.threshold)) {
                         throw ModelMemoryGuardException(
                             availableBytes = currentMemory.availMem,
-                            requiredBytes = ModelLoadSafety.minimumAvailableAfterUnload(file.length())
+                            requiredBytes = ModelLoadSafety.minimumAvailableForLiteRtModel(
+                                file.length(), tensorCandidate, currentMemory.threshold),
+                            androidLowMemory = currentMemory.lowMemory
                         )
                     }
                     val prompt = BrumoSystemPrompt.resolve(prefs.getString("system_prompt", null))
@@ -1156,7 +1214,8 @@ class MainActivity : AppCompatActivity() {
                 refreshLibrary()
                 showPage(0)
             } catch (error: Exception) {
-                failure(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD, error)
+                failure(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD,
+                    error, durationMs = SystemClock.elapsedRealtime() - modelLoadStarted)
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT"
                     else "LiteRT-LM konnte nicht gestartet werden")
@@ -1166,7 +1225,8 @@ class MainActivity : AppCompatActivity() {
                     error
                 )
             } catch (error: LinkageError) {
-                failure(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD, error)
+                failure(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_LOAD,
+                    error, durationMs = SystemClock.elapsedRealtime() - modelLoadStarted)
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT"
                     else "LiteRT-LM Bibliothek nicht verfügbar")
@@ -3146,6 +3206,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         diagnosticTrace = PocketDiagnostics.newTrace()
+        val inferenceStarted = SystemClock.elapsedRealtime()
         trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_START,
             PocketDiagnostics.State.START)
         if (mcpAgent.current() != null)
@@ -3182,18 +3243,21 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_DONE,
-                    PocketDiagnostics.State.OK)
+                    PocketDiagnostics.State.OK,
+                    durationMs = SystemClock.elapsedRealtime() - inferenceStarted)
                 setStatus("● LITERT BEREIT · " + runtime.backendName)
             } catch (_: CancellationException) {
                 trace(PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.CANCELLED,
-                    PocketDiagnostics.State.REJECTED)
+                    PocketDiagnostics.State.REJECTED,
+                    durationMs = SystemClock.elapsedRealtime() - inferenceStarted)
                 withContext(NonCancellable) {
                     try { runtime.cancelResponse() } catch (_: Exception) {}
                 }
                 if (!isDestroyed) setStatus("● LITERT GESTOPPT")
             } catch (error: Exception) {
                 val eventId = failure(PocketDiagnostics.Domain.LITERT,
-                    PocketDiagnostics.Step.MODEL_ERROR, error)
+                    PocketDiagnostics.Step.MODEL_ERROR, error,
+                    durationMs = SystemClock.elapsedRealtime() - inferenceStarted)
                 answer.content += "\n⚠ " + getString(R.string.diagnostics_error,
                     PocketDiagnostics.publicError(error), eventId)
                 chatAdapter.notifyItemChanged(index)
@@ -3366,7 +3430,11 @@ class MainActivity : AppCompatActivity() {
         activeTransferName = null
         transferBusy = false
         setDownloadUi(snapshot.label, false)
-        if (entry.state == "complete") {
+        if (entry.state == "complete" &&
+            CompletedModelEvidence.present(store.dir, name, entry.done)) {
+            // Only forget source metadata after the CURRENT on-disk file
+            // matches completed bytes; stale journal must retain recovery
+            // evidence. This still does not assert a fresh SHA-256 test.
             prefs.edit().remove("pending_url_" + name).remove("pending_sha_" + name).apply()
         }
         refreshLibrary()

@@ -52,6 +52,26 @@ class PocketDiagnosticsTest {
             PocketDiagnostics.classify(Exception("HTTP 401 unauthorized")))
     }
 
+    @Test fun nativeInferenceErrorsCarryElapsedTimeWithoutPromptOrExceptionDetails() {
+        val event = PocketDiagnostics.Event(
+            1780000000000L, "ccddeeff", "aa112233",
+            PocketDiagnostics.Domain.LITERT, PocketDiagnostics.Step.MODEL_ERROR,
+            PocketDiagnostics.State.FAIL, durationMs = 720_000L,
+            code = PocketDiagnostics.ErrorCode.TIMEOUT
+        )
+        val published = event.line()
+        assertTrue(published.contains("ms=720000"))
+        assertTrue(published.contains("error=TIMEOUT"))
+        val parsed = PocketDiagnostics.parse(event.json())!!
+        assertEquals(720_000L, parsed.durationMs)
+        val main = java.io.File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        val generator = main.substringAfter("private fun sendLiteRtMessage(")
+            .substringBefore("private fun exportModel(")
+        assertTrue(generator.contains("val inferenceStarted = SystemClock.elapsedRealtime()"))
+        assertTrue(generator.contains(
+            "durationMs = SystemClock.elapsedRealtime() - inferenceStarted"))
+    }
+
     @Test fun memorySafetyGuardIsNotMisreportedAsUnknownNativeCrash() {
         val error = ModelMemoryGuardException(
             availableBytes = 1500L * 1024L * 1024L,

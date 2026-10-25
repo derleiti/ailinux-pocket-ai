@@ -7,7 +7,8 @@ import java.io.IOException
  */
 internal class ModelMemoryGuardException(
     val availableBytes: Long,
-    val requiredBytes: Long
+    val requiredBytes: Long,
+    val androidLowMemory: Boolean = false
 ) : IOException("Android RAM safety guard blocked the model load")
 
 /**
@@ -39,14 +40,59 @@ object ModelLoadSafety {
         return availableBytes < minimumAvailableAfterUnload(modelSizeBytes)
     }
 
+    /**
+     * Tensor G5 models can allocate substantially more memory than their
+     * on-disk .litertlm size during native initialization and prefill.
+     * Android reported a real LOW_MEMORY exit with Spark-X at ~5.7 GB RSS.
+     * This conservative preflight is a safety floor, NOT a promise that an
+     * accepted load cannot subsequently hit memory pressure.
+     */
+    fun minimumAvailableForLiteRtModel(
+        modelSizeBytes: Long,
+        mayUseGoogleTensor: Boolean,
+        androidLowMemoryThresholdBytes: Long = 0L
+    ): Long {
+        val basic = minimumAvailableAfterUnload(modelSizeBytes)
+        if (!mayUseGoogleTensor) return basic
+        val twoGiB = 2L * GIB
+        fun addBounded(value: Long, extra: Long): Long =
+            if (value > Long.MAX_VALUE - extra) Long.MAX_VALUE else value + extra
+        val weights = modelSizeBytes.coerceAtLeast(0L)
+        val approximateNativePeak = if (weights > (Long.MAX_VALUE - twoGiB) / 2)
+            Long.MAX_VALUE else 2L * weights + twoGiB
+        return maxOf(
+            basic,
+            6L * GIB,
+            approximateNativePeak,
+            addBounded(androidLowMemoryThresholdBytes.coerceAtLeast(0L), twoGiB)
+        )
+    }
+
+    fun insufficientForLiteRtModel(
+        modelSizeBytes: Long,
+        availableBytes: Long,
+        mayUseGoogleTensor: Boolean,
+        androidLowMemory: Boolean,
+        androidLowMemoryThresholdBytes: Long
+    ): Boolean =
+        androidLowMemory ||
+            availableBytes < minimumAvailableForLiteRtModel(
+                modelSizeBytes, mayUseGoogleTensor, androidLowMemoryThresholdBytes)
+
     /** User-visible safe explanation. It must not show server payloads,
      * raw exception text, file paths, model prompts or OAuth credentials.
      */
     internal fun explainRefusal(error: ModelMemoryGuardException): String =
-        "Modellstart zum Schutz vor Speichermangel gestoppt. Android meldet " +
-            ModelStore.displaySize(error.availableBytes) +
-            " freien RAM; die konservative Prüfung benötigt mindestens " +
-            ModelStore.displaySize(error.requiredBytes) + ".\n\n" +
+        "Modellstart zum Schutz vor Speichermangel gestoppt. " +
+            (if (error.androidLowMemory)
+                "Android meldet akuten Speicherdruck (lowMemory=true), " +
+                    "auch wenn eine freie Bytezahl angezeigt wird. "
+            else "") +
+            "Android meldet " + ModelStore.displaySize(error.availableBytes) +
+            " freien RAM; die konservative Prüfung setzt mindestens " +
+            ModelStore.displaySize(error.requiredBytes) + " voraus.\n\n" +
+            "Die Grenze ist eine vorsichtige Schutzabschätzung, keine " +
+            "garantierte Prognose für NPU-/GPU-Speicherverbrauch. " +
             "Andere Apps schließen oder ein kleineres Modell wählen. " +
             "Die heruntergeladenen Modelldateien bleiben unverändert."
 

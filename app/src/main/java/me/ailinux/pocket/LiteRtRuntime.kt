@@ -50,6 +50,7 @@ internal class LiteRtRuntime private constructor(
     private var activeBridgeKey = ""
     private var currentInstruction = systemPrompt
     private var currentToolProviders: List<com.google.ai.edge.litertlm.ToolProvider> = emptyList()
+    private var currentMaxOutputTokens = LiteRtOutputBudget.MAX_CHAT_TOKENS
     data class ToolTurn(val text: String, val calls: List<ToolCall>)
 
     /** No provider executes a tool. The host intercepts ToolCalls and must
@@ -84,14 +85,17 @@ internal class LiteRtRuntime private constructor(
             val previous = conversation
             conversation = null
             previous?.close()
+            val nextOutputLimit = LiteRtOutputBudget.forSession(session != null)
             val fresh = engine.createConversation(ConversationConfig(
                 systemInstruction = Contents.of(instructions),
                 tools = definitions,
-                automaticToolCalling = false
+                automaticToolCalling = false,
+                maxOutputToken = nextOutputLimit
             ))
             conversation = fresh
             currentInstruction = instructions
             currentToolProviders = definitions
+            currentMaxOutputTokens = nextOutputLimit
             activeBridgeKey = currentKey
         }
         Unit
@@ -137,7 +141,8 @@ internal class LiteRtRuntime private constructor(
             ConversationConfig(
                 systemInstruction = Contents.of(currentInstruction),
                 tools = currentToolProviders,
-                automaticToolCalling = false
+                automaticToolCalling = false,
+                maxOutputToken = currentMaxOutputTokens
             )
         )
         Unit
@@ -246,15 +251,18 @@ internal class LiteRtRuntime private constructor(
                                 prompt + "\n" + LiteRtMcpProtocol.shortInstructions(
                                     session.progressiveSources.isNotEmpty()) +
                                     me.ailinux.pocket.mcp.McpServerGuidance.optionalPromptBlock(session)
+                            val outputLimit = LiteRtOutputBudget.forSession(session != null)
                             val convo = candidate.createConversation(ConversationConfig(
                                 systemInstruction = Contents.of(instruction),
-                                tools = definitions, automaticToolCalling = false))
+                                tools = definitions, automaticToolCalling = false,
+                                maxOutputToken = outputLimit))
                             onStage("ready_" + attempt.name.lowercase())
                             return@withContext LiteRtRuntime(
                                 candidate, convo, prompt, attempt.name, dispatcher
                             ).apply {
                                 currentInstruction = instruction
                                 currentToolProviders = definitions
+                                currentMaxOutputTokens = outputLimit
                                 activeBridgeKey = session?.let {
                                     McpAgentBridge.nativeToolsJson(it.tools) + "|" + it.profileId +
                                     "|" + it.progressiveSources.joinToString { src -> src.id + src.endpoint } +

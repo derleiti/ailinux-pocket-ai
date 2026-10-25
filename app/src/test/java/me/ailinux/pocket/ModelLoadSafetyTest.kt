@@ -42,6 +42,46 @@ class ModelLoadSafetyTest {
         assertFalse(message.contains("\\\\n"))
     }
 
+    @Test fun tensorPreflightUsesRealAndroidLowMemoryKillAsConservativeFloor() {
+        val smallModel = 900L * 1024L * 1024L
+        val tensorRequired = ModelLoadSafety.minimumAvailableForLiteRtModel(
+            smallModel, mayUseGoogleTensor = true)
+        assertEquals(6L * gib, tensorRequired)
+        assertTrue(ModelLoadSafety.insufficientForLiteRtModel(
+            smallModel, 5L * gib, true, false, gib))
+        assertFalse(ModelLoadSafety.insufficientForLiteRtModel(
+            smallModel, 8L * gib, true, false, gib))
+        // Android's OS lowMemory flag must override user opt-in.
+        assertTrue(ModelLoadSafety.insufficientForLiteRtModel(
+            smallModel, 15L * gib, true, true, gib))
+        val osPressure = ModelMemoryGuardException(15L * gib, 6L * gib,
+            androidLowMemory = true)
+        val explanation = ModelLoadSafety.explainRefusal(osPressure)
+        assertTrue(explanation.contains("lowMemory=true"))
+        assertTrue(explanation.contains("Speicherdruck"))
+    }
+
+    @Test fun tensorPreflightScalesWithModelSizeAndAndroidLmkThreshold() {
+        val gemmaBytes = 3_113_545_589L
+        val minimum = ModelLoadSafety.minimumAvailableForLiteRtModel(
+            gemmaBytes, true, androidLowMemoryThresholdBytes = gib)
+        assertTrue(minimum >= 2 * gemmaBytes + 2L * gib)
+        assertFalse(ModelLoadSafety.insufficientForLiteRtModel(
+            gemmaBytes, minimum, true, false, gib))
+        assertTrue(ModelLoadSafety.insufficientForLiteRtModel(
+            gemmaBytes, minimum - 1, true, false, gib))
+        val osLimit = ModelLoadSafety.minimumAvailableForLiteRtModel(
+            gib, true, androidLowMemoryThresholdBytes = 9L * gib)
+        assertEquals(11L * gib, osLimit)
+        val cpuFloor = ModelLoadSafety.minimumAvailableForLiteRtModel(gib, false)
+        assertEquals(ModelLoadSafety.minimumAvailableAfterUnload(gib), cpuFloor)
+        // Garbage metadata must not overflow into a small accepted budget.
+        assertEquals(Long.MAX_VALUE,
+            ModelLoadSafety.minimumAvailableForLiteRtModel(Long.MAX_VALUE, true))
+        assertEquals(Long.MAX_VALUE,
+            ModelLoadSafety.minimumAvailableForLiteRtModel(gib, true, Long.MAX_VALUE))
+    }
+
     @Test fun failedModelLoadRefreshesLibrarySoNoStaleActiveModel() {
         val main = java.io.File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
         val lite = main.substringAfter("private fun loadLiteRtModel(")

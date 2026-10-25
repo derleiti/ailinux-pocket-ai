@@ -27,6 +27,11 @@ class McpArchitectureGuideTest {
             "Brumo, prüfe den TriForce-Systemstatus über MCP.",
             "Wie integriere ich MCP? Prüfe danach den Discord-Status.",
             "How to integrate MCP tools and check Discord connection",
+            "How do I integrate MCP and send a message to Discord?",
+            "How do I integrate MCP and post to Discord?",
+            "How do I integrate MCP and delete a message?",
+            "How do I design a functions API?",
+            "How to integrate tools with an Android app?",
             "Wie trainiere ich ein Google Tensor Modell auf Android?",
             "Prüfe die Verbindung zu einem MCP-Server und lies die Logs."
         )) assertFalse(request, McpArchitectureGuide.applies(request))
@@ -34,6 +39,8 @@ class McpArchitectureGuideTest {
             "Wie integriere ich MCP? Prüfe danach den Discord-Status.", true))
         assertTrue(McpRequestRouting.expectsToolEvidence(
             "Wie integriere ich MCP? Prüfe danach den Discord-Status."))
+        assertTrue(McpRequestRouting.useModelAgent(
+            "How do I integrate MCP and send a message to Discord?", true))
     }
 
     @Test fun snapshotCountsAreDynamicAndExplicitlyNotLive() {

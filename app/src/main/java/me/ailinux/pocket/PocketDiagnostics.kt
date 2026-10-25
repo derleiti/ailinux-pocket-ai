@@ -263,9 +263,11 @@ internal object PocketDiagnostics {
     }
 
     fun failure(context: Context, trace: String, domain: Domain, step: Step,
-                error: Throwable, uncertain: Boolean = false): String =
+                error: Throwable, uncertain: Boolean = false,
+                durationMs: Long = -1L): String =
         log(context, trace, domain, step,
-            if (uncertain) State.UNCONFIRMED else State.FAIL, code = classify(error))
+            if (uncertain) State.UNCONFIRMED else State.FAIL,
+            durationMs = durationMs, code = classify(error))
 
     /**
      * Newest evidence comes first. Android accessibility often returns only

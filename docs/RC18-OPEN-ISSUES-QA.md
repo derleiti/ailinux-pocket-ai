@@ -7,6 +7,7 @@ Updated: 2026-10-25, Europe/Berlin. Source of truth: the **live GitHub** issue/P
 - Baseline: GitHub `main` commit `2848a4c68ccb906d4405a1f543d2f0e228edeb50` (includes RC18 `versionCode=43` preparation and the merged RAM-guard diagnostics from PR #53).
 - In the isolated QA worktree: [PR #55](https://github.com/derleiti/ailinux-pocket-ai/pull/55) Tensor G5 source-pinned dispatcher and [PR #54](https://github.com/derleiti/ailinux-pocket-ai/pull/54) tiny-model MCP architecture routing. **Do not double-merge the same changes** after this integration is merged. Verify SHA ancestry/diffs before closing a redundant PR.
 - RC17 public APK/tag remain untouched. Its update signing certificate SHA-256 is `125766c26dd400e39804c7b97c36682d8a2c16caa134c58745a02aca0bd51187`. Retain the working RC17 APK, its signing keystore, model files, chat history, MCP/OAuth profiles and `.part` downloads for rollback; do not downgrade an app with data without assessing Android's downgrade restriction.
+- Signing contract: public RC17 was signed with the persistent project debug certificate SHA-256 125766c26dd400e39804c7b97c36682d8a2c16caa134c58745a02aca0bd51187. The local RC18 debug APK was independently checked against this exact certificate. CI debug keys are ephemeral and must NEVER be installed as an RC17 update. Do not automatically switch debug to another release keystore merely because release signing environment variables exist; compare both certificates and plan a migration first.
 - The new Tensor binary comes from LiteRT-LM v0.18.0's exact LiteRT source pin. A matching ELF digest and build **does not prove** the Pixel NPU path succeeds. Do not remove or overwrite the old binary's Git history.
 
 ## GitHub issue import and acceptance
@@ -25,8 +26,15 @@ Updated: 2026-10-25, Europe/Berlin. Source of truth: the **live GitHub** issue/P
 - MCP catalogue: **212 server-advertised** tool definitions across 3 sources; **172 compatible**, 40 excluded, plus 3 bounded app-local meta-tools.
 - `TENSOR_BACKEND` early model-load errors on Tensor G5 include traces `9b54cd33` and `1dbbd542`. The cause is not proven; a source-version mismatch in the old bundled Tensor dispatcher was found and addressed by PR #55 only for subsequent **device testing**.
 - Real approved host-assisted `DISPATCH -> SERVER_RESULT` exists, e.g. trace `4350abc6`, but a separate native schema error appears in the same session. Do not equate host fallback with native tool success.
-- Trace `b73756fc` (17:14:26 to 17:20:31 local) ended `LITERT/CANCELLED` with **no** server receipt; its initiator is undetermined.
-- Android system exit data show **Low Memory** at 16:57:33 with Qwen3.5-0.8B loaded (RSS ~2.79 GB) and another at 15:14:49 during Qwen3 1.7B backend loading (RSS ~5.45 GB). Neither alone implies an ANR or native fatal signal.
+- Trace `b73756fc` (2026-10-25 17:14:26 to 17:20:31 CET/UTC+01:00, i.e. 16:14:26 to 16:20:31Z) ended `LITERT/CANCELLED` with **no** server receipt; its initiator is undetermined.
+- Android system exit data show **Low Memory** at 2026-10-25 16:57:33 CET (15:57:33Z) with Qwen3.5-0.8B loaded (RSS ~2.79 GB) and another at 2026-10-25 15:14:49 CET (14:14:49Z) during Qwen3 1.7B backend loading (RSS ~5.45 GB). Neither alone implies an ANR or native fatal signal.
+
+## Additional 2026-10-25 CET device evidence
+
+- 17:39:24 CET (16:39:24Z): native LiteRT MODEL_ERROR/TIMEOUT after the MCP planner started around 17:27:08 CET; no server DISPATCH in that trace.
+- 17:39:46 CET (16:39:46Z): Android REASON_LOW_MEMORY when the last saved phase was Spark-X2.5-1.7B_int8 on Google Tensor, RSS 5,727,100 kB.
+- 17:40:20 CET (16:40:20Z): fast Tensor G5 backend initialization failure, trace 7bcd13b4; 17:40:42 CET (16:40:42Z) REMOVE TASK is user-initiated, not a crash.
+- Defensive source fixes are documented in docs/RC18-DIAGNOSTIC-RELIABILITY-20261025.md. A successful Gradle build does not replace Pixel hardware QA.
 
 ## Mandatory gates before a new public RC build/release
 
