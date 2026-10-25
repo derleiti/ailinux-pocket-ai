@@ -12,7 +12,8 @@ internal object McpArchitectureGuide {
     // Pocket AI MCP. Do not hijack unrelated API-design requests.
     private val subject = Regex("\\bmcp\\b", RegexOption.IGNORE_CASE)
     private val conceptual = Regex(
-        "\\b(?:beibring\\p{L}*|lehr\\p{L}*|trainier\\p{L}*|teach|teaching|" +
+        "\\b(?:erklär\\p{L}*|erklaer\\p{L}*|explain\\p{L}*|beschreib\\p{L}*|" +
+            "beibring\\p{L}*|lehr\\p{L}*|trainier\\p{L}*|teach|teaching|" +
             "integrier\\p{L}*|anbind\\p{L}*|einbind\\p{L}*|implement\\p{L}*|" +
             "implementing|integrat\\p{L}*|einbett\\p{L}*|aufbau|architektur|" +
             "architecture|scaling|skalier\\p{L}*|design|baue|bauen|" +
@@ -26,7 +27,8 @@ internal object McpArchitectureGuide {
     )
     private val operation = Regex(
         "\\b(?:prüfe|pruefe|checke|check|verify|verifiziere|" +
-            "rufe|abrufen|hole|sende|send|post|delete|write|lösche|loesche|ändere|aendere|" +
+            "rufe|abrufen|hole|nutze|benutze|verwende|(?:and\\s+use)|call|invoke|" +
+            "sende|send|post|delete|write|lies|lese|lösche|loesche|ändere|aendere|" +
             "starte|execute|execute\\s+tool|fetch|deploy|restart)\\b",
         RegexOption.IGNORE_CASE
     )

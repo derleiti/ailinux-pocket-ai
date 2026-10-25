@@ -11,7 +11,9 @@ class McpArchitectureGuideTest {
             "Wie würdest du einem Qwen-0.8B Modell 172 MCP Tools auf 3 Servern beibringen?",
             "Wie implementiere ich Progressive-Disclosure für MCP-Werkzeuge auf Android?",
             "How would you teach a small Android model to use MCP tools across 3 servers?",
-            "Erkläre die Architektur zum Einbinden von MCP-Tools in eine kleine Offline-KI."
+            "Erkläre die Architektur zum Einbinden von MCP-Tools in eine kleine Offline-KI.",
+            "Erkläre mir MCP, ohne externe Werkzeuge zu benutzen.",
+            "Explain MCP without invoking external tools."
         )) {
             assertTrue("conceptual routing: $request", McpArchitectureGuide.applies(request))
             assertFalse("no native MCP agent for app architecture: $request",
@@ -31,6 +33,8 @@ class McpArchitectureGuideTest {
             "How do I integrate MCP and post to Discord?",
             "How do I integrate MCP and delete a message?",
             "How do I design a functions API?",
+            "Erkläre MCP und nutze danach den TriForce-Systemstatus.",
+            "Explain MCP and use the workspace status tool.",
             "How to integrate tools with an Android app?",
             "Wie trainiere ich ein Google Tensor Modell auf Android?",
             "Prüfe die Verbindung zu einem MCP-Server und lies die Logs."
@@ -41,6 +45,23 @@ class McpArchitectureGuideTest {
             "Wie integriere ich MCP? Prüfe danach den Discord-Status."))
         assertTrue(McpRequestRouting.useModelAgent(
             "How do I integrate MCP and send a message to Discord?", true))
+    }
+
+    @Test fun deviceReproductionNoExternalMcpExplanationIsAppHelpNotAnEmptyLiteRtPlanner() {
+        val question = "Erkläre mir MCP, ohne externe Werkzeuge zu benutzen."
+        assertTrue(McpArchitectureGuide.applies(question))
+        assertFalse(McpRequestRouting.useModelAgent(question, true))
+        assertFalse(McpRequestRouting.expectsToolEvidence(question))
+        val response = McpArchitectureGuide.explain(listOf(91, 46, 35), 0)
+        assertTrue(response.contains("keine Modellantwort"))
+        assertTrue(response.contains("kein tools/call"))
+        assertTrue(response.contains("mcp_search_tools"))
+        assertFalse(response.contains("Keine Modellantwort erzeugt"))
+        val main = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        val send = main.substringAfter("private fun sendMessage()")
+            .substringBefore("private fun exportModel(")
+        assertTrue(send.indexOf("McpArchitectureGuide.applies(text)") <
+            send.indexOf("sendLiteRtMessage(text)"))
     }
 
     @Test fun snapshotCountsAreDynamicAndExplicitlyNotLive() {
