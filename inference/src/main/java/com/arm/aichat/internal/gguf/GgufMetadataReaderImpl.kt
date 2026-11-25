@@ -242,7 +242,13 @@ internal class GgufMetadataReaderImpl(
             vocabSize           = "$arch.vocab_size".u32(),
             finetune            = "general.finetune".str(),
             quantizationVersion = "general.quantization_version".u32()
-        ).takeUnless { fileType == null && vocabSize == null && finetune == null && quantizationVersion == null }
+        // A minimal valid GGUF may contain ONLY general.architecture.
+        // Never drop that explicit field: it is how Pocket AI tells a
+        // CLIP/SigLIP mmproj apart from a text-language model.
+        ).takeUnless {
+            "general.architecture" !in m && fileType == null && vocabSize == null &&
+                finetune == null && quantizationVersion == null
+        }
 
         val baseModels = buildList {
             val n = "general.base_model.count".u32() ?: 0

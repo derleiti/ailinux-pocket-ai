@@ -8,13 +8,28 @@ import java.util.Locale
  * Preflight uses the official GGUF metadata parser without loading tensor weights.
  * GGUF is a container and not all GGUF architectures are chat models.
  */
+/** A projector is an accessory to a multimodal model, not a text LLM. */
+internal class GgufProjectorException : IllegalArgumentException(
+    "Multimodaler GGUF-Projektor kann nicht als eigenständiges Sprachmodell geladen werden."
+)
+
 object ModelCompatibility {
+    private val projectorFilename = Regex(
+        "(?:^|[-_.])(?:mmproj|vision_projector|vision-projector)(?:[-_.]|$)",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** Only explicit accessory names, never generic Gemini/Gemma vision LLMs. */
+    fun isProjectorFilename(name: String): Boolean =
+        name.endsWith(".gguf", true) && projectorFilename.containsMatchIn(name)
+
     data class Inspection(
         val architecture: String?,
         val name: String?,
         val modelType: String?,
         val inspectionWarning: String? = null,
-        val incompatibleReason: String? = null
+        val incompatibleReason: String? = null,
+        val projectorOnly: Boolean = false
     ) {
         val canAttemptTextInference: Boolean get() = incompatibleReason == null
 
@@ -40,14 +55,25 @@ object ModelCompatibility {
             a.startsWith("stable_diffusion") ||
             (a.isBlank() && Regex("""(^|[-_])qwen[-_]image(?:[-_.]|$)""").containsMatchIn(n))
         val imageType = t in setOf("diffusion", "image-generation", "text-to-image")
-        val reason = if (clearlyImage || imageType) {
+        val projector = a in setOf("clip", "siglip", "siglip2", "vision_projector",
+            "multimodal_projector") ||
+            t in setOf("projector", "vision-projector", "multimodal-projector", "mmproj") ||
+            projectorFilename.containsMatchIn(n)
+        val reason = if (projector) {
+            "Diese GGUF-Datei ist ein Visionprojektor (mmproj), kein " +
+                "eigenständiges Sprachmodell. Dazu wird ein passendes Textmodell " +
+                "und ein multimodaler Loader benötigt. Pocket AI lädt derzeit " +
+                "nur Text-GGUF direkt mit llama.cpp; der Projektor bleibt " +
+                "als Datei erhalten und wird nicht als LLM gestartet."
+        } else if (clearlyImage || imageType) {
             val kind = architecture ?: name ?: "unbekannt"
             "Dieses GGUF ist ein Bildgenerierungs-/Diffusionsmodell ($kind), " +
             "kein Chat-Sprachmodell. Pocket AI verwendet llama.cpp für Textmodelle. " +
             "Qwen-Image benötigt zum Beispiel ComfyUI mit passendem GGUF-Loader, " +
             "Text-Encoder und VAE. Für Pocket AI ein Instruct-Textmodell verwenden."
         } else null
-        return Inspection(architecture, name, type, incompatibleReason = reason)
+        return Inspection(architecture, name, type,
+            incompatibleReason = reason, projectorOnly = projector)
     }
 
     /**

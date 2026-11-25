@@ -74,6 +74,16 @@ object ModelLoadSafety {
         )
     }
 
+    /**
+     * The pre-unload MemoryInfo snapshot may include an active model.
+     * Only the user can opt to end that session and measure RAM again.
+     * This never authorizes NPU initialization: the post-unload check
+     * remains mandatory and refuses when the conservative floor is unmet.
+     */
+    internal fun canOfferTensorRecheckAfterUnload(
+        tensorRisk: Boolean, tensorOnly: Boolean, previousSessionReady: Boolean
+    ): Boolean = tensorRisk && tensorOnly && previousSessionReady
+
     /** Never suppress a GPU/CPU fallback merely because NPU is high-risk.
      * NPU-only AOT files still fail closed when their one compatible path
      * cannot safely start; this is not permission to recompile on-device.

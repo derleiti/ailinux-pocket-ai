@@ -19,25 +19,39 @@ class Rc19MemoryGuardPreUnloadTest {
         assertFalse(load.contains("explicitlyAcceptedTensorRisk = acknowledgedLargeModel"))
     }
 
-    @Test fun tensorOnlyMemoryRefusalPreservesActiveModelEvenAfterAcknowledgement() {
+    @Test fun tensorOnlyGuardPreservesOldSessionUntilExplicitUnloadAndRecheck() {
         val main = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
         val load = main.substringAfter("private fun loadLiteRtModel(")
             .substringBefore("private fun sendLiteRtMessage(")
-        val early = load.indexOf("if (tensorRiskWarning &&")
-        val confirmation = load.indexOf("if (!acknowledgedLargeModel")
-        assertTrue("Tensor-only refusal must run independently of acknowledgement",
+        val early = load.indexOf("if (tensorRiskWarning && tensorOnly)")
+        // The first nested acknowledgement is the explicit *recheck* dialog.
+        // Use the subsequent generic large-model confirmation as the bound.
+        val confirmation = load.indexOf("if (!acknowledgedLargeModel &&", early)
+        val busy = load.indexOf("busy = true")
+        val shutdown = load.indexOf("previousLiteRt.shutdown()")
+        assertTrue("Tensor-only safeguard still precedes other model transitions",
             early in 0 until confirmation)
-        assertTrue("Refuse before entering busy state", early < load.indexOf("busy = true"))
-        assertTrue("Refuse before native shutdown", early < load.indexOf("previousLiteRt.shutdown()"))
-        assertTrue("Keep activeModel", early < load.indexOf("activeModel = null"))
+        assertTrue("All pre-unload decisions occur before busy state", early < busy)
+        assertTrue("Old model is untouched until consent", early < shutdown)
         val guard = load.substring(early, confirmation)
-        assertTrue("Compatible GPU/CPU paths must remain available", guard.contains(
-            "initialCandidates.all { it == RuntimeHardware.Attempt.GOOGLE_TENSOR }"))
-        assertTrue(guard.contains("ModelMemoryGuardException("))
+        assertTrue("Only a previously loaded engine can offer recheck",
+            guard.contains("ModelLoadSafety.canOfferTensorRecheckAfterUnload("))
+        assertTrue("No forced silent unload", guard.contains(
+            "Bisheriges Modell behalten"))
+        assertTrue("Explicit consent to unload", guard.contains(
+            "Entladen und neu prüfen"))
+        assertTrue("Hard refusal when no engine can be released",
+            guard.contains("ModelMemoryGuardException("))
         assertTrue(guard.contains("requiredBytes = tensorWarningFloor"))
         assertTrue(guard.contains("showError("))
         assertTrue(guard.contains("return"))
         assertFalse(guard.contains("activeModel ="))
+        val post = load.indexOf("ModelLoadSafety.allowedLiteRtAttempts(", shutdown)
+        assertTrue("Post-unload RAM check remains mandatory", post > shutdown)
+        assertTrue("No native load on failed postcheck",
+            post < load.indexOf("LiteRtRuntime.load(applicationContext", post))
+        assertTrue(load.contains("if (safeCandidates.isEmpty())"))
+        assertFalse(load.contains("explicitlyAcceptedTensorRisk = acknowledgedLargeModel"))
     }
 
     @Test fun twoStagePreflightDocumentsSingleHardTensorLimit() {
