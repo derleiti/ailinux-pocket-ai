@@ -1021,12 +1021,16 @@ class MainActivity : AppCompatActivity() {
         val memory = ActivityManager.MemoryInfo().also {
             (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(it)
         }
+        // A user warning is not permission to overload a device that the
+        // Android LMK already considers critically short of RAM. This guard
+        // runs BEFORE releasing the existing model or mutating files.
         if (memory.lowMemory) {
             diagnosticTrace = PocketDiagnostics.newTrace()
             val refusal = ModelMemoryGuardException(
                 availableBytes = memory.availMem,
                 requiredBytes = ModelLoadSafety.minimumAvailableAfterUnload(file.length()),
-                androidLowMemory = true)
+                androidLowMemory = true
+            )
             failure(PocketDiagnostics.Domain.GGUF,
                 PocketDiagnostics.Step.MODEL_LOAD, refusal)
             showError("GGUF: Android meldet Speicherdruck", refusal)
@@ -1108,7 +1112,7 @@ class MainActivity : AppCompatActivity() {
                     try {
                         engine.loadModel(file.absolutePath)
                     } catch (error: IOException) {
-                        throw IOException(
+                        throw GgufNativeLoadContext(
                             "Modell: " + file.name + "\n" +
                             "Architektur: " + (inspection.architecture ?: "unbekannt") + "\n" +
                             (ModelCompatibility.explainMissingGemma4Context(
@@ -1175,7 +1179,20 @@ class MainActivity : AppCompatActivity() {
                 // Preserve the previously loaded model if preflight failed.
                 if (previousModelUnloaded) activeModel = null
                 setStatus(if (activeModel != null) "● BEREIT" else "Ladefehler")
-                showError("GGUF-Modellstart fehlgeschlagen", typed)
+                // The public code names a known failure family, not the
+                // private native exception text or a guessed backend cause.
+                val title = when (typed.diagnosticCode) {
+                    PocketDiagnostics.ErrorCode.GGUF_NATIVE_MEMORY ->
+                        "GGUF: Native Speicherallokation fehlgeschlagen"
+                    PocketDiagnostics.ErrorCode.GGUF_NATIVE_BACKEND ->
+                        "GGUF: Native Backend-Bibliothek nicht verfügbar"
+                    PocketDiagnostics.ErrorCode.GGUF_NATIVE_ARCH ->
+                        "GGUF: Modellarchitektur nicht unterstützt"
+                    PocketDiagnostics.ErrorCode.GGUF_NATIVE_FORMAT ->
+                        "GGUF: Modelldatei oder GGUF-Format ungültig"
+                    else -> "GGUF-Modellstart fehlgeschlagen"
+                }
+                showError(title, typed)
             } finally {
                 prefs.edit().remove(PREF_LOADING_MODEL)
                     .remove(PREF_LOADING_MODEL_STARTED_MS).apply()
@@ -1217,6 +1234,17 @@ class MainActivity : AppCompatActivity() {
         val initialCandidates = RuntimeHardware.forModelFile(
             file.name, RuntimeHardware.candidatesOnDevice()
         )
+        // Contradictory GPU/NPU hints and unsupported Tensor-only graphs
+        // must fail BEFORE busy state, confirmation, or native teardown.
+        try {
+            LiteRtBackendPreflight.requireCompatible(initialCandidates)
+        } catch (error: LiteRtBackendUnavailable) {
+            diagnosticTrace = PocketDiagnostics.newTrace()
+            failure(PocketDiagnostics.Domain.LITERT,
+                PocketDiagnostics.Step.MODEL_LOAD, error)
+            showError("LiteRT: kein kompatibler Backendpfad", error)
+            return
+        }
         val tensorMayBeUsed = RuntimeHardware.Attempt.GOOGLE_TENSOR in initialCandidates
         val tensorWarningFloor = ModelLoadSafety.minimumAvailableForLiteRtModel(
             file.length(), tensorMayBeUsed, memory.threshold)
@@ -1335,9 +1363,9 @@ class MainActivity : AppCompatActivity() {
                     val deviceCandidates = RuntimeHardware.forModelFile(
                         file.name, RuntimeHardware.candidatesOnDevice()
                     )
-                    require(deviceCandidates.isNotEmpty()) {
-                        "Dieses Modell hat auf dem Gerät keinen unterstützten LiteRT-Backendpfad."
-                    }
+                    // Keep a fail-closed second check in case capabilities
+                    // change between preflight and model initialization.
+                    LiteRtBackendPreflight.requireCompatible(deviceCandidates)
                     val safeCandidates = ModelLoadSafety.allowedLiteRtAttempts(
                         file.length(), currentMemory.availMem, currentMemory.lowMemory,
                         currentMemory.threshold, deviceCandidates
