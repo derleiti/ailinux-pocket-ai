@@ -69,6 +69,21 @@ class GgufLoadFailureTest {
         }
     }
 
+    @Test fun nativeLoaderContextCannotSpoofDiagnosticCode() {
+        val wrapped = GgufLoadFailure(
+            GgufLoadFailure.Phase.NATIVE_MODEL_LOAD,
+            GgufNativeLoadContext(
+                "Modell: libggml-out of memory.gguf\nArchitektur: unknown architecture",
+                IOException("invalid gguf magic header")
+            )
+        )
+        assertEquals(PocketDiagnostics.ErrorCode.GGUF_NATIVE_FORMAT, wrapped.diagnosticCode)
+        assertEquals(PocketDiagnostics.ErrorCode.GGUF_NATIVE_LOAD,
+            GgufNativeFailureCause.classify(IOException("libggml-demo.gguf")))
+        val main = File("src/main/java/me/ailinux/pocket/MainActivity.kt").readText()
+        assertTrue(main.contains("throw GgufNativeLoadContext("))
+    }
+
     @Test fun outOfMemoryCauseIsClassifiedWithoutTextMatching() {
         val wrapped = GgufLoadFailure(GgufLoadFailure.Phase.NATIVE_MODEL_LOAD,
             IOException("native failure", OutOfMemoryError()))

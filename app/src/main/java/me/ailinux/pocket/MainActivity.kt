@@ -1072,7 +1072,7 @@ class MainActivity : AppCompatActivity() {
                     try {
                         engine.loadModel(file.absolutePath)
                     } catch (error: IOException) {
-                        throw IOException(
+                        throw GgufNativeLoadContext(
                             "Modell: " + file.name + "\n" +
                             "Architektur: " + (inspection.architecture ?: "unbekannt") + "\n" +
                             (ModelCompatibility.explainMissingGemma4Context(

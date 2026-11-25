@@ -39,6 +39,9 @@ internal class GgufLoadFailure(
  * Unknown patterns deliberately remain GGUF_NATIVE_LOAD. This categorization
  * is not a proof of the original root cause and must not trigger a retry.
  */
+internal class GgufNativeLoadContext(message: String, nativeCause: IOException) :
+    IOException(message, nativeCause)
+
 internal object GgufNativeFailureCause {
     private fun any(text: String, vararg markers: String): Boolean =
         markers.any { it in text }
@@ -50,6 +53,12 @@ internal object GgufNativeFailureCause {
             val item = nested ?: return PocketDiagnostics.ErrorCode.GGUF_NATIVE_LOAD
             if (item is OutOfMemoryError || item is ModelMemoryGuardException)
                 return PocketDiagnostics.ErrorCode.GGUF_NATIVE_MEMORY
+            // UI context includes the selected filename and architecture, which
+            // are not native error evidence. Classify the actual cause only.
+            if (item is GgufNativeLoadContext) {
+                nested = item.cause.takeUnless { it === item }
+                return@repeat
+            }
             val msg = item.message.orEmpty().lowercase(Locale.ROOT).take(1600)
             when {
                 any(msg, "std::bad_alloc", "out of memory", "not enough memory",
@@ -63,7 +72,7 @@ internal object GgufNativeFailureCause {
                     return PocketDiagnostics.ErrorCode.GGUF_NATIVE_ARCH
                 any(msg, "dlopen failed", "no ggml backends", "backend not found",
                     "failed to load backend", "ggml_backend_dl_load",
-                    "libggml-", "unable to load native library") ->
+                    "unable to load native library") ->
                     return PocketDiagnostics.ErrorCode.GGUF_NATIVE_BACKEND
                 any(msg, "invalid gguf", "bad magic", "invalid magic",
                     "corrupt gguf", "truncated gguf", "failed to read gguf",
