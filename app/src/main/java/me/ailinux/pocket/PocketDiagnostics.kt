@@ -13,6 +13,7 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
+import java.util.TimeZone
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -38,7 +39,7 @@ internal object PocketDiagnostics {
     enum class State { START, OK, INFO, REJECTED, FAIL, UNCONFIRMED }
     enum class ErrorCode {
         NONE, TIMEOUT, HTTP_AUTH, HTTP_DENIED, HTTP_FAILURE, NETWORK,
-        MODEL_KV, TENSOR_BACKEND, MEMORY, CANCELLED, SCHEMA, MCP_PROTOCOL,
+        MODEL_KV, TENSOR_BACKEND, BACKEND_UNAVAILABLE, MEMORY, CANCELLED, SCHEMA, MCP_PROTOCOL,
         NOT_FOUND, CATALOG_EXPIRED, SCHEMA_TOO_LARGE,
         AMBIGUOUS_TOOL, NO_SAFE_MATCH, UNVERIFIED_READONLY,
         ARGUMENTS_UNAVAILABLE, NATIVE_CRASH,
@@ -67,8 +68,13 @@ internal object PocketDiagnostics {
             .put("durationMs", durationMs.coerceIn(-1L, 86_400_000L))
             .put("code", code.name)
 
-        fun line(): String {
-            val stamp = SimpleDateFormat("dd.MM HH:mm:ss.SSS", Locale.ROOT).format(Date(time))
+        /** Offset disambiguates both 02:30 occurrences during DST rollback.
+         * Source JSON retains the original Unix epoch for machine correlation.
+         */
+        fun line(timeZone: TimeZone = TimeZone.getDefault()): String {
+            val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.ROOT)
+            formatter.timeZone = timeZone
+            val stamp = formatter.format(Date(time))
             val parts = mutableListOf(
                 stamp, "#" + id, trace, domain.name + "/" + step.name, state.name
             )
@@ -97,6 +103,7 @@ internal object PocketDiagnostics {
             error.cause != null) return classify(error.cause!!)
         if (error is kotlinx.coroutines.CancellationException) return ErrorCode.CANCELLED
         if (error is GgufLoadFailure) return error.diagnosticCode
+        if (error is LiteRtBackendUnavailable) return ErrorCode.BACKEND_UNAVAILABLE
         if (error is OutOfMemoryError || error is ModelMemoryGuardException)
             return ErrorCode.MEMORY
         val klass = error.javaClass.simpleName.lowercase(Locale.ROOT)
